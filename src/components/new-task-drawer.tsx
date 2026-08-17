@@ -5,9 +5,17 @@ import { Button } from '@/components/ui/button';
 import { appStore } from '@/lib/web/app-store';
 import { taskWebService } from '@/lib/web/task-web-service';
 import { projectWebService } from '@/lib/web/project-web-service';
+import { milestoneWebService } from '@/lib/web/milestone-web-service';
 import { showToast } from '@/lib/web/toast-store';
 import { logActivity } from '@/lib/web/operation-logger';
-import type { TaskPriority, TaskStatus, Member } from '@/lib/domain/types';
+import type {
+  TaskPriority,
+  TaskStatus,
+  Member,
+  Milestone,
+  TaskType,
+} from '@/lib/domain/types';
+import { TASK_TYPE_LABEL } from '@/lib/domain/types';
 
 interface Props {
   open: boolean;
@@ -30,6 +38,8 @@ const STATUSES: { value: TaskStatus; label: string }[] = [
   { value: 'done', label: '已完成' },
 ];
 
+const TASK_TYPES = Object.entries(TASK_TYPE_LABEL) as [TaskType, string][];
+
 /**
  * 全局「新建任务」抽屉。⌘N 唤起。
  * - 表单原生校验 + 简单长度校验
@@ -37,13 +47,17 @@ const STATUSES: { value: TaskStatus; label: string }[] = [
  */
 export function NewTaskDrawer({ open, onClose, defaultStatus = 'todo', onCreated }: Props) {
   const project = appStore.use((s) => s.currentProject);
+  const productOptions = project?.products ?? [];
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState<TaskPriority>('p2');
   const [status, setStatus] = useState<TaskStatus>(defaultStatus);
+  const [taskType, setTaskType] = useState<TaskType>('general');
+  const [milestoneId, setMilestoneId] = useState<string>('');
   const [assigneeId, setAssigneeId] = useState<string>('');
   const [dueDate, setDueDate] = useState<string>('');
   const [members, setMembers] = useState<Member[]>([]);
+  const [milestones, setMilestones] = useState<Milestone[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -53,10 +67,18 @@ export function NewTaskDrawer({ open, onClose, defaultStatus = 'todo', onCreated
       setTitle('');
       setDescription('');
       setPriority('p2');
+      setTaskType('general');
+      setMilestoneId('');
       setAssigneeId('');
       setDueDate('');
       setError(null);
-      void projectWebService.team(project.id).then(setMembers).catch(() => setMembers([]));
+      void Promise.all([
+        projectWebService.team(project.id).then(setMembers).catch(() => setMembers([])),
+        milestoneWebService
+          .list(project.id)
+          .then(setMilestones)
+          .catch(() => setMilestones([])),
+      ]);
     }
   }, [open, project, defaultStatus]);
 
@@ -81,6 +103,9 @@ export function NewTaskDrawer({ open, onClose, defaultStatus = 'todo', onCreated
         description: description.trim() || undefined,
         priority,
         status,
+        taskType,
+        milestoneId: milestoneId || undefined,
+        schoolId: project.schoolId ?? undefined,
         assigneeId: assigneeId || undefined,
         dueDate: dueDate ? new Date(dueDate).toISOString() : undefined,
       });
@@ -154,6 +179,53 @@ export function NewTaskDrawer({ open, onClose, defaultStatus = 'todo', onCreated
             className="w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/20"
           />
         </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label htmlFor="task-type" className="mb-1 block text-xs font-medium text-muted-foreground">
+              工作类型
+            </label>
+            <select
+              id="task-type"
+              value={taskType}
+              onChange={(e) => setTaskType(e.target.value as TaskType)}
+              className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
+            >
+              {TASK_TYPES.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="task-milestone" className="mb-1 block text-xs font-medium text-muted-foreground">
+              里程碑
+            </label>
+            <select
+              id="task-milestone"
+              value={milestoneId}
+              onChange={(e) => setMilestoneId(e.target.value)}
+              className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
+            >
+              <option value="">不关联</option>
+              {[...milestones]
+                .sort((a, b) => a.position - b.position)
+                .map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
+            </select>
+          </div>
+        </div>
+
+        {productOptions.length > 0 && (
+          <div>
+            <div className="mb-1 text-xs font-medium text-muted-foreground">关联产品</div>
+            <p className="text-xs text-muted-foreground">本任务沿用项目产品：{productOptions.join('、')}</p>
+          </div>
+        )}
+
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label

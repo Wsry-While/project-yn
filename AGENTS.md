@@ -12,29 +12,47 @@
 
 ## 业务概览
 
-本项目在超星 OAuth 登录模板之上扩展为「项目中心」——一个 Linear 风格的内部团队项目管理平台：
+本项目在超星 OAuth 登录模板之上扩展为「项目中心」——一个 Linear 风格的内部团队项目管理平台，并已落地学校业务模型：
 
 - 已登录用户进入 `/dashboard`，未登录用户在首页看到超星登录入口。
-- 四大业务视图：仪表盘 `/dashboard`、任务看板 `/kanban`、团队 `/team`、项目设置 `/settings`。
+- 核心业务视图：仪表盘 `/dashboard`、任务看板 `/kanban`、学校档案 `/schools`、项目外出 `/trips`、团队 `/team`、项目设置 `/settings`。
+- 学校和部门作为客户档案；招投标、启明星建设、项目建设、日常运营等作为项目；项目内通过里程碑管理阶段。
+- 项目外出是独立业务工单，后续可由第三方系统同步，也可在系统内新建。
 - 任务支持 HTML5 原生拖拽跨列更新，带 `version` 乐观锁，冲突返回 409 后前端回滚并 Toast 提示。
 - 内置大模型助手（普通对话、生成建设方案、生成启明星课程导入数据），SSE 增量渲染，仅面板局部 loading，不阻塞页面。
 - 第三方系统可通过 `POST /api/external/push` 推送任务，按 `external_id + source` 幂等。
+
+## 业务数据模型
+
+- `schools`：学校主档，名称唯一，保存行业、地区、层级、第三方来源字段。
+- `school_departments`：学校下的部门/院系，记录销售负责人、提交人、UID、销售团队、手机号、学工号等。
+- `projects`：项目主表，支持 `project_type`（bidding/qiming/construction/operation/other）、学校、部门、行业、产品、外部来源字段。
+- `project_milestones`：项目里程碑，创建项目时按项目类型初始化默认阶段。
+- `tasks`：任务，支持 `task_type`、产品、里程碑、学校、来源类型、来源 ID、外部幂等字段。
+- `trip_requests`：项目外出申请，字段对齐《项目外出申请.xlsx》模板，保存学校、部门、支持类型、产品、日期、销售/项目经理、完成情况、评分反馈等。
+- `external_sync_logs`：记录第三方接口同步日志。
 
 ## 目录结构
 
 ```
 ├── public/                 # 静态资源
-├── scripts/                # 构建与启动脚本
+├── scripts/                # 构建与启动脚本、Excel 导入脚本
+├── assets/                 # 用户提供的业务 Excel 模板
 ├── src/
 │   ├── app/
 │   │   ├── (app)/          # 登录后业务路由组，layout 校验登录
 │   │   │   ├── dashboard/  # 仪表盘
 │   │   │   ├── kanban/     # 任务看板
+│   │   │   ├── schools/    # 学校档案
+│   │   │   ├── trips/      # 项目外出
 │   │   │   ├── team/       # 团队管理
-│   │   │   └── settings/   # 项目设置
+│   │   │   └── settings/   # 项目设置 + 里程碑
 │   │   ├── api/            # Route Handlers
-│   │   │   ├── projects/   # 项目 CRUD
+│   │   │   ├── projects/   # 项目 CRUD，支持项目类型/学校/产品
 │   │   │   ├── tasks/      # 任务 CRUD（PATCH 必须带 version）
+│   │   │   ├── milestones/ # 里程碑 CRUD
+│   │   │   ├── schools/    # 学校档案查询
+│   │   │   ├── trips/      # 项目外出申请
 │   │   │   ├── team/       # 团队成员
 │   │   │   ├── activity/   # 操作日志
 │   │   │   ├── stats/      # 仪表盘统计
@@ -49,6 +67,9 @@
 │   │   ├── app-shell.tsx   # 登录后外壳：侧边栏 + 顶栏 + AI 助手
 │   │   ├── sidebar.tsx
 │   │   ├── new-task-drawer.tsx
+│   │   ├── milestone-section.tsx
+│   │   ├── schools-view.tsx
+│   │   ├── trips-view.tsx
 │   │   ├── ai-assistant.tsx
 │   │   ├── dashboard-view.tsx / kanban-view.tsx / team-view.tsx / settings-view.tsx
 │   │   ├── modal.tsx / confirm-dialog.tsx / toast-viewport.tsx / timeline.tsx
@@ -60,8 +81,11 @@
 │   │   │   ├── http.ts           # ok/fail/withApi
 │   │   │   ├── api-utils.ts      # requireUser / getAdminSupabase
 │   │   │   ├── mappers.ts
+│   │   │   ├── school-service.ts
 │   │   │   ├── project-service.ts
+│   │   │   ├── milestone-service.ts
 │   │   │   ├── task-service.ts   # 乐观锁、ConflictError
+│   │   │   ├── trip-service.ts
 │   │   │   ├── team-service.ts
 │   │   │   ├── activity-service.ts
 │   │   │   ├── stats-service.ts
@@ -96,11 +120,13 @@
 
 ## 数据库
 
-核心表：`projects`、`project_members`、`tasks`、`activity_log`、`system_configs`。
+核心表：`schools`、`school_departments`、`projects`、`project_members`、`project_milestones`、`tasks`、`trip_requests`、`activity_log`、`system_configs`、`external_sync_logs`。
 
 - 所有表启用 RLS；服务端业务接口使用 admin 客户端 + 显式登录校验。
 - `tasks.version` 用于乐观锁，PATCH 必须带 `version`，冲突抛 409。
-- 常用查询字段已建索引：`tasks(project_id,status)`、`tasks(assignee_id)`、`tasks(external_id, external_source)` 部分唯一索引、`activity_log(project_id, created_at desc)` 等。
+- 学校导入脚本：`scripts/import-schools.py`，从 `assets/学校信息汇总表.xlsx` 读取并 upsert 学校/部门。
+- 项目创建时按 `project_type` 初始化默认里程碑：招投标、启明星建设、项目建设、日常运营均有阶段模板。
+- 常用查询字段已建索引：`tasks(project_id,status)`、`tasks(assignee_id)`、`tasks(milestone_id)`、`tasks(external_id, external_source)`、`school_departments(school_id)`、`trip_requests(trip_date)` 等。
 - 触发器自动维护 `updated_at`。
 
 ## API 约定
@@ -108,6 +134,11 @@
 - 所有 JSON 接口返回 `ApiResponse<T>`：成功 `{ success:true, data }`，失败 `{ success:false, error:{ code, message } }`。
 - 使用 `withApi` 包装 handler 以统一 500 错误。
 - SSE 接口（`/api/llm/chat`、`/api/agent/build-plan`）使用 `ReadableStream`，事件类型 `delta/done/error`。
+- 业务接口：
+  - `GET /api/schools`：学校档案列表，支持 search/salesOwner/limit。
+  - `GET /api/schools/:id`：学校详情及部门列表。
+  - `GET/POST /api/trips`：项目外出列表/新建。
+  - `GET/PATCH/DELETE /api/milestones/:id`：里程碑更新/删除。
 - 第三方推送 `POST /api/external/push` 通过 `x-push-token` 或 `?token=` 鉴权，token 读取 `EXTERNAL_PUSH_TOKEN`，开发兜底值 `dev-push-token-change-me`。
 
 ## 开发规范
@@ -135,15 +166,16 @@
 - 所有网络请求走 `apiFetch`，错误由 `ApiError` 抛出，组件层 `try/catch` 后通过 `showToast` 反馈。
 - 大模型请求必须使用 `apiFetchSSE` 增量渲染，配合 `LlmLoadingMask` 做局部 loading，**禁止全屏遮罩**。
 - 用户关键操作通过 `logActivity()` 写入本地队列并批量上报到 `/api/activity`。
-- 全局快捷键：⌘/Ctrl+1~4 切换视图，⌘N 新建任务，Esc 关闭弹窗，逻辑集中在 `src/lib/web/hotkeys.ts`。
+- 全局快捷键：⌘/Ctrl+1~6 切换视图，⌘N 新建任务，Esc 关闭弹窗，逻辑集中在 `src/lib/web/hotkeys.ts`。
 
 ## UI 设计与组件规范
 
 - 基础组件使用 `src/components/ui/` 下的 shadcn/ui 组件；按钮主色使用 `bg-brand`（Indigo `#4F46E5`），不要回到默认 `primary`。
 - 颜色、圆角、阴影、动画统一使用 `globals.css` 中定义的语义变量（`bg-card`、`text-muted-foreground`、`rounded-lg` 等），禁止硬编码 Hex 或 Tailwind 原生色盘。
+- 业务标签使用半透明状态色；项目类型、任务类型、产品和里程碑标签保持小写工程感，不使用彩色大卡片。
 - 视觉规范以 `DESIGN.md` 为准（Linear 风格、Zinc 灰阶、Inter + JetBrains Mono、克制动效）。
 
 ## 验证
 
 - 修改代码后通过 `test_run` 同时跑静态检查和接口冒烟测试。
-- 业务接口必须至少一条 curl 冒烟；未登录场景下 `/api/auth/me` 返回 401 属预期。
+- 业务接口必须至少一条 curl 冒烟；未登录场景下 `/api/auth/me`、`/api/schools`、`/api/trips` 等返回 401 属预期。

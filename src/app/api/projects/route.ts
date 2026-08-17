@@ -50,6 +50,11 @@ export async function POST(request: NextRequest) {
     const body = (await request.json().catch(() => ({}))) as {
       name?: unknown;
       description?: unknown;
+      projectType?: unknown;
+      schoolId?: unknown;
+      departmentId?: unknown;
+      industry?: unknown;
+      products?: unknown;
       startDate?: unknown;
       endDate?: unknown;
     };
@@ -57,6 +62,14 @@ export async function POST(request: NextRequest) {
     const description = cleanString(body.description, 2000);
     const startDate = typeof body.startDate === 'string' ? body.startDate : null;
     const endDate = typeof body.endDate === 'string' ? body.endDate : null;
+    const projectType =
+      typeof body.projectType === 'string' &&
+      ['bidding', 'qiming', 'construction', 'operation', 'other'].includes(body.projectType)
+        ? (body.projectType as import('@/lib/domain/types').ProjectType)
+        : 'construction';
+    const products = Array.isArray(body.products)
+      ? (body.products as unknown[]).map((x) => String(x)).filter(Boolean)
+      : [];
 
     const admin = getAdminSupabase();
     const service = new ProjectService(admin);
@@ -64,6 +77,11 @@ export async function POST(request: NextRequest) {
       name,
       description,
       ownerId: auth.user.id,
+      projectType,
+      schoolId: typeof body.schoolId === 'string' ? body.schoolId : null,
+      departmentId: typeof body.departmentId === 'string' ? body.departmentId : null,
+      industry: typeof body.industry === 'string' ? body.industry : null,
+      products,
       startDate,
       endDate,
     });

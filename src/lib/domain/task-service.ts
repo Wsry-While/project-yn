@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { Task, TaskPriority, TaskStatus } from '@/lib/domain/types';
+import type { Task, TaskPriority, TaskStatus, TaskType } from '@/lib/domain/types';
 import { mapTask, type TaskRow } from '@/lib/domain/mappers';
 
 export interface TaskPatch {
@@ -7,6 +7,10 @@ export interface TaskPatch {
   description?: string | null;
   status?: TaskStatus;
   priority?: TaskPriority;
+  taskType?: TaskType;
+  products?: string[];
+  milestoneId?: string | null;
+  schoolId?: string | null;
   assigneeId?: string | null;
   dueDate?: string | null;
   position?: number;
@@ -17,12 +21,18 @@ export interface TaskCreate {
   description?: string | null;
   status?: TaskStatus;
   priority?: TaskPriority;
+  taskType?: TaskType;
+  products?: string[];
+  milestoneId?: string | null;
+  schoolId?: string | null;
   assigneeId?: string | null;
   reporterId?: string | null;
   dueDate?: string | null;
   position?: number;
   externalId?: string | null;
   externalSource?: string | null;
+  sourceType?: string | null;
+  sourceId?: string | null;
 }
 
 /**
@@ -43,7 +53,6 @@ export class TaskService {
       .order('created_at', { ascending: true });
     if (error) throw error;
 
-    // 已完成任务单独按完成时间倒序，单独查一次
     const { data: done, error: doneErr } = await this.db
       .from('tasks')
       .select('*')
@@ -56,22 +65,39 @@ export class TaskService {
     return [...((data as TaskRow[]) ?? []), ...((done as TaskRow[]) ?? [])].map(mapTask);
   }
 
+  async getById(taskId: string): Promise<Task | null> {
+    const { data, error } = await this.db
+      .from('tasks')
+      .select('*')
+      .eq('id', taskId)
+      .maybeSingle();
+    if (error) throw error;
+    return data ? mapTask(data as TaskRow) : null;
+  }
+
   async create(projectId: string, input: TaskCreate): Promise<Task> {
-    const pos = input.position ?? (await this.nextPosition(projectId, input.status ?? 'todo'));
+    const status = input.status ?? 'todo';
+    const pos = input.position ?? (await this.nextPosition(projectId, status));
     const { data, error } = await this.db
       .from('tasks')
       .insert({
         project_id: projectId,
+        milestone_id: input.milestoneId ?? null,
+        school_id: input.schoolId ?? null,
         title: input.title,
         description: input.description ?? null,
-        status: input.status ?? 'todo',
+        status,
         priority: input.priority ?? 'p2',
+        task_type: input.taskType ?? 'general',
+        products: input.products ?? [],
         assignee_id: input.assigneeId ?? null,
         reporter_id: input.reporterId ?? null,
         due_date: input.dueDate ?? null,
         position: pos,
         external_id: input.externalId ?? null,
         external_source: input.externalSource ?? null,
+        source_type: input.sourceType ?? null,
+        source_id: input.sourceId ?? null,
       })
       .select()
       .single();
@@ -79,12 +105,7 @@ export class TaskService {
     return mapTask(data as TaskRow);
   }
 
-  async update(
-    taskId: string,
-    patch: TaskPatch,
-    expectedVersion: number,
-  ): Promise<Task> {
-    // 乐观锁：version 必须匹配
+  async update(taskId: string, patch: TaskPatch, expectedVersion: number): Promise<Task> {
     const { data: current, error: getErr } = await this.db
       .from('tasks')
       .select('version')
@@ -103,6 +124,10 @@ export class TaskService {
     if (patch.description !== undefined) row.description = patch.description;
     if (patch.status !== undefined) row.status = patch.status;
     if (patch.priority !== undefined) row.priority = patch.priority;
+    if (patch.taskType !== undefined) row.task_type = patch.taskType;
+    if (patch.products !== undefined) row.products = patch.products;
+    if (patch.milestoneId !== undefined) row.milestone_id = patch.milestoneId;
+    if (patch.schoolId !== undefined) row.school_id = patch.schoolId;
     if (patch.assigneeId !== undefined) row.assignee_id = patch.assigneeId;
     if (patch.dueDate !== undefined) row.due_date = patch.dueDate;
     if (patch.position !== undefined) row.position = patch.position;
@@ -116,7 +141,6 @@ export class TaskService {
       .maybeSingle();
     if (error) throw error;
     if (!data) {
-      // 并发情况下 update 0 行，再次读取最新 version 并抛冲突
       const { data: latest } = await this.db
         .from('tasks')
         .select('version')

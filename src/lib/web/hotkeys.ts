@@ -1,16 +1,18 @@
 'use client';
 import { useEffect } from 'react';
 
+export type NavTarget = 'dashboard' | 'kanban' | 'schools' | 'trips' | 'team' | 'settings';
+
 export interface HotkeyMap {
-  /** 数字键 1-4：切页；key 为目标路径 */
-  navigation?: (target: 'dashboard' | 'kanban' | 'team' | 'settings') => void;
+  /** 数字键 1-6：切页；key 为目标路径 */
+  navigation?: (target: NavTarget) => void;
   newTask?: () => void;
   closeAll?: () => void;
 }
 
 /**
  * 全局键盘快捷键：
- * - ⌘/Ctrl + 1..4   切换页面
+ * - ⌘/Ctrl + 1..6   切换页面
  * - ⌘/Ctrl + N       新建任务
  * - Esc              关闭所有浮层
  *
@@ -33,9 +35,9 @@ export function useHotkeys(map: HotkeyMap): void {
       if (isEditing) return;
       if (!(e.metaKey || e.ctrlKey)) return;
 
-      if (e.key >= '1' && e.key <= '4') {
+      if (e.key >= '1' && e.key <= '6') {
         e.preventDefault();
-        const targets = ['dashboard', 'kanban', 'team', 'settings'] as const;
+        const targets: NavTarget[] = ['dashboard', 'kanban', 'schools', 'trips', 'team', 'settings'];
         map.navigation?.(targets[Number(e.key) - 1]);
         return;
       }

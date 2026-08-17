@@ -1,6 +1,12 @@
 'use client';
 import { apiFetch } from '@/lib/web/api-client';
-import type { Project, Member, ActivityLog, ProjectSettings } from '@/lib/domain/types';
+import type {
+  Project,
+  Member,
+  ActivityLog,
+  ProjectSettings,
+  ProjectType,
+} from '@/lib/domain/types';
 
 export interface DashboardStats {
   totals: Record<TaskStatus, number>;
@@ -26,6 +32,11 @@ export const projectWebService = {
       description: string | null;
       startDate: string | null;
       endDate: string | null;
+      projectType: ProjectType;
+      schoolId: string | null;
+      departmentId: string | null;
+      industry: string | null;
+      products: string[];
       settings: ProjectSettings;
     }>,
   ): Promise<Project> {

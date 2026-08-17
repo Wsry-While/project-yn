@@ -4,13 +4,14 @@ import { Plus, AlertTriangle, Flag, Calendar, GripVertical, RefreshCw } from 'lu
 import { appStore } from '@/lib/web/app-store';
 import { taskWebService } from '@/lib/web/task-web-service';
 import { projectWebService } from '@/lib/web/project-web-service';
+import { milestoneWebService } from '@/lib/web/milestone-web-service';
 import { showToast } from '@/lib/web/toast-store';
 import { logActivity } from '@/lib/web/operation-logger';
 import { LlmLoadingMask } from '@/components/llm-loading-mask';
 import { Button } from '@/components/ui/button';
 import { NewTaskDrawer } from '@/components/new-task-drawer';
-import type { Task, TaskPriority, TaskStatus, Member } from '@/lib/domain/types';
-import { TASK_STATUS_LABEL } from '@/lib/domain/types';
+import type { Task, TaskPriority, TaskStatus, Member, Milestone } from '@/lib/domain/types';
+import { TASK_STATUS_LABEL, TASK_TYPE_LABEL } from '@/lib/domain/types';
 import { cn } from '@/lib/utils';
 
 const COLUMNS: TaskStatus[] = ['todo', 'in_progress', 'review', 'done'];
@@ -44,15 +45,17 @@ function formatDue(iso: string | null): { text: string; overdue: boolean } | nul
 interface TaskCardProps {
   task: Task;
   members: Member[];
+  milestoneMap: Map<string, Milestone>;
   onDragStart: (e: React.DragEvent, task: Task) => void;
   onDragEnd: () => void;
   dragging: boolean;
 }
 
-function TaskCard({ task, members, onDragStart, onDragEnd, dragging }: TaskCardProps) {
+function TaskCard({ task, members, milestoneMap, onDragStart, onDragEnd, dragging }: TaskCardProps) {
   const assignee = members.find((m) => m.userId === task.assigneeId);
   const due = formatDue(task.dueDate);
   const pStyle = PRIORITY_STYLE[task.priority];
+  const milestone = task.milestoneId ? milestoneMap.get(task.milestoneId) : null;
 
   return (
     <article
@@ -79,6 +82,16 @@ function TaskCard({ task, members, onDragStart, onDragEnd, dragging }: TaskCardP
             </p>
           )}
           <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+            {task.taskType !== 'general' && (
+              <span className="inline-flex items-center rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                {TASK_TYPE_LABEL[task.taskType]}
+              </span>
+            )}
+            {milestone && (
+              <span className="inline-flex max-w-[140px] items-center truncate rounded border border-brand/20 bg-brand/5 px-1.5 py-0.5 text-[10px] text-brand">
+                {milestone.name}
+              </span>
+            )}
             <span
               className={cn(
                 'inline-flex items-center gap-0.5 rounded border px-1.5 py-0.5 font-mono text-[10px] font-medium',
@@ -125,6 +138,7 @@ interface ColumnProps {
   status: TaskStatus;
   tasks: Task[];
   members: Member[];
+  milestoneMap: Map<string, Milestone>;
   draggingTask: Task | null;
   onDragStart: (e: React.DragEvent, task: Task) => void;
   onDragEnd: () => void;
@@ -137,6 +151,7 @@ function Column({
   status,
   tasks,
   members,
+  milestoneMap,
   draggingTask,
   onDragStart,
   onDragEnd,
@@ -192,6 +207,7 @@ function Column({
               key={t.id}
               task={t}
               members={members}
+              milestoneMap={milestoneMap}
               dragging={draggingTask?.id === t.id}
               onDragStart={onDragStart}
               onDragEnd={onDragEnd}
@@ -207,6 +223,9 @@ export function KanbanView() {
   const project = appStore.use((s) => s.currentProject);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
+  const [milestones, setMilestones] = useState<Milestone[]>([]);
+  const [taskTypeFilter, setTaskTypeFilter] = useState<string>('all');
+  const [milestoneFilter, setMilestoneFilter] = useState<string>('all');
   const [loading, setLoading] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [defaultStatus, setDefaultStatus] = useState<TaskStatus>('todo');
@@ -217,12 +236,14 @@ export function KanbanView() {
     if (!project) return;
     setLoading(true);
     try {
-      const [ts, ms] = await Promise.all([
+      const [ts, ms, mls] = await Promise.all([
         taskWebService.list(project.id),
         projectWebService.team(project.id),
+        milestoneWebService.list(project.id).catch(() => [] as Milestone[]),
       ]);
       setTasks(ts);
       setMembers(ms);
+      setMilestones(mls);
     } catch (err) {
       showToast(err instanceof Error ? err.message : '加载任务失败', { kind: 'error' });
     } finally {
@@ -234,14 +255,29 @@ export function KanbanView() {
     void refresh();
   }, [refresh]);
 
+  const milestoneMap = useMemo(
+    () => new Map(milestones.map((m) => [m.id, m])),
+    [milestones],
+  );
+
+  const filteredTasks = useMemo(() => {
+    return tasks.filter((t) => {
+      if (taskTypeFilter !== 'all' && t.taskType !== taskTypeFilter) return false;
+      if (milestoneFilter === 'none' && t.milestoneId) return false;
+      if (milestoneFilter !== 'all' && milestoneFilter !== 'none' && t.milestoneId !== milestoneFilter)
+        return false;
+      return true;
+    });
+  }, [tasks, taskTypeFilter, milestoneFilter]);
+
   const grouped = useMemo(() => {
     const map: Record<TaskStatus, Task[]> = { todo: [], in_progress: [], review: [], done: [] };
-    for (const t of tasks) map[t.status].push(t);
+    for (const t of filteredTasks) map[t.status].push(t);
     for (const k of COLUMNS) {
       map[k].sort((a, b) => a.position - b.position);
     }
     return map;
-  }, [tasks]);
+  }, [filteredTasks]);
 
   const onDragStart = (e: React.DragEvent, task: Task) => {
     setDragging(task);
@@ -322,7 +358,36 @@ export function KanbanView() {
             </div>
             <h1 className="text-xl font-semibold tracking-tight">任务看板</h1>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={taskTypeFilter}
+              onChange={(e) => setTaskTypeFilter(e.target.value)}
+              aria-label="按工作类型筛选"
+              className="h-8 rounded-md border border-input bg-background px-2 text-xs outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
+            >
+              <option value="all">全部工作类型</option>
+              {Object.entries(TASK_TYPE_LABEL).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+            <select
+              value={milestoneFilter}
+              onChange={(e) => setMilestoneFilter(e.target.value)}
+              aria-label="按里程碑筛选"
+              className="h-8 max-w-[180px] rounded-md border border-input bg-background px-2 text-xs outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
+            >
+              <option value="all">全部里程碑</option>
+              <option value="none">未关联里程碑</option>
+              {[...milestones]
+                .sort((a, b) => a.position - b.position)
+                .map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
+            </select>
             <Button variant="secondary" size="sm" onClick={refresh} aria-label="刷新">
               <RefreshCw className="h-3.5 w-3.5" />
               刷新
@@ -347,6 +412,7 @@ export function KanbanView() {
               status={status}
               tasks={grouped[status]}
               members={members}
+              milestoneMap={milestoneMap}
               draggingTask={dragging}
               onDragStart={onDragStart}
               onDragEnd={onDragEnd}

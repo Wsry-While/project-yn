@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { Save, Trash2, AlertTriangle, Loader2 } from 'lucide-react';
 import { appStore } from '@/lib/web/app-store';
 import { projectWebService } from '@/lib/web/project-web-service';
+import { schoolWebService } from '@/lib/web/school-web-service';
 import { showToast } from '@/lib/web/toast-store';
 import { logActivity } from '@/lib/web/operation-logger';
 import { LlmLoadingMask } from '@/components/llm-loading-mask';
@@ -13,15 +14,43 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { ConfirmDialog } from '@/components/confirm-dialog';
-import type { ProjectSettings } from '@/lib/domain/types';
+import { MilestoneSection } from '@/components/milestone-section';
+import type { ProjectSettings, ProjectType, SchoolWithDepartments } from '@/lib/domain/types';
+import { PROJECT_TYPE_LABEL } from '@/lib/domain/types';
 
 interface FormState {
   name: string;
   description: string;
+  projectType: ProjectType;
+  schoolId: string;
+  departmentId: string;
+  industry: string;
+  products: string[];
   startDate: string;
   endDate: string;
   settings: ProjectSettings;
 }
+
+const PRODUCT_OPTIONS = [
+  '泛雅智慧课程平台',
+  '启明星',
+  'AI知识库相关',
+  '考试系统',
+  '资源库',
+  '督导评价系统',
+  '智播课堂',
+  '教师发展平台',
+  '课程思政平台',
+  '实习实训平台',
+  '虚拟教研室',
+  '教科研平台',
+  '大赛平台',
+  '学工',
+  '图书馆',
+  '继教',
+  '实验室安全管理系统',
+  '其他',
+];
 
 const DEFAULT_SETTINGS: ProjectSettings = {
   notifications: {
@@ -50,6 +79,7 @@ export function SettingsView() {
   const project = appStore.use((s) => s.currentProject);
   const userId = appStore.use((s) => s.currentUserId);
   const [form, setForm] = useState<FormState | null>(null);
+  const [schools, setSchools] = useState<SchoolWithDepartments[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -58,10 +88,19 @@ export function SettingsView() {
   const isOwner = useMemo(() => !!project && !!userId && project.ownerId === userId, [project, userId]);
 
   useEffect(() => {
+    schoolWebService.list({ limit: 500 }).then(setSchools).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
     if (!project) return;
     setForm({
       name: project.name,
       description: project.description ?? '',
+      projectType: project.projectType,
+      schoolId: project.schoolId ?? '',
+      departmentId: project.departmentId ?? '',
+      industry: project.industry ?? '教务（本科）',
+      products: project.products ?? [],
       startDate: toDateInput(project.startDate),
       endDate: toDateInput(project.endDate),
       settings: {
@@ -91,6 +130,11 @@ export function SettingsView() {
       const updated = await projectWebService.update(project.id, {
         name,
         description: form.description.trim() || null,
+        projectType: form.projectType,
+        schoolId: form.schoolId || null,
+        departmentId: form.departmentId || null,
+        industry: form.industry || null,
+        products: form.products,
         startDate: form.startDate ? new Date(form.startDate).toISOString() : null,
         endDate: form.endDate ? new Date(form.endDate).toISOString() : null,
         settings: form.settings,
@@ -158,6 +202,108 @@ export function SettingsView() {
             <h2 className="text-sm font-semibold">基本信息</h2>
           </div>
           <div className="space-y-4 p-5">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="project-type">项目类型</Label>
+                <select
+                  id="project-type"
+                  value={form.projectType}
+                  disabled={!isOwner}
+                  onChange={(e) =>
+                    setForm({ ...form, projectType: e.target.value as ProjectType })
+                  }
+                  className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 disabled:opacity-50"
+                >
+                  {(Object.keys(PROJECT_TYPE_LABEL) as ProjectType[]).map((t) => (
+                    <option key={t} value={t}>
+                      {PROJECT_TYPE_LABEL[t]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="project-industry">所属行业</Label>
+                <Input
+                  id="project-industry"
+                  value={form.industry}
+                  disabled={!isOwner}
+                  onChange={(e) => setForm({ ...form, industry: e.target.value })}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="project-school">关联学校</Label>
+                <select
+                  id="project-school"
+                  value={form.schoolId}
+                  disabled={!isOwner}
+                  onChange={(e) => setForm({ ...form, schoolId: e.target.value, departmentId: '' })}
+                  className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 disabled:opacity-50"
+                >
+                  <option value="">不关联</option>
+                  {schools.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="project-department">关联部门</Label>
+                <select
+                  id="project-department"
+                  value={form.departmentId}
+                  disabled={!isOwner || !form.schoolId}
+                  onChange={(e) => setForm({ ...form, departmentId: e.target.value })}
+                  className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 disabled:opacity-50"
+                >
+                  <option value="">不指定</option>
+                  {schools
+                    .find((s) => s.id === form.schoolId)
+                    ?.departments.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                        {d.salesOwner ? `（${d.salesOwner}）` : ''}
+                      </option>
+                    ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>所属产品</Label>
+              <div className="flex flex-wrap gap-1.5 rounded-md border border-border p-2">
+                {PRODUCT_OPTIONS.map((p) => {
+                  const on = form.products.includes(p);
+                  return (
+                    <button
+                      key={p}
+                      type="button"
+                      disabled={!isOwner}
+                      onClick={() =>
+                        setForm({
+                          ...form,
+                          products: on
+                            ? form.products.filter((x) => x !== p)
+                            : [...form.products, p],
+                        })
+                      }
+                      className={
+                        'rounded border px-2 py-0.5 text-xs transition disabled:opacity-50 ' +
+                        (on
+                          ? 'border-brand bg-brand/10 text-brand'
+                          : 'border-border text-muted-foreground hover:text-foreground')
+                      }
+                    >
+                      {p}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <div className="space-y-1.5">
               <Label htmlFor="project-name">项目名称</Label>
               <Input
@@ -205,6 +351,8 @@ export function SettingsView() {
             </div>
           </div>
         </section>
+
+        <MilestoneSection projectId={project.id} canEdit={isOwner} />
 
         {/* 通知偏好 */}
         <section className="rounded-lg border border-border bg-card">

@@ -4,10 +4,11 @@ import { requireUser, getAdminSupabase, requireString, cleanString } from '@/lib
 import { TaskService, type TaskCreate } from '@/lib/domain/task-service';
 import { ProjectService } from '@/lib/domain/project-service';
 import { ActivityService } from '@/lib/domain/activity-service';
-import type { TaskPriority, TaskStatus } from '@/lib/domain/types';
+import type { TaskPriority, TaskStatus, TaskType } from '@/lib/domain/types';
 
 const STATUSES: TaskStatus[] = ['todo', 'in_progress', 'review', 'done'];
 const PRIORITIES: TaskPriority[] = ['p0', 'p1', 'p2', 'p3'];
+const TASK_TYPES: TaskType[] = ['general', 'trip', 'bidding_screenshot', 'qiming_build', 'project_build'];
 
 function parseStatus(value: unknown): TaskStatus | null {
   return typeof value === 'string' && (STATUSES as string[]).includes(value)
@@ -18,6 +19,11 @@ function parsePriority(value: unknown): TaskPriority | null {
   return typeof value === 'string' && (PRIORITIES as string[]).includes(value)
     ? (value as TaskPriority)
     : null;
+}
+function parseTaskType(value: unknown): TaskType {
+  return typeof value === 'string' && (TASK_TYPES as string[]).includes(value)
+    ? (value as TaskType)
+    : 'general';
 }
 
 /**
@@ -48,6 +54,10 @@ export async function POST(request: NextRequest) {
       description?: unknown;
       status?: unknown;
       priority?: unknown;
+      taskType?: unknown;
+      products?: unknown;
+      milestoneId?: unknown;
+      schoolId?: unknown;
       assigneeId?: unknown;
       dueDate?: unknown;
     };
@@ -59,16 +69,26 @@ export async function POST(request: NextRequest) {
     const assigneeId =
       typeof body.assigneeId === 'string' && body.assigneeId ? body.assigneeId : null;
     const dueDate = typeof body.dueDate === 'string' ? body.dueDate : null;
+    const taskType = parseTaskType(body.taskType);
+    const products = Array.isArray(body.products)
+      ? (body.products as unknown[]).map((x) => String(x)).filter(Boolean)
+      : [];
+    const milestoneId = typeof body.milestoneId === 'string' ? body.milestoneId : null;
 
     const admin = getAdminSupabase();
     const project = await new ProjectService(admin).getById(projectId);
     if (!project) return fail('not_found', '项目不存在', 404);
+    const schoolId = typeof body.schoolId === 'string' ? body.schoolId : project.schoolId ?? null;
 
     const input: TaskCreate = {
       title,
       description,
       status,
       priority,
+      taskType,
+      products,
+      milestoneId,
+      schoolId,
       assigneeId,
       reporterId: auth.user.id,
       dueDate,

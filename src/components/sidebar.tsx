@@ -11,6 +11,8 @@ import {
   Sparkles,
   Menu,
   X,
+  Building2,
+  Plane,
 } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
@@ -40,6 +42,20 @@ const NAV: NavItem[] = [
     icon: KanbanSquare,
     shortcut: '⌘2',
     match: (p) => p.startsWith('/kanban'),
+  },
+  {
+    href: '/schools',
+    label: '学校档案',
+    icon: Building2,
+    shortcut: '⌘5',
+    match: (p) => p.startsWith('/schools'),
+  },
+  {
+    href: '/trips',
+    label: '项目外出',
+    icon: Plane,
+    shortcut: '⌘6',
+    match: (p) => p.startsWith('/trips'),
   },
   {
     href: '/team',

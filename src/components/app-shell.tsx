@@ -89,7 +89,7 @@ export function AppShell({
             <span>新建任务</span>
             <span className="mx-2 h-3 w-px bg-border" />
             <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px]">
-              ⌘1-4
+              ⌘1-6
             </kbd>
             <span>切换页面</span>
           </div>

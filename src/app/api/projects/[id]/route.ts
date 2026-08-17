@@ -10,9 +10,11 @@ function isProjectSettings(value: unknown): value is ProjectSettings {
   const v = value as Record<string, unknown>;
   if (typeof v.notifications !== 'object' || v.notifications === null) return false;
   const n = v.notifications as Record<string, unknown>;
-  return ['taskAssigned', 'taskCompleted', 'projectUpdates', 'weeklyDigest'].every(
+  return ['taskAssigned', 'taskCompleted', 'taskDueSoon', 'taskOverdue', 'projectUpdates', 'weeklyDigest'].every(
     (k) => typeof n[k] === 'boolean',
-  );
+  ) && typeof v.workflow === 'object' && v.workflow !== null
+    && typeof (v.workflow as Record<string, unknown>).requireReview === 'boolean'
+    && typeof (v.workflow as Record<string, unknown>).allowExternalPush === 'boolean';
 }
 
 /** GET /api/projects/:id — 项目详情 */
@@ -38,6 +40,11 @@ export async function PATCH(request: NextRequest, ctx: { params: Promise<{ id: s
     const body = (await request.json().catch(() => ({}))) as {
       name?: unknown;
       description?: unknown;
+      projectType?: unknown;
+      schoolId?: unknown;
+      departmentId?: unknown;
+      industry?: unknown;
+      products?: unknown;
       startDate?: unknown;
       endDate?: unknown;
       settings?: unknown;
@@ -59,6 +66,24 @@ export async function PATCH(request: NextRequest, ctx: { params: Promise<{ id: s
     }
     if (body.description !== undefined) {
       patch.description = cleanString(body.description, 2000);
+    }
+    if (
+      typeof body.projectType === 'string' &&
+      ['bidding', 'qiming', 'construction', 'operation', 'other'].includes(body.projectType)
+    ) {
+      patch.projectType = body.projectType as import('@/lib/domain/types').ProjectType;
+    }
+    if (typeof body.schoolId === 'string' || body.schoolId === null) {
+      patch.schoolId = body.schoolId;
+    }
+    if (typeof body.departmentId === 'string' || body.departmentId === null) {
+      patch.departmentId = body.departmentId;
+    }
+    if (typeof body.industry === 'string' || body.industry === null) {
+      patch.industry = body.industry;
+    }
+    if (Array.isArray(body.products)) {
+      patch.products = body.products.map((x) => String(x)).filter(Boolean);
     }
     if (typeof body.startDate === 'string' || body.startDate === null) {
       patch.startDate = body.startDate;

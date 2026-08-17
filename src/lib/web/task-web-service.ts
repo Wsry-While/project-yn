@@ -1,6 +1,6 @@
 'use client';
 import { apiFetch } from '@/lib/web/api-client';
-import type { Task, TaskPriority, TaskStatus } from '@/lib/domain/types';
+import type { Task, TaskPriority, TaskStatus, TaskType } from '@/lib/domain/types';
 
 export interface TaskCreateInput {
   projectId: string;
@@ -8,6 +8,10 @@ export interface TaskCreateInput {
   description?: string;
   status?: TaskStatus;
   priority?: TaskPriority;
+  taskType?: TaskType;
+  products?: string[];
+  milestoneId?: string;
+  schoolId?: string;
   assigneeId?: string;
   dueDate?: string;
 }
@@ -17,6 +21,10 @@ export interface TaskPatchInput {
   description?: string | null;
   status?: TaskStatus;
   priority?: TaskPriority;
+  taskType?: TaskType;
+  products?: string[];
+  milestoneId?: string | null;
+  schoolId?: string | null;
   assigneeId?: string | null;
   dueDate?: string | null;
   position?: number;
