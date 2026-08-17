@@ -1,174 +1,190 @@
-import { flattenFields, toIsoFromEpoch, type FlatField } from './parser';
-import type { ChaoxingField } from './types';
+import type {
+  ChaoxingField,
+  ExtractedContact,
+  ExtractedRichText,
+  ExtractedValue,
+  TripFieldKey,
+} from './types';
+import { flattenFields } from './parser';
 
 /**
- * 字段映射配置（保存在 system_configs.chaoxing_form_trip 的 value 中）。
- * 联调时把具体字段别名填进来；在拿到别名前，by=label 作为兜底。
+ * 项目外出（formId=253633）字段按 alias 固定映射。
+ *
+ * 真实报文约定：
+ *  alias 1  编号
+ *  alias 35 所属年度
+ *  alias 3  负责销售经理（contact）
+ *  alias 33 学校
+ *  alias 27 所属行业
+ *  alias 4  外出支持类型（selectbox，含"其他"）
+ *  alias 23 其他类型文本（选择"其他"时填写，label 与 alias=4 相同）
+ *  alias 26 所属产品（selectmultibox）
+ *  alias 8  具体事宜（richtext）
+ *  alias 9  外出日期
+ *  alias 10 预计开始时间
+ *  alias 11 预计结束时间
+ *  alias 36 周几（1=周一 ... 7=周日）
+ *  alias 13 指派项目经理（contact）
+ *  alias 14 是否完成（是/否）
+ *  alias 37 汇报内容和前期沟通是否一致
+ *  alias 15 服务内容简述（richtext）
+ *  alias 28 销售是否迟到
+ *  alias 16 给销售人员打分（rate）
+ *  alias 29 服务部人员是否迟到
+ *  alias 32 本次外出评价得分（rate）
+ *  alias 17 整体评价/后续跟进（richtext）
  */
-export interface FieldMappingEntry {
-  by: 'alias' | 'label';
-  value: string;
-}
+export const TRIP_FIELD_ALIASES: Record<TripFieldKey, string> = {
+  serialNo: '1',
+  year: '35',
+  salesManager: '3',
+  schoolName: '33',
+  industry: '27',
+  supportType: '4',
+  supportTypeOther: '23',
+  products: '26',
+  detail: '8',
+  tripDate: '9',
+  startAt: '10',
+  endAt: '11',
+  weekday: '36',
+  projectManager: '13',
+  isCompleted: '14',
+  reportConsistent: '37',
+  serviceSummary: '15',
+  salesLate: '28',
+  salesScore: '16',
+  serviceLate: '29',
+  overallScore: '32',
+  overallFeedback: '17',
+};
 
-export interface ChaoxingFormConfig {
-  formId: string;
-  formAlias?: string;
-  business: 'trip';
-  fieldMapping: Record<string, FieldMappingEntry>;
-}
-
-export interface TripFromExternalInput {
-  schoolName: string;
-  department: string | null;
+export interface MappedTripData {
+  serialNo: string | null;
+  year: number | null;
+  salesManager: ExtractedContact | null;
+  schoolName: string | null;
   industry: string | null;
-  supportType: string;
-  supportTypeOther?: string | null;
+  supportType: string | null;
+  supportTypeOther: string | null;
   products: string[];
-  detail: string;
-  tripDate: string; // YYYY-MM-DD
-  startTime: string | null;
-  endTime: string | null;
-  salesManager: string | null;
-  projectManager: string | null;
-  initiator: string | null;
-  isCompleted: string | null;
-  reportConsistent: string | null;
-  serviceSummary: string | null;
-  salesLate: string | null;
+  detail: ExtractedRichText | null;
+  tripDate: string | null;
+  startAt: string | null;
+  endAt: string | null;
+  weekday: number | null;
+  projectManager: ExtractedContact | null;
+  isCompleted: boolean;
+  reportConsistent: boolean | null;
+  serviceSummary: ExtractedRichText | null;
+  salesLate: boolean | null;
   salesScore: number | null;
-  serviceLate: string | null;
+  serviceLate: boolean | null;
   overallScore: number | null;
-  overallFeedback: string | null;
+  overallFeedback: ExtractedRichText | null;
 }
 
-function findField(
-  byAlias: Map<string, FlatField>,
-  byLabel: Map<string, FlatField>,
-  entry: FieldMappingEntry | undefined,
-): FlatField | null {
-  if (!entry) return null;
-  if (entry.by === 'alias') {
-    return byAlias.get(entry.value) ?? byLabel.get(entry.value) ?? null;
-  }
-  return byLabel.get(entry.value) ?? byAlias.get(entry.value) ?? null;
+function isContact(v: ExtractedValue): v is ExtractedContact {
+  return !!v && typeof v === 'object' && !Array.isArray(v) && ('name' in v || 'puid' in v);
 }
 
-function asString(value: unknown): string | null {
-  if (value === null || value === undefined) return null;
-  if (typeof value === 'string') {
-    const t = value.trim();
-    return t || null;
-  }
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  if (Array.isArray(value)) return value.map((v) => asString(v)).filter(Boolean).join(',');
+function isRichText(v: ExtractedValue): v is ExtractedRichText {
+  return !!v && typeof v === 'object' && !Array.isArray(v) && ('html' in v || 'text' in v);
+}
+
+function asString(v: ExtractedValue): string | null {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'string') return v || null;
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
   return null;
 }
 
-function asStringArray(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value
-      .map((v) => (typeof v === 'string' ? v.trim() : v != null ? String(v) : ''))
-      .filter(Boolean);
-  }
-  if (typeof value === 'string') {
-    return value
-      .split(/[,，;；]/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-  }
-  return [];
-}
-
-function asNumber(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string' && value.trim() !== '') {
-    const n = Number(value);
+function asNumber(v: ExtractedValue): number | null {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v);
     return Number.isFinite(n) ? n : null;
   }
   return null;
 }
 
-function asDateOnly(value: unknown): string | null {
-  if (typeof value === 'string') {
-    const t = value.trim();
-    if (!t) return null;
-    // ISO 字符串
-    const iso = new Date(t);
-    if (!Number.isNaN(iso.getTime())) {
-      // 纯日期（YYYY-MM-DD）按 UTC 解析，避免被运行环境时区改写
-      if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
-      return iso.toISOString().slice(0, 10);
-    }
-    return t.slice(0, 10);
+function asStringArray(v: ExtractedValue): string[] {
+  if (Array.isArray(v)) {
+    return v
+      .map((x) => (typeof x === 'string' ? x.trim() : x == null ? '' : String(x).trim()))
+      .filter(Boolean);
   }
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return new Date(value).toISOString().slice(0, 10);
-  }
+  const s = asString(v);
+  return s ? [s] : [];
+}
+
+function asYesNo(v: ExtractedValue): boolean | null {
+  const s = asString(v);
+  if (!s) return null;
+  const t = s.trim().toLowerCase();
+  if (['是', 'yes', 'y', 'true', '1'].includes(t)) return true;
+  if (['否', 'no', 'n', 'false', '0'].includes(t)) return false;
   return null;
 }
 
-function asTimeOnly(value: unknown): string | null {
-  if (typeof value === 'string') {
-    const t = value.trim();
-    if (!t) return null;
-    const match = t.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
-    if (match) return `${match[1].padStart(2, '0')}:${match[2]}:00`;
-    const d = new Date(t);
-    if (!Number.isNaN(d.getTime())) return d.toISOString().slice(11, 19);
+function asContact(v: ExtractedValue): ExtractedContact | null {
+  if (isContact(v)) return v;
+  const name = asString(v);
+  return name ? { name, puid: null, enc: null, uidEnc: null } : null;
+}
+
+function asRichText(v: ExtractedValue): ExtractedRichText | null {
+  if (isRichText(v)) return v;
+  const text = asString(v);
+  return text ? { html: null, text } : null;
+}
+
+export class MapFieldError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MapFieldError';
   }
-  return null;
 }
 
 /**
- * 将超星 data 字段按配置映射成 TripRequest 输入。
- * 缺失必填字段时抛错，由接口层返回逐条失败。
+ * 将超星表单 data 数组映射为项目外出业务数据。
+ * 优先按 alias 取字段，缺失时才回退到 label（兼容配置变化）。
  */
-export function mapChaoxingDataToTrip(
-  fields: ChaoxingField[],
-  config: ChaoxingFormConfig,
-  operator: { uid: string; originUid: string; inserttime: string; updatetime: string },
-): TripFromExternalInput {
-  const { byAlias, byLabel } = flattenFields(fields);
-  const get = (key: string) => findField(byAlias, byLabel, config.fieldMapping[key]);
+export function mapTripFields(fields: ChaoxingField[]): MappedTripData {
+  const { byAlias } = flattenFields(fields);
+  const v = (key: TripFieldKey): ExtractedValue => byAlias.get(TRIP_FIELD_ALIASES[key])?.value ?? null;
 
-  const schoolName = asString(get('schoolName')?.value);
-  const supportType = asString(get('supportType')?.value);
-  const tripDate = asDateOnly(get('tripDate')?.value);
-  const detail = asString(get('detail')?.value);
-
-  const missing: string[] = [];
-  if (!schoolName) missing.push('schoolName');
-  if (!supportType) missing.push('supportType');
-  if (!tripDate) missing.push('tripDate');
-  if (!detail) missing.push('detail');
-  if (missing.length > 0) {
-    throw new Error(`缺少必填字段映射：${missing.join(', ')}（请检查字段别名或标题）`);
+  const supportType = asString(v('supportType'));
+  if (!supportType) {
+    throw new MapFieldError('缺少必填字段：外出支持类型（alias=4）');
+  }
+  const schoolName = asString(v('schoolName'));
+  if (!schoolName) {
+    throw new MapFieldError('缺少必填字段：学校（alias=33）');
   }
 
   return {
-    schoolName: schoolName as string,
-    department: asString(get('department')?.value),
-    industry: asString(get('industry')?.value),
-    supportType: supportType as string,
-    products: asStringArray(get('products')?.value),
-    detail: detail as string,
-    tripDate: tripDate as string,
-    startTime: asTimeOnly(get('startTime')?.value),
-    endTime: asTimeOnly(get('endTime')?.value),
-    salesManager: asString(get('salesManager')?.value),
-    projectManager: asString(get('projectManager')?.value),
-    initiator: operator.originUid || operator.uid || null,
-    isCompleted: asString(get('isCompleted')?.value),
-    reportConsistent: asString(get('reportConsistent')?.value),
-    serviceSummary: asString(get('serviceSummary')?.value),
-    salesLate: asString(get('salesLate')?.value),
-    salesScore: asNumber(get('salesScore')?.value),
-    serviceLate: asString(get('serviceLate')?.value),
-    overallScore: asNumber(get('overallScore')?.value),
-    overallFeedback: asString(get('overallFeedback')?.value),
+    serialNo: asString(v('serialNo')),
+    year: asNumber(v('year')),
+    salesManager: asContact(v('salesManager')),
+    schoolName,
+    industry: asString(v('industry')),
+    supportType,
+    supportTypeOther: supportType === '其他' ? asString(v('supportTypeOther')) : null,
+    products: asStringArray(v('products')),
+    detail: asRichText(v('detail')),
+    tripDate: asString(v('tripDate')),
+    startAt: asString(v('startAt')),
+    endAt: asString(v('endAt')),
+    weekday: asNumber(v('weekday')),
+    projectManager: asContact(v('projectManager')),
+    isCompleted: asYesNo(v('isCompleted')) ?? false,
+    reportConsistent: asYesNo(v('reportConsistent')),
+    serviceSummary: asRichText(v('serviceSummary')),
+    salesLate: asYesNo(v('salesLate')),
+    salesScore: asNumber(v('salesScore')),
+    serviceLate: asYesNo(v('serviceLate')),
+    overallScore: asNumber(v('overallScore')),
+    overallFeedback: asRichText(v('overallFeedback')),
   };
-}
-
-export function mapEpochToIso(epoch: string | null | undefined): string | null {
-  return toIsoFromEpoch(epoch);
 }

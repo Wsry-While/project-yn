@@ -38,7 +38,7 @@ function saveQueue(items: PendingActivity[]): void {
   window.localStorage.setItem(QUEUE_KEY, JSON.stringify(items.slice(-50)));
 }
 
-let queue: PendingActivity[] = loadQueue();
+const queue: PendingActivity[] = loadQueue();
 let timer: ReturnType<typeof setInterval> | null = null;
 let flushing = false;
 

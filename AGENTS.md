@@ -17,7 +17,7 @@
 - 已登录用户进入 `/dashboard`，未登录用户在首页看到超星登录入口。
 - 核心业务视图：仪表盘 `/dashboard`、任务看板 `/kanban`、学校档案 `/schools`、项目外出 `/trips`、团队 `/team`、项目设置 `/settings`。
 - 学校和部门作为客户档案；招投标、启明星建设、项目建设、日常运营等作为项目；项目内通过里程碑管理阶段。
-- 项目外出是独立业务工单，后续可由第三方系统同步，也可在系统内新建。
+- 项目外出是独立业务工单，完全由超星表单推送驱动，系统内只查看/筛选/详情，不提供内部新建或编辑入口。
 - 任务支持 HTML5 原生拖拽跨列更新，带 `version` 乐观锁，冲突返回 409 后前端回滚并 Toast 提示。
 - 内置大模型助手（普通对话、生成建设方案、生成启明星课程导入数据），SSE 增量渲染，仅面板局部 loading，不阻塞页面。
 - 第三方系统可通过 `POST /api/external/push` 推送任务，按 `external_id + source` 幂等。
@@ -30,7 +30,8 @@
 - `projects`：项目主表，支持 `project_type`（bidding/qiming/construction/operation/other）、学校、部门、行业、产品、外部来源字段。
 - `project_milestones`：项目里程碑，创建项目时按项目类型初始化默认阶段。
 - `tasks`：任务，支持 `task_type`、产品、里程碑、学校、来源类型、来源 ID、外部幂等字段。
-- `trip_requests`：项目外出申请，字段对齐《项目外出申请.xlsx》模板，保存学校、部门、支持类型、产品、日期、销售/项目经理、完成情况、评分反馈、超星 `uuid/operator/originUid/auditStatus/rawPayload/deletedAt` 等同步字段。
+- `trip_requests`：超星驱动的项目外出工单，按 `external_source='chaoxing' + external_id=indexID` 幂等。字段按真实表单反向建模：编号/年度/学校/行业/支持类型/产品/富文本事宜/日期时间/周几/销售与项目经理联系人/完成与反馈评分；richtext 拆 `*_html` + `*_text` 并在入库前 sanitize，contact 拆 `*_name/*_puid/*_enc`，布尔字段使用 boolean，删除/恢复使用 `deleted_at` 软删除。
+- `trip_option_dict`：项目外出选项自学习字典，按 `(field_key, source_value)` 唯一；超星推送出现的新支持类型、行业、产品会自动登记并启用，前端筛选用此表。
 - `external_sync_logs`：记录第三方接口同步日志，包含 `direction/op/form_id/index_id/operator/ip/duration_ms/status/error/payload`，用于审计和联调排障。
 
 ## 目录结构
@@ -87,7 +88,9 @@
 │   │   │   ├── project-service.ts
 │   │   │   ├── milestone-service.ts
 │   │   │   ├── task-service.ts   # 乐观锁、ConflictError
-│   │   │   ├── trip-service.ts   # 外出工单、软删除、超星 upsert
+│   │   │   ├── trip-service.ts   # 外出只读查询、超星 upsert、软删除/恢复
+│   │   │   ├── trip-option-service.ts # 外出选项字典自学习
+│   │   │   ├── sanitize.ts       # richtext 入库前清洗
 │   │   │   ├── chaoxing/         # 超星 form-data 解析、字段映射
 │   │   │   ├── team-service.ts
 │   │   │   ├── activity-service.ts
@@ -123,13 +126,13 @@
 
 ## 数据库
 
-核心表：`schools`、`school_departments`、`projects`、`project_members`、`project_milestones`、`tasks`、`trip_requests`、`activity_log`、`system_configs`、`external_sync_logs`。
+核心表：`schools`、`school_departments`、`projects`、`project_members`、`project_milestones`、`tasks`、`trip_requests`、`trip_option_dict`、`activity_log`、`system_configs`、`external_sync_logs`。
 
 - 所有表启用 RLS；服务端业务接口使用 admin 客户端 + 显式登录校验。
 - `tasks.version` 用于乐观锁，PATCH 必须带 `version`，冲突抛 409。
 - 学校导入脚本：`scripts/import-schools.py`，从 `assets/学校信息汇总表.xlsx` 读取并 upsert 学校/部门。
 - 项目创建时按 `project_type` 初始化默认里程碑：招投标、启明星建设、项目建设、日常运营均有阶段模板。
-- 常用查询字段已建索引：`tasks(project_id,status)`、`tasks(assignee_id)`、`tasks(milestone_id)`、`tasks(external_id, external_source)`、`school_departments(school_id)`、`trip_requests(trip_date)`、`trip_requests(external_source, external_id)`、`trip_requests(deleted_at)` 等。
+- 常用查询字段已建索引：`tasks(project_id,status)`、`tasks(assignee_id)`、`tasks(milestone_id)`、`tasks(external_id, external_source)`、`school_departments(school_id)`、`trip_requests(trip_date)`、`trip_requests(support_type)`、`trip_requests(school_name)`、`trip_requests(external_source, external_id)` 部分唯一索引、`trip_requests(deleted_at)`、`trip_option_dict(field_key, source_value)` 唯一索引。
 - 触发器自动维护 `updated_at`。
 
 ## API 约定
@@ -140,15 +143,18 @@
 - 业务接口：
   - `GET /api/schools`：学校档案列表，支持 search/salesOwner/limit。
   - `GET /api/schools/:id`：学校详情及部门列表。
-  - `GET/POST /api/trips`：项目外出列表/新建。
+  - `GET /api/trips`：项目外出只读列表，支持 search/supportType/year/limit/offset，返回 `{rows,total}`。
+  - `GET /api/trips/:id`：单条项目外出详情。
+  - `GET /api/trips/options?fieldKey=support_type`：外出选项字典，用于筛选；未知选项由超星推送自动学习。
   - `GET/PATCH/DELETE /api/milestones/:id`：里程碑更新/删除。
 - 第三方推送 `POST /api/external/push` 通过 `x-push-token` 或 `?token=` 鉴权，token 读取 `EXTERNAL_PUSH_TOKEN`，开发兜底值 `dev-push-token-change-me`。
 - 超星推送 `POST /api/external/chaoxing/push`：
-  - 仅接受 form-data / urlencoded，`data` 为 JSON 字符串数组，formId 当前配置为 `253633`。
+  - 仅接受 form-data / urlencoded，`data` 为 JSON 字符串数组，固定处理 formId=`253633`。
   - 按无鉴权接入设计，不校验 `Authorization` / token，仅通过公网 HTTPS 与 formId 白名单控制入口范围。
-  - `op=data_create/data_update` 时映射并 upsert 项目外出；学校按名称自动查找/创建；`auditStatus=2` 入库但标记为 rejected。
-  - `op=data_remove/data_recover` 对 `trip_requests.deleted_at` 做软删除/恢复；`op=form_update` 只记录审计日志并 ack。
-  - 字段映射保存在 `system_configs(key='chaoxing_form_trip').value.fieldMapping`；当前按中文 label 兜底，联调拿到真实 alias 后更新为 alias 优先。同一 label 出现多个字段时，解析器自动跳过空值字段，保留有值字段。
+  - `op=data_create/data_update` 按 alias 固定映射并 upsert 项目外出；学校按名称自动查找/创建；`auditStatus=2` 入库但标记为 rejected。
+  - `op=data_remove/data_recover` 对 `trip_requests.deleted_at` 做软删除/恢复；`op=form_update` 只记录审计日志并 ack；formId 不匹配返回 skipped。
+  - alias 映射：1 编号、35 年度、3 销售经理 contact、33 学校、27 行业、4 支持类型、23 其他类型说明、26 产品多选、8 具体事宜 richtext、9 外出日期、10 开始时间、11 结束时间、36 周几（1=周一...7=周日）、13 项目经理 contact、14 是否完成、37 汇报一致、15 服务内容简述、28 销售迟到、16 销售评分、29 服务迟到、32 综合评分、17 整体评价。
+  - `richtext` 入库前经 `src/lib/domain/sanitize.ts` 清洗脚本/事件/危险标签，保存 html+text；`contact` 保存 name/puid/enc；`selectmultibox` 保存为 string[]；`rate/numberinput` 保存为 number；`dateinput` 支持日期与日期时间。
 
 ## 开发规范
 

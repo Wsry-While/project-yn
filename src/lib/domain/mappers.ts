@@ -11,6 +11,7 @@ import type {
   SchoolDepartment,
   Milestone,
   TripRequest,
+  TripOptionDict,
 } from '@/lib/domain/types';
 
 interface SchoolRow {
@@ -123,42 +124,64 @@ interface ActivityRow {
 
 interface TripRow {
   id: string;
-  project_id: string | null;
+  external_source: string;
+  external_id: string | null;
+  external_uuid: string | null;
+  external_serial: string | null;
+  external_op: string | null;
+  external_operator: string | null;
+  external_operator_name: string | null;
+  external_origin_operator: string | null;
+  audit_status: number | null;
+  approval_status: string;
+  deleted_at: string | null;
+  raw_payload: Record<string, unknown> | null;
+  raw_meta: Record<string, unknown> | null;
+  synced_at: string;
+  year: number | null;
   school_id: string | null;
   school_name: string;
-  department: string | null;
   industry: string | null;
-  year: number | null;
   support_type: string;
   support_type_other: string | null;
   products: string[] | null;
-  detail: string | null;
+  detail_html: string | null;
+  detail_text: string | null;
   trip_date: string;
-  start_time: string | null;
-  end_time: string | null;
-  weekday: string | null;
-  sales_manager: string | null;
-  project_manager: string | null;
-  initiator: string | null;
-  initiated_at: string | null;
-  approval_status: string;
-  is_completed: string | null;
-  report_consistent: string | null;
-  service_summary: string | null;
-  sales_late: string | null;
+  start_at: string | null;
+  end_at: string | null;
+  weekday: number | null;
+  sales_manager_name: string | null;
+  sales_manager_puid: string | null;
+  sales_manager_enc: string | null;
+  project_manager_name: string | null;
+  project_manager_puid: string | null;
+  project_manager_enc: string | null;
+  is_completed: boolean;
+  report_consistent: boolean | null;
+  service_summary_html: string | null;
+  service_summary_text: string | null;
+  sales_late: boolean | null;
   sales_score: number | null;
-  service_late: string | null;
+  service_late: boolean | null;
   overall_score: number | null;
-  overall_feedback: string | null;
+  overall_feedback_html: string | null;
+  overall_feedback_text: string | null;
+  completed_at: string | null;
+  project_id: string | null;
   derived_task_id: string | null;
-  external_id: string | null;
-  external_source: string | null;
-  external_uuid: string | null;
-  external_operator: string | null;
-  external_origin_operator: string | null;
-  audit_status: number | null;
-  deleted_at: string | null;
-  raw_payload: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface TripOptionDictRow {
+  id: string;
+  field_key: string;
+  source_value: string;
+  label: string;
+  color: string | null;
+  sort_order: number;
+  is_active: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -303,42 +326,82 @@ export function mapActivity(row: ActivityRow): ActivityLog {
 export function mapTrip(row: TripRow): TripRequest {
   return {
     id: row.id,
-    projectId: row.project_id,
+    externalSource: row.external_source,
+    externalId: row.external_id,
+    externalUuid: row.external_uuid,
+    externalSerial: row.external_serial,
+    externalOp: row.external_op,
+    externalOperator: row.external_operator,
+    externalOperatorName: row.external_operator_name,
+    externalOriginOperator: row.external_origin_operator,
+    auditStatus: row.audit_status,
+    approvalStatus: row.approval_status as TripRequest['approvalStatus'],
+    deletedAt: row.deleted_at,
+    rawPayload: row.raw_payload,
+    rawMeta: row.raw_meta,
+    syncedAt: row.synced_at,
+    year: row.year,
     schoolId: row.school_id,
     schoolName: row.school_name,
-    department: row.department,
     industry: row.industry,
-    year: row.year,
     supportType: row.support_type,
     supportTypeOther: row.support_type_other,
     products: row.products ?? [],
-    detail: row.detail,
+    detail:
+      row.detail_html || row.detail_text
+        ? { html: row.detail_html, text: row.detail_text }
+        : null,
     tripDate: row.trip_date,
-    startTime: row.start_time,
-    endTime: row.end_time,
+    startAt: row.start_at,
+    endAt: row.end_at,
     weekday: row.weekday,
-    salesManager: row.sales_manager,
-    projectManager: row.project_manager,
-    initiator: row.initiator,
-    initiatedAt: row.initiated_at,
-    approvalStatus: row.approval_status as TripRequest['approvalStatus'],
+    salesManager: row.sales_manager_name
+      ? {
+          name: row.sales_manager_name,
+          puid: row.sales_manager_puid,
+          enc: row.sales_manager_enc,
+          uidEnc: null,
+        }
+      : null,
+    projectManager: row.project_manager_name
+      ? {
+          name: row.project_manager_name,
+          puid: row.project_manager_puid,
+          enc: row.project_manager_enc,
+          uidEnc: null,
+        }
+      : null,
     isCompleted: row.is_completed,
     reportConsistent: row.report_consistent,
-    serviceSummary: row.service_summary,
+    serviceSummary:
+      row.service_summary_html || row.service_summary_text
+        ? { html: row.service_summary_html, text: row.service_summary_text }
+        : null,
     salesLate: row.sales_late,
     salesScore: row.sales_score,
     serviceLate: row.service_late,
     overallScore: row.overall_score,
-    overallFeedback: row.overall_feedback,
+    overallFeedback:
+      row.overall_feedback_html || row.overall_feedback_text
+        ? { html: row.overall_feedback_html, text: row.overall_feedback_text }
+        : null,
+    completedAt: row.completed_at,
+    projectId: row.project_id,
     derivedTaskId: row.derived_task_id,
-    externalId: row.external_id,
-    externalSource: row.external_source,
-    externalUuid: row.external_uuid,
-    externalOperator: row.external_operator,
-    externalOriginOperator: row.external_origin_operator,
-    auditStatus: row.audit_status,
-    deletedAt: row.deleted_at,
-    rawPayload: row.raw_payload,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function mapTripOptionDict(row: TripOptionDictRow): TripOptionDict {
+  return {
+    id: row.id,
+    fieldKey: row.field_key,
+    sourceValue: row.source_value,
+    label: row.label,
+    color: row.color,
+    sortOrder: row.sort_order,
+    isActive: row.is_active,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -353,4 +416,5 @@ export type {
   MilestoneRow,
   ActivityRow,
   TripRow,
+  TripOptionDictRow,
 };

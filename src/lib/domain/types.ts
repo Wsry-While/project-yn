@@ -147,44 +147,75 @@ export interface Task {
 
 export type TripApprovalStatus = 'pending' | 'approved' | 'rejected';
 
+export interface TripContact {
+  name: string | null;
+  puid: string | null;
+  enc: string | null;
+  uidEnc: string | null;
+}
+
+export interface TripRichText {
+  html: string | null;
+  text: string | null;
+}
+
 export interface TripRequest {
   id: string;
-  projectId: string | null;
+  externalSource: string;
+  externalId: string | null;
+  externalUuid: string | null;
+  externalSerial: string | null;
+  externalOp: string | null;
+  externalOperator: string | null;
+  externalOperatorName: string | null;
+  externalOriginOperator: string | null;
+  auditStatus: number | null;
+  approvalStatus: TripApprovalStatus;
+  deletedAt: string | null;
+  rawPayload: Record<string, unknown> | null;
+  rawMeta: Record<string, unknown> | null;
+  syncedAt: string;
+
+  year: number | null;
   schoolId: string | null;
   schoolName: string;
-  department: string | null;
   industry: string | null;
-  year: number | null;
   supportType: string;
   supportTypeOther: string | null;
   products: string[];
-  detail: string | null;
+  detail: TripRichText | null;
   tripDate: string;
-  startTime: string | null;
-  endTime: string | null;
-  weekday: string | null;
-  salesManager: string | null;
-  projectManager: string | null;
-  initiator: string | null;
-  initiatedAt: string | null;
-  approvalStatus: TripApprovalStatus;
-  isCompleted: string | null;
-  reportConsistent: string | null;
-  serviceSummary: string | null;
-  salesLate: string | null;
+  startAt: string | null;
+  endAt: string | null;
+  weekday: number | null;
+  salesManager: TripContact | null;
+  projectManager: TripContact | null;
+
+  isCompleted: boolean;
+  reportConsistent: boolean | null;
+  serviceSummary: TripRichText | null;
+  salesLate: boolean | null;
   salesScore: number | null;
-  serviceLate: string | null;
+  serviceLate: boolean | null;
   overallScore: number | null;
-  overallFeedback: string | null;
+  overallFeedback: TripRichText | null;
+  completedAt: string | null;
+
+  projectId: string | null;
   derivedTaskId: string | null;
-  externalId: string | null;
-  externalSource: string | null;
-  externalUuid: string | null;
-  externalOperator: string | null;
-  externalOriginOperator: string | null;
-  auditStatus: number | null;
-  deletedAt: string | null;
-  rawPayload: Record<string, unknown> | null;
+
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TripOptionDict {
+  id: string;
+  fieldKey: string;
+  sourceValue: string;
+  label: string;
+  color: string | null;
+  sortOrder: number;
+  isActive: boolean;
   createdAt: string;
   updatedAt: string;
 }

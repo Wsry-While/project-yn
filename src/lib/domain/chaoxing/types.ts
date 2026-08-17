@@ -12,11 +12,13 @@ export type ChaoxingOp =
 
 export interface ChaoxingValue {
   val?: unknown;
+  content?: string;
   realNumVal?: number;
-  realDateVal?: number;
+  realDateVal?: string | number;
   puid?: number | string;
   uname?: string;
   enc?: string;
+  uidEnc?: string;
   name?: string;
   url?: string;
   size?: number;
@@ -55,5 +57,48 @@ export interface ChaoxingPushPayload {
   data: ChaoxingField[];
 }
 
-export type FieldScalar = string | number | null;
-export type ExtractedValue = FieldScalar | FieldScalar[];
+export interface ExtractedContact {
+  name: string | null;
+  puid: string | null;
+  enc: string | null;
+  uidEnc: string | null;
+}
+
+export interface ExtractedRichText {
+  html: string | null;
+  text: string | null;
+}
+
+export type ExtractedValue =
+  | string
+  | number
+  | boolean
+  | null
+  | string[]
+  | number[]
+  | ExtractedContact
+  | ExtractedRichText;
+
+export type TripFieldKey =
+  | 'serialNo'
+  | 'year'
+  | 'salesManager'
+  | 'schoolName'
+  | 'industry'
+  | 'supportType'
+  | 'supportTypeOther'
+  | 'products'
+  | 'detail'
+  | 'tripDate'
+  | 'startAt'
+  | 'endAt'
+  | 'weekday'
+  | 'projectManager'
+  | 'isCompleted'
+  | 'reportConsistent'
+  | 'serviceSummary'
+  | 'salesLate'
+  | 'salesScore'
+  | 'serviceLate'
+  | 'overallScore'
+  | 'overallFeedback';

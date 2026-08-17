@@ -1,57 +1,24 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
 import {
-  MapPin,
   Calendar,
-  Plus,
   Plane,
-  Loader2,
   CheckCircle2,
   XCircle,
   Clock,
+  UserRound,
+  ShieldCheck,
+  ExternalLink,
+  Search,
+  RefreshCw,
 } from 'lucide-react';
 import { tripWebService } from '@/lib/web/trip-web-service';
-import { schoolWebService } from '@/lib/web/school-web-service';
 import { showToast } from '@/lib/web/toast-store';
 import { LlmLoadingMask } from '@/components/llm-loading-mask';
-import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
 import { Modal } from '@/components/modal';
-import type { SchoolWithDepartments, TripRequest } from '@/lib/domain/types';
+import type { TripOptionDict, TripRequest } from '@/lib/domain/types';
 import { cn } from '@/lib/utils';
-
-const SUPPORT_TYPES = [
-  '售前汇报',
-  '使用培训',
-  '需求沟通',
-  '现场投标',
-  '项目验收',
-  '项目启动会',
-  '其他',
-];
-
-const PRODUCTS = [
-  '泛雅智慧课程平台',
-  '启明星',
-  'AI知识库相关',
-  '考试系统',
-  '资源库',
-  '督导评价系统',
-  '智播课堂',
-  '教师发展平台',
-  '课程思政平台',
-  '实习实训平台',
-  '虚拟教研室',
-  '教科研平台',
-  '大赛平台',
-  '学工',
-  '图书馆',
-  '继教',
-  '实验室安全管理系统',
-  '其他',
-];
 
 const APPROVAL_META: Record<
   TripRequest['approvalStatus'],
@@ -62,43 +29,50 @@ const APPROVAL_META: Record<
   pending: { label: '待审批', className: 'text-amber-500 bg-amber-500/10 border-amber-500/20', icon: Clock },
 };
 
-function weekdayOf(dateStr: string): string {
-  return ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][new Date(dateStr).getDay()] ?? '';
+function weekdayLabel(n: number | null): string {
+  if (!n || n < 1 || n > 7) return '';
+  return ['周一', '周二', '周三', '周四', '周五', '周六', '周日'][n - 1];
+}
+
+function formatDateTime(value: string | null): string {
+  if (!value) return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+}
+
+function formatSyncedAt(value: string): string {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+}
+
+function yesNo(v: boolean | null): string {
+  if (v === true) return '是';
+  if (v === false) return '否';
+  return '—';
 }
 
 export function TripsView() {
   const [trips, setTrips] = useState<TripRequest[]>([]);
-  const [schools, setSchools] = useState<SchoolWithDepartments[]>([]);
+  const [options, setOptions] = useState<TripOptionDict[]>([]);
   const [loading, setLoading] = useState(false);
-  const [open, setOpen] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
+  const [detail, setDetail] = useState<TripRequest | null>(null);
   const [filterType, setFilterType] = useState<string>('');
   const [q, setQ] = useState('');
 
-  const [form, setForm] = useState({
-    schoolId: '',
-    department: '',
-    industry: '教务（本科）',
-    supportType: '需求沟通',
-    supportTypeOther: '',
-    products: [] as string[],
-    detail: '',
-    tripDate: new Date().toISOString().slice(0, 10),
-    startTime: '09:00',
-    endTime: '12:00',
-    salesManager: '',
-    projectManager: '',
-  });
-
   const refresh = () => {
     setLoading(true);
-    Promise.all([tripWebService.list({ limit: 200 }), schoolWebService.list({ limit: 500 })])
-      .then(([ts, ss]) => {
-        setTrips(ts);
-        setSchools(ss);
+    Promise.all([
+      tripWebService.list({ limit: 200 }),
+      tripWebService.options('support_type'),
+    ])
+      .then(([list, dict]) => {
+        setTrips(list.rows);
+        setOptions(dict);
       })
       .catch((err: unknown) => {
-        showToast(err instanceof Error ? err.message : '加载外出申请失败', { kind: 'error' });
+        showToast(err instanceof Error ? err.message : '加载外出记录失败', { kind: 'error' });
       })
       .finally(() => setLoading(false));
   };
@@ -107,109 +81,56 @@ export function TripsView() {
     refresh();
   }, []);
 
-  const schoolMap = useMemo(() => {
-    const m = new Map<string, SchoolWithDepartments>();
-    schools.forEach((s) => m.set(s.id, s));
-    return m;
-  }, [schools]);
-
   const filtered = useMemo(() => {
     const k = q.trim().toLowerCase();
     return trips.filter((t) => {
+      if (t.deletedAt) return false;
       if (filterType && t.supportType !== filterType) return false;
       if (!k) return true;
       return (
         t.schoolName.toLowerCase().includes(k) ||
-        (t.department ?? '').toLowerCase().includes(k) ||
-        (t.salesManager ?? '').toLowerCase().includes(k) ||
-        (t.detail ?? '').toLowerCase().includes(k)
+        (t.salesManager?.name ?? '').toLowerCase().includes(k) ||
+        (t.projectManager?.name ?? '').toLowerCase().includes(k) ||
+        (t.detail?.text ?? '').toLowerCase().includes(k) ||
+        t.supportType.toLowerCase().includes(k)
       );
     });
   }, [trips, q, filterType]);
 
-  const selectedSchool = schoolMap.get(form.schoolId);
-
-  const toggleProduct = (p: string) => {
-    setForm((f) => ({
-      ...f,
-      products: f.products.includes(p) ? f.products.filter((x) => x !== p) : [...f.products, p],
-    }));
-  };
-
-  const submit = async () => {
-    if (!form.schoolId) {
-      showToast('请选择学校', { kind: 'error' });
-      return;
-    }
-    if (!form.detail.trim()) {
-      showToast('请填写具体事宜', { kind: 'error' });
-      return;
-    }
-    setSubmitting(true);
-    try {
-      const school = schoolMap.get(form.schoolId);
-      if (!school) throw new Error('请选择学校');
-      await tripWebService.create({
-        schoolId: school.id,
-        schoolName: school.name,
-        department: form.department || null,
-        industry: form.industry,
-        supportType: form.supportType,
-        supportTypeOther: form.supportType === '其他' ? form.supportTypeOther : null,
-        products: form.products,
-        detail: form.detail.trim(),
-        tripDate: form.tripDate,
-        startTime: form.startTime,
-        endTime: form.endTime,
-        salesManager: form.salesManager || null,
-        projectManager: form.projectManager || null,
-      });
-      showToast('外出申请已创建', { kind: 'success' });
-      setOpen(false);
-      setForm({
-        ...form,
-        detail: '',
-        supportTypeOther: '',
-        products: [],
-      });
-      refresh();
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : '创建失败', { kind: 'error' });
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
   return (
-    <LlmLoadingMask loading={loading} label="加载外出申请…" className="min-h-[70vh]">
-      <div className="mx-auto w-full max-w-6xl p-4 sm:p-6">
+    <LlmLoadingMask loading={loading} label="同步项目外出记录…" className="min-h-[70vh]">
+      <div className="mx-auto w-full max-w-7xl p-4 sm:p-6">
         <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
           <div>
             <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              field service
+              chaoxing synced
             </div>
             <h1 className="text-xl font-semibold tracking-tight">项目外出</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              共 {trips.length} 条外出记录，本月{' '}
-              {
-                trips.filter((t) => t.tripDate?.slice(0, 7) === new Date().toISOString().slice(0, 7))
-                  .length
-              } 条。
+              数据由超星表单推送驱动，共 {trips.length} 条记录；本页仅查看与筛选。
             </p>
           </div>
-          <Button size="sm" onClick={() => setOpen(true)}>
-            <Plus className="h-3.5 w-3.5" />
-            发起外出申请
-          </Button>
+          <button
+            type="button"
+            onClick={refresh}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-3 text-xs text-muted-foreground transition hover:text-foreground"
+            aria-label="刷新"
+          >
+            <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+            刷新
+          </button>
         </div>
 
         <div className="mb-4 flex flex-wrap items-center gap-2">
-          <Input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="搜索学校、销售、事宜"
-            className="h-8 max-w-xs text-sm"
-          />
+          <div className="relative h-8 max-w-xs flex-1">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="搜索学校、支持人员、事宜"
+              className="h-8 pl-8 text-sm"
+            />
+          </div>
           <div className="flex flex-wrap gap-1">
             <button
               type="button"
@@ -223,282 +144,241 @@ export function TripsView() {
             >
               全部
             </button>
-            {SUPPORT_TYPES.map((t) => (
+            {options.map((opt) => (
               <button
-                key={t}
+                key={opt.id}
                 type="button"
-                onClick={() => setFilterType(t)}
+                onClick={() => setFilterType(opt.sourceValue)}
                 className={cn(
                   'rounded-md border px-2 py-1 text-xs transition',
-                  filterType === t
+                  filterType === opt.sourceValue
                     ? 'border-brand bg-brand/10 text-brand'
                     : 'border-border text-muted-foreground hover:text-foreground',
                 )}
               >
-                {t}
+                {opt.label}
               </button>
             ))}
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {filtered.map((t) => {
-            const meta = APPROVAL_META[t.approvalStatus];
-            const Icon = meta.icon;
-            return (
-              <article
-                key={t.id}
-                className="group flex flex-col gap-2 rounded-lg border border-border bg-card p-4 transition hover:-translate-y-0.5 hover:border-brand/30 hover:shadow-[0_8px_24px_rgba(0,0,0,0.06)]"
-              >
-                <div className="flex items-start justify-between gap-2">
+        <div className="overflow-hidden rounded-lg border border-border bg-card">
+          <div className="hidden grid-cols-[1.4fr_.8fr_.9fr_.9fr_.7fr_.8fr] gap-3 border-b border-border bg-muted/30 px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground md:grid">
+            <span>学校 / 事宜</span>
+            <span>类型</span>
+            <span>外出时间</span>
+            <span>销售 / 项目经理</span>
+            <span>状态</span>
+            <span className="text-right">同步时间</span>
+          </div>
+          <div className="divide-y divide-border">
+            {filtered.map((t) => {
+              const meta = APPROVAL_META[t.approvalStatus];
+              const Icon = meta.icon;
+              return (
+                <button
+                  type="button"
+                  key={t.id}
+                  onClick={() => setDetail(t)}
+                  className="grid w-full grid-cols-1 gap-2 px-4 py-3 text-left transition hover:bg-muted/30 md:grid-cols-[1.4fr_.8fr_.9fr_.9fr_.7fr_.8fr] md:items-center md:gap-3"
+                >
                   <div className="min-w-0">
-                    <h3 className="truncate text-sm font-semibold">{t.schoolName}</h3>
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-sm font-medium">{t.schoolName}</span>
+                      {t.industry && (
+                        <span className="hidden shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground lg:inline">
+                          {t.industry}
+                        </span>
+                      )}
+                    </div>
                     <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                      {t.department ?? '—'}
+                      {t.detail?.text || '—'}
                     </p>
                   </div>
+
+                  <div className="flex flex-wrap items-center gap-1">
+                    <span className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[11px]">
+                      <Plane className="h-3 w-3" />
+                      {t.supportType}
+                    </span>
+                    {t.supportType === '其他' && t.supportTypeOther && (
+                      <span className="truncate text-[11px] text-muted-foreground">
+                        {t.supportTypeOther}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="text-xs text-muted-foreground">
+                    <div className="inline-flex items-center gap-1">
+                      <Calendar className="h-3 w-3" />
+                      {t.tripDate}
+                      {t.weekday ? ` ${weekdayLabel(t.weekday)}` : ''}
+                    </div>
+                    {(t.startAt || t.endAt) && (
+                      <div className="mt-0.5 text-[11px]">
+                        {formatDateTime(t.startAt)}–{formatDateTime(t.endAt)}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="text-xs text-muted-foreground">
+                    <div className="inline-flex items-center gap-1">
+                      <UserRound className="h-3 w-3" />
+                      {t.salesManager?.name ?? '未指派'}
+                    </div>
+                    <div className="mt-0.5 inline-flex items-center gap-1">
+                      <ShieldCheck className="h-3 w-3" />
+                      {t.projectManager?.name ?? '未指派'}
+                    </div>
+                  </div>
+
                   <span
                     className={cn(
-                      'inline-flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium',
+                      'inline-flex w-fit items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium',
                       meta.className,
                     )}
                   >
                     <Icon className="h-3 w-3" />
                     {meta.label}
                   </span>
-                </div>
 
-                <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-                  <span className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5">
-                    <Plane className="h-3 w-3" />
-                    {t.supportType}
-                    {t.supportType === '其他' && t.supportTypeOther ? `：${t.supportTypeOther}` : ''}
-                  </span>
-                  <span className="inline-flex items-center gap-1">
-                    <Calendar className="h-3 w-3" />
-                    {t.tripDate}
-                    {t.startTime ? ` ${t.startTime}` : ''}
-                    {t.endTime ? `–${t.endTime}` : ''}
-                    {t.weekday ? ` ${t.weekday}` : ` ${weekdayOf(t.tripDate)}`}
-                  </span>
-                </div>
-
-                <p className="line-clamp-3 text-xs leading-relaxed text-muted-foreground">
-                  {t.detail ?? '—'}
-                </p>
-
-                {t.products.length > 0 && (
-                  <div className="flex flex-wrap gap-1">
-                    {t.products.slice(0, 4).map((p) => (
-                      <span
-                        key={p}
-                        className="rounded border border-border bg-muted/40 px-1.5 py-0.5 text-[10px] text-muted-foreground"
-                      >
-                        {p}
-                      </span>
-                    ))}
-                    {t.products.length > 4 && (
-                      <span className="text-[10px] text-muted-foreground">
-                        +{t.products.length - 4}
-                      </span>
-                    )}
+                  <div className="text-right text-[11px] text-muted-foreground">
+                    {formatSyncedAt(t.syncedAt)}
                   </div>
-                )}
-
-                <div className="mt-auto flex items-center justify-between border-t border-border/60 pt-2 text-[11px] text-muted-foreground">
-                  <span className="inline-flex items-center gap-1">
-                    <MapPin className="h-3 w-3" />
-                    {t.salesManager ?? '未指派销售'}
-                  </span>
-                  {t.overallScore != null && <span>综合评分 {t.overallScore}</span>}
-                </div>
-              </article>
-            );
-          })}
-          {filtered.length === 0 && !loading && (
-            <div className="col-span-full rounded-lg border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
-              暂无外出申请记录
-            </div>
-          )}
+                </button>
+              );
+            })}
+            {filtered.length === 0 && !loading && (
+              <div className="p-10 text-center text-sm text-muted-foreground">
+                暂无项目外出记录
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
-      <Modal
-        open={open}
-        onClose={() => !submitting && setOpen(false)}
-        title="发起项目外出申请"
-        description="字段对齐《项目外出申请》导入模板。提交后可在第三方系统中继续走审批流程。"
-        size="lg"
-        footer={
-          <>
-            <Button variant="secondary" onClick={() => setOpen(false)} disabled={submitting}>
-              取消
-            </Button>
-            <Button onClick={submit} disabled={submitting}>
-              {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-              提交申请
-            </Button>
-          </>
-        }
-      >
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div className="space-y-1.5 sm:col-span-2">
-            <Label htmlFor="trip-school">学校 *</Label>
-            <select
-              id="trip-school"
-              value={form.schoolId}
-              onChange={(e) => setForm({ ...form, schoolId: e.target.value })}
-              className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-            >
-              <option value="">请选择学校</option>
-              {schools.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}（{s.departments.length} 个部门）
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="trip-dept">部门</Label>
-            <select
-              id="trip-dept"
-              value={form.department}
-              onChange={(e) => setForm({ ...form, department: e.target.value })}
-              disabled={!selectedSchool}
-              className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 disabled:opacity-50"
-            >
-              <option value="">不指定</option>
-              {selectedSchool?.departments.map((d) => (
-                <option key={d.id} value={d.name}>
-                  {d.name}
-                  {d.salesOwner ? `（${d.salesOwner}）` : ''}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="trip-industry">所属行业</Label>
-            <select
-              id="trip-industry"
-              value={form.industry}
-              onChange={(e) => setForm({ ...form, industry: e.target.value })}
-              className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-            >
-              <option>教务（本科）</option>
-              <option>教务（职教）</option>
-              <option>课程定制智能体、售前课程咨询、工作坊等（杨丽萍组）</option>
-            </select>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="trip-type">外出支持类型 *</Label>
-            <select
-              id="trip-type"
-              value={form.supportType}
-              onChange={(e) => setForm({ ...form, supportType: e.target.value })}
-              className="flex h-9 w-full rounded-md border border-border bg-input px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-            >
-              {SUPPORT_TYPES.map((t) => (
-                <option key={t}>{t}</option>
-              ))}
-            </select>
-          </div>
-
-          {form.supportType === '其他' && (
-            <div className="space-y-1.5">
-              <Label htmlFor="trip-other">支持类型说明</Label>
-              <Input
-                id="trip-other"
-                value={form.supportTypeOther}
-                onChange={(e) => setForm({ ...form, supportTypeOther: e.target.value })}
-                maxLength={100}
-              />
-            </div>
-          )}
-
-          <div className="space-y-1.5">
-            <Label htmlFor="trip-date">外出日期 *</Label>
-            <Input
-              id="trip-date"
-              type="date"
-              value={form.tripDate}
-              onChange={(e) => setForm({ ...form, tripDate: e.target.value })}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="trip-start">预计开始</Label>
-            <Input
-              id="trip-start"
-              type="time"
-              value={form.startTime}
-              onChange={(e) => setForm({ ...form, startTime: e.target.value })}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="trip-end">预计结束</Label>
-            <Input
-              id="trip-end"
-              type="time"
-              value={form.endTime}
-              onChange={(e) => setForm({ ...form, endTime: e.target.value })}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="trip-sales">负责销售经理</Label>
-            <Input
-              id="trip-sales"
-              value={form.salesManager}
-              onChange={(e) => setForm({ ...form, salesManager: e.target.value })}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="trip-pm">指派项目经理</Label>
-            <Input
-              id="trip-pm"
-              value={form.projectManager}
-              onChange={(e) => setForm({ ...form, projectManager: e.target.value })}
-            />
-          </div>
-
-          <div className="space-y-1.5 sm:col-span-2">
-            <Label>所属产品 *</Label>
-            <div className="flex flex-wrap gap-1.5 rounded-md border border-border p-2">
-              {PRODUCTS.map((p) => {
-                const on = form.products.includes(p);
-                return (
-                  <button
-                    type="button"
-                    key={p}
-                    onClick={() => toggleProduct(p)}
-                    className={cn(
-                      'rounded border px-2 py-0.5 text-xs transition',
-                      on
-                        ? 'border-brand bg-brand/10 text-brand'
-                        : 'border-border text-muted-foreground hover:text-foreground',
-                    )}
-                  >
-                    {p}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="space-y-1.5 sm:col-span-2">
-            <Label htmlFor="trip-detail">具体事宜 *</Label>
-            <Textarea
-              id="trip-detail"
-              rows={4}
-              value={form.detail}
-              onChange={(e) => setForm({ ...form, detail: e.target.value })}
-              maxLength={10000}
-              placeholder="描述本次外出目的、对接人、预期产出等"
-            />
-          </div>
-        </div>
-      </Modal>
+      <TripDetailModal trip={detail} onClose={() => setDetail(null)} />
     </LlmLoadingMask>
+  );
+}
+
+function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1">
+      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="text-sm">{children ?? '—'}</div>
+    </div>
+  );
+}
+
+function RichTextBlock({ value }: { value: TripRequest['detail'] }) {
+  if (!value) return <span className="text-muted-foreground">—</span>;
+  if (value.html) {
+    return (
+      <div
+        className="prose prose-sm max-w-none rounded-md border border-border bg-muted/20 p-3 text-sm dark:prose-invert [&_a]:text-brand [&_li]:m-0 [&_ol]:pl-5 [&_p]:my-1 [&_ul]:pl-5"
+        dangerouslySetInnerHTML={{ __html: value.html }}
+      />
+    );
+  }
+  return <p className="whitespace-pre-wrap text-sm text-muted-foreground">{value.text}</p>;
+}
+
+function TripDetailModal({ trip, onClose }: { trip: TripRequest | null; onClose: () => void }) {
+  const rawJson = useMemo(() => {
+    if (!trip) return '';
+    return JSON.stringify({ meta: trip.rawMeta, payload: trip.rawPayload }, null, 2);
+  }, [trip]);
+
+  return (
+    <Modal
+      open={!!trip}
+      onClose={onClose}
+      title={trip?.schoolName ?? '外出详情'}
+      description={trip ? `${trip.tripDate} · ${trip.supportType}` : undefined}
+      size="xl"
+    >
+      {trip && (
+        <div className="space-y-5">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            <DetailRow label="编号">{trip.externalSerial ?? trip.externalId}</DetailRow>
+            <DetailRow label="所属年度">{trip.year ?? '—'}</DetailRow>
+            <DetailRow label="审批状态">
+              <span
+                className={cn(
+                  'inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium',
+                  APPROVAL_META[trip.approvalStatus].className,
+                )}
+              >
+                {APPROVAL_META[trip.approvalStatus].label}
+              </span>
+            </DetailRow>
+            <DetailRow label="学校">{trip.schoolName}</DetailRow>
+            <DetailRow label="所属行业">{trip.industry ?? '—'}</DetailRow>
+            <DetailRow label="支持类型">
+              {trip.supportType}
+              {trip.supportTypeOther ? `（${trip.supportTypeOther}）` : ''}
+            </DetailRow>
+            <DetailRow label="外出日期">
+              {trip.tripDate} {weekdayLabel(trip.weekday)}
+            </DetailRow>
+            <DetailRow label="开始时间">{formatDateTime(trip.startAt) || '—'}</DetailRow>
+            <DetailRow label="结束时间">{formatDateTime(trip.endAt) || '—'}</DetailRow>
+            <DetailRow label="销售经理">{trip.salesManager?.name ?? '—'}</DetailRow>
+            <DetailRow label="项目经理">{trip.projectManager?.name ?? '—'}</DetailRow>
+            <DetailRow label="所属产品">
+              {trip.products.length ? (
+                <div className="flex flex-wrap gap-1">
+                  {trip.products.map((p) => (
+                    <span key={p} className="rounded border border-border bg-muted/40 px-1.5 py-0.5 text-xs">
+                      {p}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                '—'
+              )}
+            </DetailRow>
+          </div>
+
+          <DetailRow label="具体事宜">
+            <RichTextBlock value={trip.detail} />
+          </DetailRow>
+
+          <div className="rounded-lg border border-border p-3">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              外出反馈
+            </div>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <DetailRow label="是否完成">{yesNo(trip.isCompleted)}</DetailRow>
+              <DetailRow label="汇报一致">{yesNo(trip.reportConsistent)}</DetailRow>
+              <DetailRow label="销售迟到">{yesNo(trip.salesLate)}</DetailRow>
+              <DetailRow label="服务迟到">{yesNo(trip.serviceLate)}</DetailRow>
+              <DetailRow label="销售评分">{trip.salesScore ?? '—'}</DetailRow>
+              <DetailRow label="综合评分">{trip.overallScore ?? '—'}</DetailRow>
+              <DetailRow label="完成时间">{trip.completedAt ? formatSyncedAt(trip.completedAt) : '—'}</DetailRow>
+            </div>
+            <div className="mt-3 space-y-3">
+              <DetailRow label="服务内容简述">
+                <RichTextBlock value={trip.serviceSummary} />
+              </DetailRow>
+              <DetailRow label="整体评价/跟进">
+                <RichTextBlock value={trip.overallFeedback} />
+              </DetailRow>
+            </div>
+          </div>
+
+          <details className="rounded-lg border border-border bg-muted/20 p-3">
+            <summary className="flex cursor-pointer items-center gap-1.5 text-xs font-medium text-muted-foreground">
+              <ExternalLink className="h-3.5 w-3.5" />
+              超星同步元数据
+            </summary>
+            <pre className="mt-2 max-h-64 overflow-auto rounded bg-background p-2 text-[11px] leading-relaxed text-muted-foreground">
+              {rawJson}
+            </pre>
+          </details>
+        </div>
+      )}
+    </Modal>
   );
 }

@@ -17,7 +17,7 @@ const VALID_OPS: ChaoxingOp[] = [
 function asString(value: FormDataEntryValue | null): string {
   if (value === null || value === undefined) return '';
   if (typeof value === 'string') return value.trim();
-  return ''; // 不处理文件
+  return '';
 }
 
 function safeJsonParse(raw: string): ChaoxingField[] {
@@ -86,9 +86,7 @@ function allValues(field: ChaoxingField): ChaoxingValue[] {
   return [];
 }
 
-/**
- * 把毫秒时间戳或 "YYYY-MM-DD HH:mm" 字符串转为 ISO。
- */
+/** 把毫秒时间戳或 "YYYY-MM-DD HH:mm" 字符串转为 ISO。 */
 function toDateString(input: unknown): string | null {
   if (input === null || input === undefined || input === '') return null;
   if (typeof input === 'number' && Number.isFinite(input)) {
@@ -98,7 +96,6 @@ function toDateString(input: unknown): string | null {
   if (typeof input === 'string') {
     const trimmed = input.trim();
     if (!trimmed) return null;
-    // 纯数字字符串当作毫秒
     if (/^\d{10,16}$/.test(trimmed)) {
       const d = new Date(Number(trimmed));
       return Number.isNaN(d.getTime()) ? null : d.toISOString();
@@ -120,17 +117,12 @@ function toTimeString(input: unknown): string | null {
   if (typeof input === 'number') {
     const d = new Date(input);
     if (Number.isNaN(d.getTime())) return null;
-    return d.toISOString().slice(11, 16);
+    return d.toISOString().slice(11, 19);
   }
   const s = String(input).trim();
   if (!s) return null;
-  // "2023-09-18 09:00" 或 "09:00"
   const match = s.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
-  if (match) {
-    const hh = match[1].padStart(2, '0');
-    return `${hh}:${match[2]}:00`;
-  }
-  // 数字毫秒
+  if (match) return `${match[1].padStart(2, '0')}:${match[2]}:${match[3] ?? '00'}`;
   if (/^\d{10,16}$/.test(s)) {
     const d = new Date(Number(s));
     if (!Number.isNaN(d.getTime())) return d.toISOString().slice(11, 19);
@@ -147,28 +139,70 @@ function toNumberValue(input: unknown): number | null {
   return null;
 }
 
+function valToString(v: ChaoxingValue | undefined | null): string | null {
+  if (!v) return null;
+  if (typeof v.val === 'string') {
+    const t = v.val.trim();
+    return t || null;
+  }
+  if (typeof v.val === 'number' || typeof v.val === 'boolean') return String(v.val);
+  return null;
+}
+
 /**
- * 按 compt 类型提取字段值，用于业务层再映射。
+ * 按 compt 类型提取字段值，业务层再按 alias 映射。
+ * 返回类型约定：
+ *  - contact → { name, puid, enc, uidEnc }
+ *  - richtext → { html, text }
+ *  - selectmultibox / checkbox → string[]
+ *  - image/video/attachment → string[] (URL)
+ *  - rate/numberinput → number | null
+ *  - dateinput → ISO string
+ *  - 其余 → string | null
  */
 export function extractFieldValue(field: ChaoxingField): ExtractedValue {
   const compt = (field.compt || '').toLowerCase();
 
-  // 多值类型：联系人、多选、附件、图片、视频
   if (compt === 'contact') {
-    return allValues(field)
-      .map((v) => v.uname ?? (v.val != null ? String(v.val) : ''))
-      .filter(Boolean)
-      .join(',');
+    const v = firstValue(field);
+    if (!v) return null;
+    const name = v.uname ? v.uname.trim() : null;
+    const puid = v.puid != null ? String(v.puid) : null;
+    const enc = v.enc ? String(v.enc) : null;
+    const uidEnc = v.uidEnc ? String(v.uidEnc) : null;
+    if (!name && !puid && !enc) return null;
+    return { name, puid, enc, uidEnc };
   }
-  if (compt === 'checkbox' || compt === 'multiselect' || compt === 'checkgroup') {
-    return allValues(field)
-      .map((v) => (v.val != null ? String(v.val) : ''))
-      .filter(Boolean);
+
+  if (compt === 'richtext') {
+    const v = firstValue(field);
+    if (!v) return null;
+    const html = typeof v.val === 'string' ? v.val.trim() : null;
+    const text = typeof v.content === 'string' ? v.content.trim() : null;
+    if (!html && !text) return null;
+    return { html: html || null, text: text || stripHtml(html) };
   }
+
+  if (
+    compt === 'selectmultibox' ||
+    compt === 'checkbox' ||
+    compt === 'multiselect' ||
+    compt === 'checkgroup'
+  ) {
+    return allValues(field)
+      .map((v) => valToString(v))
+      .filter((x): x is string => !!x);
+  }
+
   if (['image', 'video', 'attachment', 'annex', 'annedueditor'].includes(compt)) {
     return allValues(field)
       .map((v) => String(v.url ?? v.val ?? ''))
       .filter(Boolean);
+  }
+
+  if (compt === 'rate') {
+    const v = firstValue(field);
+    return toNumberValue(v?.val);
   }
 
   const v = firstValue(field);
@@ -183,20 +217,29 @@ export function extractFieldValue(field: ChaoxingField): ExtractedValue {
   if (compt === 'timeinput') {
     return toTimeString(v.realDateVal ?? v.val);
   }
-  if (v.val === undefined || v.val === null) return null;
-  if (typeof v.val === 'string') return v.val;
-  if (typeof v.val === 'number' || typeof v.val === 'boolean') return String(v.val);
-  return null;
+
+  // editinput / textarea / selectbox / radiobutton / autonumber / 兜底
+  return valToString(v);
+}
+
+function stripHtml(html: string | null): string | null {
+  if (!html) return null;
+  return html
+    .replace(/<br\s*\/?>(\r?\n)?/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .trim();
 }
 
 export function getFieldLabel(field: ChaoxingField): string {
   if (field.fields?.[0]?.label) return field.fields[0].label.trim();
-  return '';
+  return field.label ? field.label.trim() : '';
 }
 
-/**
- * 将字段数组展开成便于按 alias/label 查询的结构。
- */
 export interface FlatField {
   field: ChaoxingField;
   label: string;
@@ -207,34 +250,37 @@ function isEmptyValue(v: ExtractedValue): boolean {
   if (v === null || v === undefined) return true;
   if (typeof v === 'string') return v.trim() === '';
   if (typeof v === 'number') return false;
-  if (Array.isArray(v)) return v.length === 0 || v.every((x) => x === null || x === undefined || String(x).trim() === '');
+  if (Array.isArray(v)) return v.length === 0;
+  if (typeof v === 'object') {
+    return Object.values(v).every((x) => x === null || x === undefined || String(x).trim() === '');
+  }
   return false;
 }
 
 export function flattenFields(fields: ChaoxingField[]): {
   byAlias: Map<string, FlatField>;
   byLabel: Map<string, FlatField>;
-  byLabelAll: Map<string, FlatField[]>;
 } {
   const byAlias = new Map<string, FlatField>();
   const byLabel = new Map<string, FlatField>();
-  const byLabelAll = new Map<string, FlatField[]>();
   for (const field of fields) {
     const label = getFieldLabel(field);
     const flat: FlatField = { field, label, value: extractFieldValue(field) };
-    if (field.alias) byAlias.set(String(field.alias), flat);
+    if (field.alias) {
+      const key = String(field.alias);
+      const existing = byAlias.get(key);
+      if (!existing || (isEmptyValue(existing.value) && !isEmptyValue(flat.value))) {
+        byAlias.set(key, flat);
+      }
+    }
     if (label) {
-      // 同 label 下优先保留有值的字段；若已有值，新字段为空则不覆盖
       const existing = byLabel.get(label);
       if (!existing || (isEmptyValue(existing.value) && !isEmptyValue(flat.value))) {
         byLabel.set(label, flat);
       }
-      const arr = byLabelAll.get(label) ?? [];
-      arr.push(flat);
-      byLabelAll.set(label, arr);
     }
   }
-  return { byAlias, byLabel, byLabelAll };
+  return { byAlias, byLabel };
 }
 
 export function toIsoFromEpoch(epoch: string | null | undefined): string | null {
