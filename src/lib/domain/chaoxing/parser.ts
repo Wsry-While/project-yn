@@ -8,6 +8,7 @@ import type {
 
 const VALID_OPS: ChaoxingOp[] = [
   'data_create',
+  'data_edit',
   'data_update',
   'data_remove',
   'data_recover',

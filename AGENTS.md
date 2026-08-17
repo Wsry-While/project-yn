@@ -151,7 +151,7 @@
 - 超星推送 `POST /api/external/chaoxing/push`：
   - 仅接受 form-data / urlencoded，`data` 为 JSON 字符串数组，固定处理 formId=`253633`。
   - 按无鉴权接入设计，不校验 `Authorization` / token，仅通过公网 HTTPS 与 formId 白名单控制入口范围。
-  - `op=data_create/data_update` 按 alias 固定映射并 upsert 项目外出；学校按名称自动查找/创建；`auditStatus=2` 入库但标记为 rejected。
+  - `op=data_create/data_edit/data_update` 按 alias 固定映射并 upsert 项目外出；学校按名称自动查找/创建；`auditStatus=2` 入库但标记为 rejected。
   - `op=data_remove/data_recover` 对 `trip_requests.deleted_at` 做软删除/恢复；`op=form_update` 只记录审计日志并 ack；formId 不匹配返回 skipped。
   - alias 映射：1 编号、35 年度、3 销售经理 contact、33 学校、27 行业、4 支持类型、23 其他类型说明、26 产品多选、8 具体事宜 richtext、9 外出日期、10 开始时间、11 结束时间、36 周几（1=周一...7=周日）、13 项目经理 contact、14 是否完成、37 汇报一致、15 服务内容简述、28 销售迟到、16 销售评分、29 服务迟到、32 综合评分、17 整体评价。
   - `richtext` 入库前经 `src/lib/domain/sanitize.ts` 清洗脚本/事件/危险标签，保存 html+text；`contact` 保存 name/puid/enc；`selectmultibox` 保存为 string[]；`rate/numberinput` 保存为 number；`dateinput` 支持日期与日期时间。
