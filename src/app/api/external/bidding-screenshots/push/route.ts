@@ -3,6 +3,7 @@ import { ok, fail, withApi } from '@/lib/domain/http';
 import { getAdminSupabase } from '@/lib/domain/api-utils';
 import { BiddingScreenshotService } from '@/lib/domain/bidding-screenshot-service';
 import { SchoolService } from '@/lib/domain/school-service';
+import { authorizePushToken } from '@/lib/domain/external-push-auth';
 import {
   normalizeFile,
   normalizeFiles,
@@ -13,10 +14,6 @@ import {
 } from '@/lib/domain/bidding-normalize';
 
 const SOURCE = 'bidding-screenshot';
-
-function getPushToken(): string {
-  return process.env.EXTERNAL_PUSH_TOKEN || 'dev-push-token-change-me';
-}
 
 function parseBody(body: Record<string, unknown>, topLevel: Record<string, unknown> = {}) {
   const read = (...keys: string[]) => pickString(body, keys) || pickString(topLevel, keys);
@@ -71,10 +68,11 @@ function parseBody(body: Record<string, unknown>, topLevel: Record<string, unkno
 
 export async function POST(request: NextRequest) {
   return withApi(async () => {
-    const token = request.headers.get('x-push-token') || request.nextUrl.searchParams.get('token');
-    if (!token || token !== getPushToken()) {
-      return fail('unauthorized', '推送 token 无效', 401);
-    }
+    const authError = authorizePushToken(request, {
+      envNames: ['EXTERNAL_BIDDING_PUSH_TOKEN', 'EXTERNAL_PUSH_TOKEN'],
+      scope: '招投标截图推送',
+    });
+    if (authError) return authError;
 
     const raw = (await request.json().catch(() => null)) as Record<string, unknown> | Record<string, unknown>[] | null;
     if (!raw) return fail('invalid_param', '请求体必须是 JSON 对象或数组', 400);

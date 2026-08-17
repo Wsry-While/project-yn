@@ -4,6 +4,7 @@ import { getAdminSupabase } from '@/lib/domain/api-utils';
 import { ProjectService } from '@/lib/domain/project-service';
 import { TaskService } from '@/lib/domain/task-service';
 import { ActivityService } from '@/lib/domain/activity-service';
+import { authorizePushToken } from '@/lib/domain/external-push-auth';
 import type { TaskPriority, TaskStatus } from '@/lib/domain/types';
 
 /**
@@ -32,21 +33,13 @@ interface PushPayload {
 const VALID_STATUSES: TaskStatus[] = ['todo', 'in_progress', 'review', 'done'];
 const VALID_PRIORITIES: TaskPriority[] = ['p0', 'p1', 'p2', 'p3'];
 
-function getPushToken(): string {
-  return (
-    process.env.EXTERNAL_PUSH_TOKEN ||
-    'dev-push-token-change-me' // 开发环境兜底；生产环境必须在环境变量中设置
-  );
-}
-
 export async function POST(request: NextRequest) {
   return withApi(async () => {
-    // 鉴权
-    const token =
-      request.headers.get('x-push-token') || request.nextUrl.searchParams.get('token');
-    if (!token || token !== getPushToken()) {
-      return fail('unauthorized', '推送 token 无效', 401);
-    }
+    const authError = authorizePushToken(request, {
+      envNames: ['EXTERNAL_PUSH_TOKEN'],
+      scope: '第三方任务推送',
+    });
+    if (authError) return authError;
 
     const body = (await request.json().catch(() => null)) as PushPayload | PushPayload[] | null;
     if (!body) return fail('invalid_param', '请求体非法', 400);

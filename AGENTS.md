@@ -144,7 +144,8 @@
 
 ## API 约定
 
-- 所有 JSON 接口返回 `ApiResponse<T>`：成功 `{ success:true, data }`，失败 `{ success:false, error:{ code, message } }`。
+- 所有 JSON 接口返回 `ApiResponse<T>`：成功 `{ success:true, data }`，失败 `{ success:false, error:{ code, message, details } }`。
+- 统一错误码：`unauthorized` 表示登录会话失效；第三方推送鉴权失败使用 `missing_push_token` / `invalid_push_token` / `push_token_not_configured`；参数错误使用 `invalid_param`；未捕获异常使用 `internal_error`。
 - 使用 `withApi` 包装 handler 以统一 500 错误。
 - SSE 接口（`/api/llm/chat`、`/api/agent/build-plan`）使用 `ReadableStream`，事件类型 `delta/done/error`。
 - 业务接口：
@@ -156,10 +157,10 @@
   - `GET /api/bidding-screenshots`：招投标截图只读列表，支持 search/completionStatus/salesManager/overdue/limit/offset，返回 `{rows,total}`。
   - `GET /api/bidding-screenshots/:id`：单条招投标截图详情。
   - `GET/PATCH/DELETE /api/milestones/:id`：里程碑更新/删除。
-- 第三方推送 `POST /api/external/push` 通过 `x-push-token` 或 `?token=` 鉴权，token 读取 `EXTERNAL_PUSH_TOKEN`，开发兜底值 `dev-push-token-change-me`。
+- 第三方推送 `POST /api/external/push` 通过 `x-push-token`、`Authorization: Bearer` 或 `?token=` 鉴权，token 读取 `EXTERNAL_PUSH_TOKEN`，开发兜底值 `dev-push-token-change-me`。
 - 第三方招投标截图推送 `POST /api/external/bidding-screenshots/push`：
   - 接受 JSON 对象或数组，顶层可传 `externalId/externalSerial/op/operator/records`，也可直接把业务字段放在顶层。
-  - 通过 `x-push-token` 或 `?token=` 鉴权，token 读取 `EXTERNAL_PUSH_TOKEN`，开发兜底值 `dev-push-token-change-me`。
+  - 通过 `x-push-token`、`Authorization: Bearer` 或 `?token=` 鉴权；优先读取 `EXTERNAL_BIDDING_PUSH_TOKEN`，未配置时回退 `EXTERNAL_PUSH_TOKEN`，开发环境兜底 `dev-push-token-change-me`。两个变量均支持英文逗号分隔多个 token。
   - `op=data_create/data_edit/data_update/upsert` 按字段映射 upsert；`op=data_remove/remove/delete` 软删除；`op=data_recover/recover` 恢复。
   - 必填字段：销售经理、项目名称、项目所属学校、提交日期。文件字段统一为 `{name,url}` 或该对象数组。
 - 超星推送 `POST /api/external/chaoxing/push`：
