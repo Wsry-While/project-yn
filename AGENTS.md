@@ -160,7 +160,9 @@
 - 第三方推送 `POST /api/external/push` 通过 `x-push-token`、`Authorization: Bearer` 或 `?token=` 鉴权，token 读取 `EXTERNAL_PUSH_TOKEN`，开发兜底值 `dev-push-token-change-me`。
 - 第三方招投标截图推送 `POST /api/external/bidding-screenshots/push`：
   - 与超星项目外出推送保持一致，按无鉴权接入设计，不校验 `Authorization` / token，入口仅通过公网 HTTPS + 业务幂等键控制。
-  - 接受 JSON 对象或数组，顶层可传 `externalId/externalSerial/op/operator/records`，也可直接把业务字段放在顶层。
+  - 接受 JSON 对象/数组、`multipart/form-data`、`application/x-www-form-urlencoded`、`text/plain`(JSON 字符串)。
+  - form-data / urlencoded 场景：既可把业务字段直接摊平在表单字段里（与超星 chaoxing 推送一致），也可把业务 JSON 数组放在 `data` 字段里；顶层 `op/externalId/externalSerial/operator` 会作为 meta 透传给每条记录。
+  - 顶层可传 `externalId/externalSerial/op/operator/records`，也可直接把业务字段放在顶层。
   - `op=data_create/data_edit/data_update/upsert` 按字段映射 upsert；`op=data_remove/remove/delete` 软删除；`op=data_recover/recover` 恢复。
   - 必填字段：销售经理、项目名称、项目所属学校、提交日期。文件字段统一为 `{name,url}` 或该对象数组。
 - 超星推送 `POST /api/external/chaoxing/push`：
