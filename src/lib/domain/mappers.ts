@@ -191,6 +191,8 @@ interface TripOptionDictRow {
 interface BiddingFileRefRow {
   name?: string | null;
   url?: string | null;
+  objectId?: string | null;
+  resid?: string | null;
   size?: number | null;
   type?: string | null;
 }
@@ -215,7 +217,7 @@ interface BiddingScreenshotRow {
   due_delivery_date: string | null;
   reserved_days: number | null;
   project_bidding_file: BiddingFileRefRow | BiddingFileRefRow[] | null;
-  project_category: string | null;
+  project_category: string[] | null;
   screenshot_requirement: string | null;
   assigned_project_manager: string | null;
   completion_status: string | null;
@@ -455,10 +457,14 @@ export function mapTripOptionDict(row: TripOptionDictRow): TripOptionDict {
 
 function toFileRef(row: BiddingFileRefRow | BiddingFileRefRow[] | null | undefined): BiddingFileRef | null {
   const item = Array.isArray(row) ? row[0] : row;
-  if (!item || typeof item.url !== 'string' || !item.url) return null;
+  if (!item) return null;
+  // url 可空：超星 fileupload 只给 objectId/resid，外链由后续换取
+  if (!item.url && !item.objectId && !item.resid) return null;
   return {
     name: typeof item.name === 'string' ? item.name : null,
-    url: item.url,
+    url: typeof item.url === 'string' ? item.url : null,
+    objectId: typeof item.objectId === 'string' ? item.objectId : null,
+    resid: typeof item.resid === 'string' ? item.resid : null,
     size: typeof item.size === 'number' ? item.size : null,
     type: typeof item.type === 'string' ? item.type : null,
   };
@@ -467,10 +473,12 @@ function toFileRef(row: BiddingFileRefRow | BiddingFileRefRow[] | null | undefin
 function toFileRefs(row: BiddingFileRefRow[] | BiddingFileRefRow | null | undefined): BiddingFileRef[] {
   const items = Array.isArray(row) ? row : row ? [row] : [];
   return items
-    .filter((x): x is BiddingFileRefRow => !!x && typeof x.url === 'string' && !!x.url)
+    .filter((x): x is BiddingFileRefRow => !!x && (!!x.url || !!x.objectId || !!x.resid))
     .map((x) => ({
       name: typeof x.name === 'string' ? x.name : null,
-      url: x.url as string,
+      url: typeof x.url === 'string' ? x.url : null,
+      objectId: typeof x.objectId === 'string' ? x.objectId : null,
+      resid: typeof x.resid === 'string' ? x.resid : null,
       size: typeof x.size === 'number' ? x.size : null,
       type: typeof x.type === 'string' ? x.type : null,
     }));
@@ -497,7 +505,7 @@ export function mapBiddingScreenshot(row: BiddingScreenshotRow): BiddingScreensh
     dueDeliveryDate: row.due_delivery_date,
     reservedDays: row.reserved_days,
     projectBiddingFile: toFileRef(row.project_bidding_file),
-    projectCategory: row.project_category,
+    projectCategory: row.project_category ?? [],
     screenshotRequirement: row.screenshot_requirement,
     assignedProjectManager: row.assigned_project_manager,
     completionStatus: row.completion_status,

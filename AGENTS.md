@@ -161,12 +161,15 @@
 - 第三方招投标截图推送 `POST /api/external/bidding-screenshots/push`：
   - 与超星项目外出推送保持一致，按无鉴权接入设计，不校验 `Authorization` / token，入口仅通过公网 HTTPS + `formId=254045` 白名单 + 业务幂等键控制。
   - 接受 JSON 对象/数组、`multipart/form-data`、`application/x-www-form-urlencoded`、`text/plain`(JSON 字符串)。
-  - form-data / urlencoded 场景：既可把业务字段直接摊平在表单字段里（与超星 chaoxing 推送一致），也可把业务 JSON 数组放在 `data` 字段里；顶层 `op/externalId/externalSerial/operator` 会作为 meta 透传给每条记录。
+  - **真实超星推送格式**：顶层 meta（`formId/indexID/uid/op/formData`）+ `formData` 为字段数组，每项 `{compt,alias,values}`。`compt` 取值：contact/editinput/edittextarea/selectbox/radiobutton/dateinput/numberinput/fileupload/multipleselect/richtext。按 alias 固定映射：salesManager/projectName/projectSchool/projectSecondaryUnit/isCompanyParameter/submissionDate/dueDeliveryDate/reservedDays/projectBiddingFile/projectCategory/screenshotRequirement/assignedProjectManager/completionStatus/deliveryDocument/deliveryRemark/isMeetScreenshotRequirement/salesFeedback/attachments/rectificationFeedback/rectifiedDocument。
+  - form-data / urlencoded 场景：既可把业务字段直接摊平在表单字段里，也可把业务 JSON 数组放在 `data` 字段里；顶层 `op/externalId/externalSerial/operator` 会作为 meta 透传给每条记录。
   - 顶层可传 `externalId/externalSerial/op/operator/records/data/list/items`，也可直接把业务字段放在顶层；`records/data/list/items` 数组中的每个元素作为一条业务记录。
   - `op=data_create/data_edit/data_update/data_flow/upsert` 按字段映射 upsert；`op=data_remove/remove/delete` 软删除；`op=data_recover/recover` 恢复；`op=form_update` 仅记录审计日志并 ack；formId 不匹配返回 skipped。
   - 必填字段缺失、op 不支持、externalId 缺失等场景返回 `422 invalid_param` 并在 `details.results` 中给出每条失败原因；禁止静默 `skipped` 吞掉业务写入失败。
-  - 每次推送都写 `external_sync_logs`（source=`bidding-screenshot`，status=`success/failed/skipped`），用于联调排障。
-  - 必填字段：销售经理、项目名称、项目所属学校、提交日期。文件字段统一为 `{name,url}` 或该对象数组。
+  - 每次推送都写 `external_sync_logs`（source=`bidding-screenshot`，status=`success/failed/skipped`），用于联调排障；单条原始 formData 存在 `bidding_screenshots.raw_payload`。
+  - 必填字段：销售经理、项目名称、项目所属学校、提交日期。
+  - 文件字段统一为 `{name,url?,objectId?,resid?,size?,type?}` 或该对象数组；超星 fileupload 只有 `objectId/resid` 没有外链时，`url=null`，前端展示"待换取下载链接"。
+  - `projectCategory`（multipleselect）存 `text[]`；`assignedProjectManager`（多 contact）把 `uname` 用「、」拼接；`isCompanyParameter/isMeetScreenshotRequirement`（radiobutton 是/否）存 boolean；日期字段按本地 `YYYY-MM-DD` 存储，不走 UTC 偏移。
 - 超星推送 `POST /api/external/chaoxing/push`：
   - 仅接受 form-data / urlencoded，`data` 为 JSON 字符串数组，固定处理 formId=`253633`。
   - 按无鉴权接入设计，不校验 `Authorization` / token，仅通过公网 HTTPS 与 formId 白名单控制入口范围。

@@ -38,7 +38,17 @@ function isOverdue(row: BiddingScreenshot): boolean {
 }
 
 function FileLink({ file, label }: { file: BiddingFileRef | null; label: string }) {
-  if (!file?.url) return <span className="text-muted-foreground">—</span>;
+  if (!file) return <span className="text-muted-foreground">—</span>;
+  if (!file.url) {
+    // 超星 fileupload 只给 objectId/resid，暂无可直链
+    return (
+      <span className="inline-flex items-center gap-1 text-sm text-muted-foreground">
+        <FileText className="h-3.5 w-3.5" />
+        {file.name || label}
+        <span className="text-xs">（待换取下载链接）</span>
+      </span>
+    );
+  }
   return (
     <a
       href={file.url}
@@ -56,18 +66,29 @@ function AttachmentList({ files }: { files: BiddingFileRef[] }) {
   if (!files.length) return <span className="text-muted-foreground">—</span>;
   return (
     <div className="flex flex-col gap-1">
-      {files.map((file, i) => (
-        <a
-          key={`${file.url}-${i}`}
-          href={file.url}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex w-fit items-center gap-1 text-sm text-brand hover:underline"
-        >
-          <Paperclip className="h-3.5 w-3.5" />
-          {file.name || `附件 ${i + 1}`}
-        </a>
-      ))}
+      {files.map((file, i) =>
+        file.url ? (
+          <a
+            key={`${file.objectId ?? file.url}-${i}`}
+            href={file.url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex w-fit items-center gap-1 text-sm text-brand hover:underline"
+          >
+            <Paperclip className="h-3.5 w-3.5" />
+            {file.name || `附件 ${i + 1}`}
+          </a>
+        ) : (
+          <span
+            key={`${file.objectId ?? file.resid ?? i}`}
+            className="inline-flex w-fit items-center gap-1 text-sm text-muted-foreground"
+          >
+            <Paperclip className="h-3.5 w-3.5" />
+            {file.name || `附件 ${i + 1}`}
+            <span className="text-xs">（待换取下载链接）</span>
+          </span>
+        ),
+      )}
     </div>
   );
 }
@@ -100,7 +121,7 @@ export function BiddingScreenshotsView() {
       if (status && row.completionStatus !== status) return false;
       if (overdueOnly && !isOverdue(row)) return false;
       if (!k) return true;
-      return [row.projectName, row.projectSchool, row.salesManager, row.assignedProjectManager, row.projectCategory]
+      return [row.projectName, row.projectSchool, row.salesManager, row.assignedProjectManager, row.projectCategory?.join(' ')]
         .filter(Boolean)
         .some((v) => String(v).toLowerCase().includes(k));
     });
@@ -197,7 +218,7 @@ export function BiddingScreenshotsView() {
                     </div>
                   </div>
                   <div className="text-xs text-muted-foreground">
-                    <div>{row.projectCategory || '—'}</div>
+                    <div>{row.projectCategory?.length ? row.projectCategory.join('、') : '—'}</div>
                     <div className="mt-0.5">{row.projectBiddingFile ? '含招标文件' : '无招标文件'}</div>
                   </div>
                   <span className={cn('inline-flex w-fit items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium', meta.className)}>
@@ -223,7 +244,7 @@ export function BiddingScreenshotsView() {
               <Detail label="项目经理">{detail.assignedProjectManager || '—'}</Detail>
               <Detail label="所属学校">{detail.projectSchool}</Detail>
               <Detail label="二级单位">{detail.projectSecondaryUnit || '—'}</Detail>
-              <Detail label="项目类别">{detail.projectCategory || '—'}</Detail>
+              <Detail label="项目类别">{detail.projectCategory?.length ? detail.projectCategory.join('、') : '—'}</Detail>
               <Detail label="公司参数">{detail.isCompanyParameter ? '是' : '否'}</Detail>
               <Detail label="提交日期">{detail.submissionDate}</Detail>
               <Detail label="需交付日期">{detail.dueDeliveryDate || '—'}</Detail>

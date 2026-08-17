@@ -6,11 +6,14 @@ import { SchoolService } from '@/lib/domain/school-service';
 import {
   normalizeFile,
   normalizeFiles,
+  pickContactName,
   pickString,
+  pickStrings,
   toBoolean,
   toDateString,
   toNumber,
 } from '@/lib/domain/bidding-normalize';
+import { flattenChaoxingFormData } from '@/lib/domain/bidding-form-data';
 
 const SOURCE = 'bidding-screenshot';
 const BIDDING_FORM_ID = '254045';
@@ -78,6 +81,9 @@ async function parseRequestBody(request: NextRequest): Promise<ParseResult> {
     const text = await request.text();
     const parsed = tryParseJson(text);
     if (parsed && typeof parsed === 'object') {
+      // 超星风格：{formId, indexID, formData:[{alias,compt,values}], ...}
+      const envelope = coerceChaoxingEnvelope(parsed);
+      if (envelope) return envelope;
       const topLevelMeta: PushItem = {};
       return { items: expandRecords(parsed, topLevelMeta), topLevelMeta };
     }
@@ -133,9 +139,42 @@ function readField(body: PushItem, topLevel: PushItem, keys: string[]): string |
   return pickString(body, keys) || pickString(topLevel, keys);
 }
 
+/**
+ * 超星招投标截图推送是单条 JSON：顶层 meta + `formData` 字段数组。
+ * 这里先把 formData 按 alias/compt 展平到业务 KV，再和顶层 meta 合并后走通用 parseBody。
+ */
+function coerceChaoxingEnvelope(parsed: unknown): { items: PushItem[]; topLevelMeta: PushItem } | null {
+  if (!isPlainObject(parsed)) return null;
+  const hasFormData =
+    typeof parsed.formData === 'string' ||
+    (Array.isArray(parsed.formData) && parsed.formData.length > 0);
+  if (!hasFormData) return null;
+
+  const topLevelMeta: PushItem = {};
+  for (const key of [
+    'op', 'formId', 'formName', 'fid', 'appName', 'indexID', 'formUserId',
+    'uid', 'uname', 'originUid', 'deptId', 'uuid', 'title',
+    'inserttime', 'updatetime', 'completetime',
+    'aprvStatus', 'aprvStatusId', 'ApprovalStatus', 'currentNodeStatus',
+    'currentApproveNode', 'receivedAt',
+  ]) {
+    if (parsed[key] !== undefined) topLevelMeta[key] = parsed[key];
+  }
+
+  const flat = flattenChaoxingFormData(parsed.formData);
+  const record: PushItem = { ...(flat as PushItem) };
+  // 顶层 indexID/uid 作为 externalId/operator 的兜底
+  if (parsed.indexID && !record.externalId) record.externalId = String(parsed.indexID);
+  if (parsed.uid && !record.operator) record.operator = String(parsed.uid);
+  if (parsed.uname && !record.operatorName) record.operatorName = String(parsed.uname);
+
+  return { items: [record], topLevelMeta };
+}
+
 function parseBody(body: PushItem, topLevel: PushItem = {}) {
   const read = (...keys: string[]) => readField(body, topLevel, keys);
   const salesManager =
+    pickContactName(body.salesManager) ||
     read('salesManager', 'sales_manager', '销售经理') ||
     read('salesManagerName', 'salesOwner');
   const projectName = read('projectName', 'project_name', '项目名称');
@@ -167,9 +206,11 @@ function parseBody(body: PushItem, topLevel: PushItem = {}) {
       body.projectBiddingFile ?? body.project_bidding_file ?? body['项目招标文件'] ??
       topLevel.projectBiddingFile ?? topLevel.project_bidding_file,
     ),
-    projectCategory: read('projectCategory', 'project_category', '项目所属类别', '类别'),
+    projectCategory: pickStrings(body, ['projectCategory', 'project_category', '项目所属类别', '类别']),
     screenshotRequirement: read('screenshotRequirement', 'screenshot_requirement', '截图需求说明', '截图需求'),
-    assignedProjectManager: read('assignedProjectManager', 'assigned_project_manager', '指派项目经理', '项目经理'),
+    assignedProjectManager:
+      pickContactName(body.assignedProjectManager) ||
+      read('assignedProjectManager', 'assigned_project_manager', '指派项目经理', '项目经理'),
     completionStatus: read('completionStatus', 'completion_status', '完成情况'),
     deliveryDocument: normalizeFile(
       body.deliveryDocument ?? body.delivery_document ?? body['交付文档上传'] ?? body['交付文档'] ??

@@ -222,7 +222,9 @@ export interface TripOptionDict {
 
 export interface BiddingFileRef {
   name: string | null;
-  url: string;
+  url: string | null;
+  objectId?: string | null;
+  resid?: string | null;
   size?: number | null;
   type?: string | null;
 }
@@ -248,7 +250,7 @@ export interface BiddingScreenshot {
   dueDeliveryDate: string | null;
   reservedDays: number | null;
   projectBiddingFile: BiddingFileRef | null;
-  projectCategory: string | null;
+  projectCategory: string[];
   screenshotRequirement: string | null;
   assignedProjectManager: string | null;
   completionStatus: string | null;

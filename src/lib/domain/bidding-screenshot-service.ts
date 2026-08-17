@@ -22,7 +22,7 @@ export interface BiddingScreenshotInput {
   dueDeliveryDate?: string | null;
   reservedDays?: number | null;
   projectBiddingFile?: BiddingFileRef | null;
-  projectCategory?: string | null;
+  projectCategory?: string[] | null;
   screenshotRequirement?: string | null;
   assignedProjectManager?: string | null;
   completionStatus?: string | null;
@@ -43,7 +43,10 @@ export interface BiddingScreenshotInput {
 }
 
 function dateOnly(value: string): string {
-  return value.slice(0, 10);
+  // value 可能是 ISO（带 Z 或时区）或 YYYY-MM-DD，统一截取 YYYY-MM-DD，
+  // 不走 new Date()，避免 UTC 时区把本地日期前移一天。
+  const match = value.match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : value.slice(0, 10);
 }
 
 export class BiddingScreenshotService {
@@ -118,7 +121,7 @@ export class BiddingScreenshotService {
       due_delivery_date: input.dueDeliveryDate ? dateOnly(input.dueDeliveryDate) : null,
       reserved_days: input.reservedDays ?? null,
       project_bidding_file: input.projectBiddingFile ?? null,
-      project_category: input.projectCategory?.trim() || null,
+      project_category: input.projectCategory ?? [],
       screenshot_requirement: input.screenshotRequirement?.trim() || null,
       assigned_project_manager: input.assignedProjectManager?.trim() || null,
       completion_status: input.completionStatus?.trim() || null,
