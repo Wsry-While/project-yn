@@ -35,7 +35,12 @@ export function AppShell({
   useEffect(() => {
     setCurrentUser({
       id: user.id,
-      displayName: user.profile.displayName || user.chaoxing.displayName || user.chaoxing.uid,
+      // 优先使用 app_metadata.chaoxing 中的可信姓名，其次才是可被用户改写的 user_metadata。
+      displayName:
+        user.chaoxing.displayName || user.profile.displayName || user.chaoxing.uid || user.id,
+      avatarUrl: user.profile.avatar,
+      uid: user.chaoxing.uid,
+      orgName: user.chaoxing.orgName,
     });
     let cancelled = false;
     (async () => {

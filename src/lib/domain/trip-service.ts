@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { TripRequest } from '@/lib/domain/types';
+import type { TripApprovalStatus, TripRequest } from '@/lib/domain/types';
 import { mapTrip, type TripRow } from '@/lib/domain/mappers';
 
 export interface TripListFilter {
@@ -11,6 +11,40 @@ export interface TripListFilter {
   from?: string;
   to?: string;
   limit?: number;
+  includeDeleted?: boolean;
+}
+
+export interface TripExternalInput {
+  schoolName: string;
+  schoolId?: string | null;
+  department?: string | null;
+  industry?: string | null;
+  supportType: string;
+  supportTypeOther?: string | null;
+  products?: string[];
+  detail: string;
+  tripDate: string;
+  startTime?: string | null;
+  endTime?: string | null;
+  salesManager?: string | null;
+  projectManager?: string | null;
+  initiator?: string | null;
+  isCompleted?: string | null;
+  reportConsistent?: string | null;
+  serviceSummary?: string | null;
+  salesLate?: string | null;
+  salesScore?: number | null;
+  serviceLate?: string | null;
+  overallScore?: number | null;
+  overallFeedback?: string | null;
+  externalId: string;
+  externalSource: string;
+  externalUuid?: string | null;
+  externalOperator?: string | null;
+  externalOriginOperator?: string | null;
+  auditStatus?: number | null;
+  approvalStatus?: TripApprovalStatus;
+  rawPayload?: Record<string, unknown>;
 }
 
 export class TripService {
@@ -18,6 +52,7 @@ export class TripService {
 
   async list(filter: TripListFilter = {}): Promise<TripRequest[]> {
     let q = this.db.from('trip_requests').select('*').order('trip_date', { ascending: false });
+    if (!filter.includeDeleted) q = q.is('deleted_at', null);
     if (filter.schoolId) q = q.eq('school_id', filter.schoolId);
     if (filter.projectId) q = q.eq('project_id', filter.projectId);
     if (filter.supportType) q = q.eq('support_type', filter.supportType);
@@ -41,9 +76,23 @@ export class TripService {
     return data ? mapTrip(data as TripRow) : null;
   }
 
-  async create(
-    input: Omit<TripRequest, 'id' | 'createdAt' | 'updatedAt' | 'derivedTaskId'>,
-  ): Promise<TripRequest> {
+  async findByExternalId(
+    source: string,
+    externalId: string,
+    includeDeleted = true,
+  ): Promise<TripRequest | null> {
+    let q = this.db
+      .from('trip_requests')
+      .select('*')
+      .eq('external_source', source)
+      .eq('external_id', externalId);
+    if (!includeDeleted) q = q.is('deleted_at', null);
+    const { data, error } = await q.maybeSingle();
+    if (error) throw error;
+    return data ? mapTrip(data as TripRow) : null;
+  }
+
+  async create(input: Omit<TripRequest, 'id' | 'createdAt' | 'updatedAt' | 'derivedTaskId'>): Promise<TripRequest> {
     const row = {
       project_id: input.projectId,
       school_id: input.schoolId,
@@ -74,6 +123,12 @@ export class TripService {
       overall_feedback: input.overallFeedback,
       external_id: input.externalId,
       external_source: input.externalSource,
+      external_uuid: input.externalUuid ?? null,
+      external_operator: input.externalOperator ?? null,
+      external_origin_operator: input.externalOriginOperator ?? null,
+      audit_status: input.auditStatus ?? null,
+      deleted_at: input.deletedAt ?? null,
+      raw_payload: (input as { rawPayload?: Record<string, unknown> | null }).rawPayload ?? null,
     };
     const { data, error } = await this.db
       .from('trip_requests')
@@ -118,6 +173,12 @@ export class TripService {
       overallScore: 'overall_score',
       overallFeedback: 'overall_feedback',
       derivedTaskId: 'derived_task_id',
+      externalUuid: 'external_uuid',
+      externalOperator: 'external_operator',
+      externalOriginOperator: 'external_origin_operator',
+      auditStatus: 'audit_status',
+      deletedAt: 'deleted_at',
+      rawPayload: 'raw_payload',
     };
     for (const [k, v] of Object.entries(patch)) {
       if (map[k]) row[map[k]] = v;
@@ -132,6 +193,130 @@ export class TripService {
     return mapTrip(data as TripRow);
   }
 
+  /**
+   * 第三方推送 upsert。
+   * 按 (external_source, external_id) 幂等：存在则更新，不存在则创建。
+   */
+  async upsertFromExternal(
+    input: TripExternalInput,
+    schoolId: string | null,
+  ): Promise<{ row: TripRequest; created: boolean }> {
+    const existing = await this.findByExternalId(input.externalSource, input.externalId);
+    const tripDate = input.tripDate.slice(0, 10);
+    const d = new Date(`${tripDate}T00:00:00Z`);
+    const year = Number.isNaN(d.getTime()) ? new Date().getFullYear() : d.getUTCFullYear();
+    const weekday = Number.isNaN(d.getTime())
+      ? null
+      : ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.getUTCDay()];
+
+    const baseFields = {
+      school_id: schoolId,
+      school_name: input.schoolName.slice(0, 200),
+      department: input.department ?? null,
+      industry: input.industry ?? null,
+      year,
+      support_type: input.supportType.slice(0, 60),
+      support_type_other: input.supportTypeOther ?? null,
+      products: input.products ?? [],
+      detail: input.detail,
+      trip_date: tripDate,
+      start_time: input.startTime ?? null,
+      end_time: input.endTime ?? null,
+      weekday,
+      sales_manager: input.salesManager ?? null,
+      project_manager: input.projectManager ?? null,
+      initiator: input.initiator ?? null,
+      initiated_at: new Date().toISOString(),
+      is_completed: input.isCompleted ?? null,
+      report_consistent: input.reportConsistent ?? null,
+      service_summary: input.serviceSummary ?? null,
+      sales_late: input.salesLate ?? null,
+      sales_score: input.salesScore ?? null,
+      service_late: input.serviceLate ?? null,
+      overall_score: input.overallScore ?? null,
+      overall_feedback: input.overallFeedback ?? null,
+      external_uuid: input.externalUuid ?? null,
+      external_operator: input.externalOperator ?? null,
+      external_origin_operator: input.externalOriginOperator ?? null,
+      audit_status: input.auditStatus ?? null,
+      approval_status:
+        input.approvalStatus ??
+        (input.auditStatus === 1
+          ? 'approved'
+          : input.auditStatus === 2
+            ? 'rejected'
+            : 'pending'),
+      raw_payload: input.rawPayload ?? null,
+      external_id: input.externalId,
+      external_source: input.externalSource,
+      deleted_at: null,
+    };
+
+    if (existing) {
+      const { data, error } = await this.db
+        .from('trip_requests')
+        .update(baseFields)
+        .eq('id', existing.id)
+        .select()
+        .single();
+      if (error) throw error;
+      return { row: mapTrip(data as TripRow), created: false };
+    }
+
+    try {
+      const { data, error } = await this.db
+        .from('trip_requests')
+        .insert(baseFields)
+        .select()
+        .single();
+      if (error) throw error;
+      return { row: mapTrip(data as TripRow), created: true };
+    } catch (err) {
+      // 并发重试时可能由另一个请求抢先插入
+      const code = (err as { code?: string }).code;
+      if (code === '23505') {
+        const retry = await this.findByExternalId(input.externalSource, input.externalId);
+        if (retry) {
+          const { data, error } = await this.db
+            .from('trip_requests')
+            .update(baseFields)
+            .eq('id', retry.id)
+            .select()
+            .single();
+          if (error) throw error;
+          return { row: mapTrip(data as TripRow), created: false };
+        }
+      }
+      throw err;
+    }
+  }
+
+  async softDeleteByExternal(source: string, externalId: string): Promise<TripRequest | null> {
+    const existing = await this.findByExternalId(source, externalId);
+    if (!existing) return null;
+    const { data, error } = await this.db
+      .from('trip_requests')
+      .update({ deleted_at: new Date().toISOString() })
+      .eq('id', existing.id)
+      .select()
+      .single();
+    if (error) throw error;
+    return mapTrip(data as TripRow);
+  }
+
+  async recoverByExternal(source: string, externalId: string): Promise<TripRequest | null> {
+    const existing = await this.findByExternalId(source, externalId);
+    if (!existing) return null;
+    const { data, error } = await this.db
+      .from('trip_requests')
+      .update({ deleted_at: null })
+      .eq('id', existing.id)
+      .select()
+      .single();
+    if (error) throw error;
+    return mapTrip(data as TripRow);
+  }
+
   async stats(): Promise<{
     total: number;
     thisMonth: number;
@@ -140,7 +325,8 @@ export class TripService {
   }> {
     const { data, error } = await this.db
       .from('trip_requests')
-      .select('support_type, year, trip_date');
+      .select('support_type, year, trip_date')
+      .is('deleted_at', null);
     if (error) throw error;
     const rows = data as Array<{ support_type: string; year: number | null; trip_date: string }>;
     const now = new Date();

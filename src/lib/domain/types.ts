@@ -179,6 +179,12 @@ export interface TripRequest {
   derivedTaskId: string | null;
   externalId: string | null;
   externalSource: string | null;
+  externalUuid: string | null;
+  externalOperator: string | null;
+  externalOriginOperator: string | null;
+  auditStatus: number | null;
+  deletedAt: string | null;
+  rawPayload: Record<string, unknown> | null;
   createdAt: string;
   updatedAt: string;
 }

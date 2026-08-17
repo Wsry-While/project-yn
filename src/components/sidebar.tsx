@@ -17,6 +17,7 @@ import {
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import { themeStore, toggleTheme } from '@/lib/web/theme';
+import { appStore } from '@/lib/web/app-store';
 import { LogoutButton } from '@/components/logout-button';
 import { Button } from '@/components/ui/button';
 
@@ -144,16 +145,32 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
 }
 
 function SidebarFooter() {
+  const displayName = appStore.use((s) => s.currentUserDisplayName);
+  const avatarUrl = appStore.use((s) => s.currentUserAvatarUrl);
+  const uid = appStore.use((s) => s.currentUserUid);
+  const orgName = appStore.use((s) => s.currentUserOrgName);
+
+  const name = displayName || '当前用户';
+  const sub = orgName || (uid ? `学工号 ${uid}` : '超星登录会话');
+  const initial = name.trim().charAt(0).toUpperCase() || '?';
+
   return (
     <div className="mt-auto flex items-center gap-2 border-t border-sidebar-border/60 px-3 py-3">
-      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-zinc-500 to-zinc-700 text-[11px] font-semibold text-white">
-        U
-      </div>
-      <div className="min-w-0 flex-1 leading-tight">
-        <div className="truncate text-[13px] text-sidebar-foreground">当前用户</div>
-        <div className="truncate text-[11px] text-sidebar-foreground/50">
-          超星登录会话
+      {avatarUrl ? (
+        <img
+          src={avatarUrl}
+          alt={name}
+          referrerPolicy="no-referrer"
+          className="h-8 w-8 shrink-0 rounded-full object-cover"
+        />
+      ) : (
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-brand to-zinc-600 text-[11px] font-semibold text-white">
+          {initial}
         </div>
+      )}
+      <div className="min-w-0 flex-1 leading-tight">
+        <div className="truncate text-[13px] text-sidebar-foreground">{name}</div>
+        <div className="truncate text-[11px] text-sidebar-foreground/50">{sub}</div>
       </div>
       <ThemeToggle />
       <LogoutButton />

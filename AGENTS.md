@@ -21,6 +21,7 @@
 - 任务支持 HTML5 原生拖拽跨列更新，带 `version` 乐观锁，冲突返回 409 后前端回滚并 Toast 提示。
 - 内置大模型助手（普通对话、生成建设方案、生成启明星课程导入数据），SSE 增量渲染，仅面板局部 loading，不阻塞页面。
 - 第三方系统可通过 `POST /api/external/push` 推送任务，按 `external_id + source` 幂等。
+- 超星表单可通过 `POST /api/external/chaoxing/push` 推送项目外出数据，formId=`253633`，按 `external_source='chaoxing' + external_id=indexID` 幂等，删除/恢复使用软删除。
 
 ## 业务数据模型
 
@@ -29,8 +30,8 @@
 - `projects`：项目主表，支持 `project_type`（bidding/qiming/construction/operation/other）、学校、部门、行业、产品、外部来源字段。
 - `project_milestones`：项目里程碑，创建项目时按项目类型初始化默认阶段。
 - `tasks`：任务，支持 `task_type`、产品、里程碑、学校、来源类型、来源 ID、外部幂等字段。
-- `trip_requests`：项目外出申请，字段对齐《项目外出申请.xlsx》模板，保存学校、部门、支持类型、产品、日期、销售/项目经理、完成情况、评分反馈等。
-- `external_sync_logs`：记录第三方接口同步日志。
+- `trip_requests`：项目外出申请，字段对齐《项目外出申请.xlsx》模板，保存学校、部门、支持类型、产品、日期、销售/项目经理、完成情况、评分反馈、超星 `uuid/operator/originUid/auditStatus/rawPayload/deletedAt` 等同步字段。
+- `external_sync_logs`：记录第三方接口同步日志，包含 `direction/op/form_id/index_id/operator/ip/duration_ms/status/error/payload`，用于审计和联调排障。
 
 ## 目录结构
 
@@ -57,6 +58,7 @@
 │   │   │   ├── activity/   # 操作日志
 │   │   │   ├── stats/      # 仪表盘统计
 │   │   │   ├── external/push/  # 第三方任务推送
+│   │   │   ├── external/chaoxing/push/ # 超星项目外出表单推送
 │   │   │   ├── llm/chat/   # 大模型 SSE 对话
 │   │   │   └── agent/      # 建设方案 / 启明星课程 SSE/JSON
 │   │   ├── page.tsx        # 首页（未登录显示登录，已登录跳转 /dashboard）
@@ -85,7 +87,8 @@
 │   │   │   ├── project-service.ts
 │   │   │   ├── milestone-service.ts
 │   │   │   ├── task-service.ts   # 乐观锁、ConflictError
-│   │   │   ├── trip-service.ts
+│   │   │   ├── trip-service.ts   # 外出工单、软删除、超星 upsert
+│   │   │   ├── chaoxing/         # 超星 form-data 解析、字段映射
 │   │   │   ├── team-service.ts
 │   │   │   ├── activity-service.ts
 │   │   │   ├── stats-service.ts
@@ -126,7 +129,7 @@
 - `tasks.version` 用于乐观锁，PATCH 必须带 `version`，冲突抛 409。
 - 学校导入脚本：`scripts/import-schools.py`，从 `assets/学校信息汇总表.xlsx` 读取并 upsert 学校/部门。
 - 项目创建时按 `project_type` 初始化默认里程碑：招投标、启明星建设、项目建设、日常运营均有阶段模板。
-- 常用查询字段已建索引：`tasks(project_id,status)`、`tasks(assignee_id)`、`tasks(milestone_id)`、`tasks(external_id, external_source)`、`school_departments(school_id)`、`trip_requests(trip_date)` 等。
+- 常用查询字段已建索引：`tasks(project_id,status)`、`tasks(assignee_id)`、`tasks(milestone_id)`、`tasks(external_id, external_source)`、`school_departments(school_id)`、`trip_requests(trip_date)`、`trip_requests(external_source, external_id)`、`trip_requests(deleted_at)` 等。
 - 触发器自动维护 `updated_at`。
 
 ## API 约定
@@ -140,6 +143,12 @@
   - `GET/POST /api/trips`：项目外出列表/新建。
   - `GET/PATCH/DELETE /api/milestones/:id`：里程碑更新/删除。
 - 第三方推送 `POST /api/external/push` 通过 `x-push-token` 或 `?token=` 鉴权，token 读取 `EXTERNAL_PUSH_TOKEN`，开发兜底值 `dev-push-token-change-me`。
+- 超星推送 `POST /api/external/chaoxing/push`：
+  - 仅接受 form-data / urlencoded，`data` 为 JSON 字符串数组，formId 当前配置为 `253633`。
+  - 鉴权使用 `Authorization: Bearer <EXTERNAL_CHAOXING_TOKEN>` 或 `?token=<EXTERNAL_CHAOXING_TOKEN>`，开发兜底值 `dev-chaoxing-token-change-me`，生产必须替换为强随机 token。
+  - `op=data_create/data_update` 时映射并 upsert 项目外出；学校按名称自动查找/创建；`auditStatus=2` 入库但标记为 rejected。
+  - `op=data_remove/data_recover` 对 `trip_requests.deleted_at` 做软删除/恢复；`op=form_update` 只记录审计日志并 ack。
+  - 字段映射保存在 `system_configs(key='chaoxing_form_trip').value.fieldMapping`；当前按中文 label 兜底，联调拿到真实 alias 后更新为 alias 优先。
 
 ## 开发规范
 

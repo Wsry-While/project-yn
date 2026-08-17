@@ -82,4 +82,35 @@ export class SchoolService {
     }
     return Array.from(set).sort();
   }
+
+  /**
+   * 按名称查找或创建学校。返回学校 ID。
+   * 用于第三方推送等无法事先拿到 UUID 的场景。
+   */
+  async findOrCreateSchoolByName(name: string, industry?: string | null): Promise<string> {
+    const trimmed = name.trim();
+    if (!trimmed) throw new Error('学校名称不能为空');
+    const { data: existing } = await this.db
+      .from('schools')
+      .select('id')
+      .eq('name', trimmed)
+      .maybeSingle();
+    if (existing?.id) return existing.id as string;
+    const { data, error } = await this.db
+      .from('schools')
+      .insert({ name: trimmed, industry: industry ?? null, external_source: 'chaoxing' })
+      .select('id')
+      .single();
+    if (error) {
+      // 并发场景再查一次
+      const { data: retry } = await this.db
+        .from('schools')
+        .select('id')
+        .eq('name', trimmed)
+        .maybeSingle();
+      if (retry?.id) return retry.id as string;
+      throw error;
+    }
+    return data.id as string;
+  }
 }

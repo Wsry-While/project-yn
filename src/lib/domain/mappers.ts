@@ -153,6 +153,12 @@ interface TripRow {
   derived_task_id: string | null;
   external_id: string | null;
   external_source: string | null;
+  external_uuid: string | null;
+  external_operator: string | null;
+  external_origin_operator: string | null;
+  audit_status: number | null;
+  deleted_at: string | null;
+  raw_payload: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 }
@@ -327,6 +333,12 @@ export function mapTrip(row: TripRow): TripRequest {
     derivedTaskId: row.derived_task_id,
     externalId: row.external_id,
     externalSource: row.external_source,
+    externalUuid: row.external_uuid,
+    externalOperator: row.external_operator,
+    externalOriginOperator: row.external_origin_operator,
+    auditStatus: row.audit_status,
+    deletedAt: row.deleted_at,
+    rawPayload: row.raw_payload,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

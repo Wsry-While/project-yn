@@ -85,6 +85,12 @@ export async function POST(request: NextRequest) {
       overallFeedback: typeof body.overallFeedback === 'string' ? body.overallFeedback : null,
       externalId: typeof body.externalId === 'string' ? body.externalId : null,
       externalSource: typeof body.externalSource === 'string' ? body.externalSource : null,
+      externalUuid: null,
+      externalOperator: null,
+      externalOriginOperator: null,
+      auditStatus: 1,
+      deletedAt: null,
+      rawPayload: null,
     });
     return ok(trip);
   });
