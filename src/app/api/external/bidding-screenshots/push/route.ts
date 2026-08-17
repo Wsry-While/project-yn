@@ -13,11 +13,18 @@ import {
 } from '@/lib/domain/bidding-normalize';
 
 const SOURCE = 'bidding-screenshot';
+const UPSERT_OPS = new Set(['data_create', 'data_edit', 'data_update', 'upsert']);
+const REMOVE_OPS = new Set(['data_remove', 'remove', 'delete']);
+const RECOVER_OPS = new Set(['data_recover', 'recover']);
 
 type PushItem = Record<string, unknown>;
 type ParseResult =
   | { items: PushItem[]; topLevelMeta: PushItem }
   | { error: string };
+
+function isPlainObject(value: unknown): value is PushItem {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
 
 function tryParseJson(raw: string): unknown | null {
   const text = raw.trim();
@@ -30,13 +37,26 @@ function tryParseJson(raw: string): unknown | null {
   }
 }
 
+function stringifyMeta(value: FormDataEntryValue): unknown {
+  if (typeof value === 'string') return value;
+  return { name: value.name, size: value.size, type: value.type };
+}
+
+function flattenForm(form: FormData): PushItem {
+  const out: PushItem = {};
+  for (const [key, value] of form.entries()) {
+    if (key === 'data') continue;
+    out[key] = stringifyMeta(value);
+  }
+  return out;
+}
+
 /**
- * 第三方实际推送可能使用：
- *  - application/json
- *  - multipart/form-data（业务字段在 form 字段，或 data 字段是 JSON 字符串数组 —— 与超星一致）
- *  - application/x-www-form-urlencoded
- *  - text/plain（body 直接是 JSON 字符串）
- * 这里统一收敛成 items 数组 + 顶层 meta，和 chaoxing 推送保持一致的容错。
+ * 与项目外出 /api/external/chaoxing/push 对齐：
+ *  1. 支持 application/json / text/plain(JSON) / multipart/form-data / x-www-form-urlencoded
+ *  2. form-data 里 data 字段是 JSON 字符串数组（超星推送的真实结构）
+ *  3. records / data / list / items 等常见包装都展开为业务记录
+ *  4. 顶层 op/externalId/externalSerial/operator 对每条记录透传
  */
 async function parseRequestBody(request: NextRequest): Promise<ParseResult> {
   const contentType = request.headers.get('content-type') || '';
@@ -45,74 +65,67 @@ async function parseRequestBody(request: NextRequest): Promise<ParseResult> {
   const isMultipart = contentType.includes('multipart/form-data');
   const isText = contentType.startsWith('text/');
 
-  const topLevelMeta: PushItem = {};
-
-  if (isJson || (!isFormUrlEncoded && !isMultipart && !isText)) {
-    // 1) JSON 或 Content-Type 缺失时，先按 JSON 尝试
+  if (isJson || isText || (!isFormUrlEncoded && !isMultipart)) {
     const text = await request.text();
     const parsed = tryParseJson(text);
     if (parsed && typeof parsed === 'object') {
-      if (Array.isArray(parsed)) return { items: parsed as PushItem[], topLevelMeta };
-      return { items: [parsed as PushItem], topLevelMeta };
+      const topLevelMeta: PushItem = {};
+      return { items: expandRecords(parsed, topLevelMeta), topLevelMeta };
     }
-    // JSON 解析失败：若看起来像 form 编码，继续走 form 解析
-    if (!text.includes('=') || !isFormUrlEncoded) {
-      return { error: '请求体必须是 JSON 对象/数组，或 form-data 中携带 data JSON 字符串' };
+    if (!isText) {
+      // Content-Type 缺失或未知时，继续尝试 form 解析
+      if (!text.includes('=')) return { error: '请求体必须是 JSON 对象/数组，或 form-data 中携带 data JSON 字符串' };
+    } else {
+      return { error: 'text/plain 请求体必须是 JSON 字符串' };
     }
   }
 
-  if (isMultipart) {
-    const form = await request.formData();
-    for (const [key, value] of form.entries()) {
-      if (key === 'data') continue;
-      if (typeof value === 'string') {
-        topLevelMeta[key] = value;
-      } else if (value && typeof value === 'object' && 'name' in value) {
-        // File 对象，跳过（招投标接口文件字段在 JSON 里是 {name,url}，不需要上传二进制）
-        topLevelMeta[key] = { name: (value as File).name, size: (value as File).size };
-      }
-    }
-    const rawData = form.get('data');
-    if (typeof rawData === 'string' && rawData.trim()) {
-      const parsed = tryParseJson(rawData);
-      if (Array.isArray(parsed)) return { items: parsed as PushItem[], topLevelMeta };
-      if (parsed && typeof parsed === 'object') return { items: [parsed as PushItem], topLevelMeta };
-    }
-    // 没有 data 字段：把整个 form 字段当作一条业务记录
-    const record: PushItem = {};
-    for (const [key, value] of form.entries()) {
-      if (typeof value === 'string') record[key] = value;
-    }
-    if (Object.keys(record).length > 0) return { items: [record], topLevelMeta };
-    return { error: 'form-data 缺少 data JSON 字符串或业务字段' };
+  const form = await request.formData().catch(() => null);
+  if (!form) return { error: '请求体必须是 form-data / urlencoded' };
+  const topLevelMeta = flattenForm(form);
+  const rawData = form.get('data');
+  if (typeof rawData === 'string' && rawData.trim()) {
+    const parsed = tryParseJson(rawData);
+    if (!parsed || typeof parsed !== 'object') return { error: 'data 字段必须是 JSON 对象或数组' };
+    return { items: expandRecords(parsed, topLevelMeta), topLevelMeta };
+  }
+  const record: PushItem = {};
+  for (const [key, value] of form.entries()) {
+    if (typeof value === 'string') record[key] = value;
+  }
+  if (Object.keys(record).length === 0) return { error: 'form-data 缺少 data JSON 字符串或业务字段' };
+  return { items: expandRecords(record, topLevelMeta), topLevelMeta };
+}
+
+/**
+ * 把 {records:[...]} / {data:[...]} / {list:[...]} / {items:[...]} 等包装
+ * 展开为真正的业务对象数组，同时把顶层 meta 合并到 topLevelMeta。
+ */
+function expandRecords(input: unknown, topLevelMeta: PushItem): PushItem[] {
+  if (Array.isArray(input)) return input.filter(isPlainObject);
+  if (!isPlainObject(input)) return [];
+
+  for (const key of ['externalId', 'external_id', 'indexID', 'indexId', 'id',
+                     'externalSerial', 'external_serial', 'serialNo',
+                     'op', 'externalOp', 'operator', 'uid', 'submitter',
+                     'formId', 'formName', 'uuid']) {
+    if (input[key] !== undefined) topLevelMeta[key] = input[key];
   }
 
-  if (isFormUrlEncoded) {
-    const form = await request.formData();
-    const record: PushItem = {};
-    for (const [key, value] of form.entries()) {
-      if (typeof value === 'string') record[key] = value;
-    }
-    const rawData = record.data;
-    if (typeof rawData === 'string' && rawData.trim()) {
-      const parsed = tryParseJson(rawData);
-      if (Array.isArray(parsed)) return { items: parsed as PushItem[], topLevelMeta: record };
-      if (parsed && typeof parsed === 'object') return { items: [parsed as PushItem], topLevelMeta: record };
-    }
-    if (Object.keys(record).length > 0) return { items: [record], topLevelMeta: record };
-    return { error: 'urlencoded 请求缺少业务字段' };
+  for (const key of ['records', 'data', 'list', 'items', 'rows']) {
+    const v = input[key];
+    if (Array.isArray(v)) return v.filter(isPlainObject);
+    if (isPlainObject(v)) return [v];
   }
+  return [input];
+}
 
-  // text/plain 兜底：body 即 JSON 字符串
-  const text = await request.text();
-  const parsed = tryParseJson(text);
-  if (Array.isArray(parsed)) return { items: parsed as PushItem[], topLevelMeta };
-  if (parsed && typeof parsed === 'object') return { items: [parsed as PushItem], topLevelMeta };
-  return { error: 'text/plain 请求体必须是 JSON 字符串' };
+function readField(body: PushItem, topLevel: PushItem, keys: string[]): string | null {
+  return pickString(body, keys) || pickString(topLevel, keys);
 }
 
 function parseBody(body: PushItem, topLevel: PushItem = {}) {
-  const read = (...keys: string[]) => pickString(body, keys) || pickString(topLevel, keys);
+  const read = (...keys: string[]) => readField(body, topLevel, keys);
   const salesManager =
     read('salesManager', 'sales_manager', '销售经理') ||
     read('salesManagerName', 'salesOwner');
@@ -141,31 +154,83 @@ function parseBody(body: PushItem, topLevel: PushItem = {}) {
       body.reservedDays ?? body.reserved_days ?? body['预留天数'] ??
       topLevel.reservedDays ?? topLevel.reserved_days ?? topLevel['预留天数'],
     ),
-    projectBiddingFile: normalizeFile(body.projectBiddingFile ?? body.project_bidding_file ?? body['项目招标文件'] ?? topLevel.projectBiddingFile ?? topLevel.project_bidding_file),
+    projectBiddingFile: normalizeFile(
+      body.projectBiddingFile ?? body.project_bidding_file ?? body['项目招标文件'] ??
+      topLevel.projectBiddingFile ?? topLevel.project_bidding_file,
+    ),
     projectCategory: read('projectCategory', 'project_category', '项目所属类别', '类别'),
     screenshotRequirement: read('screenshotRequirement', 'screenshot_requirement', '截图需求说明', '截图需求'),
     assignedProjectManager: read('assignedProjectManager', 'assigned_project_manager', '指派项目经理', '项目经理'),
     completionStatus: read('completionStatus', 'completion_status', '完成情况'),
-    deliveryDocument: normalizeFile(body.deliveryDocument ?? body.delivery_document ?? body['交付文档上传'] ?? body['交付文档'] ?? topLevel.deliveryDocument ?? topLevel.delivery_document),
+    deliveryDocument: normalizeFile(
+      body.deliveryDocument ?? body.delivery_document ?? body['交付文档上传'] ?? body['交付文档'] ??
+      topLevel.deliveryDocument ?? topLevel.delivery_document,
+    ),
     deliveryRemark: read('deliveryRemark', 'delivery_remark', '交付信息备注', '交付备注'),
     isMeetScreenshotRequirement: toBoolean(
       body.isMeetScreenshotRequirement ?? body.is_meet_screenshot_requirement ?? body['是否按截图需求完成'] ?? body['需求达成'] ??
       topLevel.isMeetScreenshotRequirement ?? topLevel.is_meet_screenshot_requirement ?? topLevel['需求达成'],
     ),
     salesFeedback: read('salesFeedback', 'sales_feedback', '销售反馈意见', '销售反馈'),
-    attachments: normalizeFiles(body.attachments ?? body['附件材料'] ?? body['附件'] ?? topLevel.attachments),
+    attachments: normalizeFiles(
+      body.attachments ?? body['附件材料'] ?? body['附件'] ?? topLevel.attachments,
+    ),
     rectificationFeedback: read('rectificationFeedback', 'rectification_feedback', '整改情况反馈', '整改反馈'),
-    rectifiedDocument: normalizeFile(body.rectifiedDocument ?? body.rectified_document ?? body['整改后文档'] ?? topLevel.rectifiedDocument ?? topLevel.rectified_document),
+    rectifiedDocument: normalizeFile(
+      body.rectifiedDocument ?? body.rectified_document ?? body['整改后文档'] ??
+      topLevel.rectifiedDocument ?? topLevel.rectified_document,
+    ),
     externalId: read('externalId', 'external_id', 'id', 'indexID', 'indexId', 'serialNo'),
     externalSerial: read('externalSerial', 'external_serial', 'serialNo', '编号'),
     externalOperator: read('operator', 'uid', 'submitter', '提交人'),
   };
 }
 
+type MappedBody = ReturnType<typeof parseBody>;
+
+function missingRequiredFields(mapped: MappedBody): string[] {
+  const missing: string[] = [];
+  if (!mapped.salesManager) missing.push('销售经理(salesManager)');
+  if (!mapped.projectName) missing.push('项目名称(projectName)');
+  if (!mapped.projectSchool) missing.push('项目所属学校(projectSchool)');
+  if (!mapped.submissionDate) missing.push('提交日期(submissionDate)');
+  return missing;
+}
+
+async function writeSyncLog(input: {
+  db: ReturnType<typeof getAdminSupabase>;
+  externalId: string;
+  op: string;
+  operator: string | null;
+  ip: string | null;
+  durationMs: number;
+  status: 'success' | 'failed' | 'skipped';
+  entityId?: string | null;
+  message?: string | null;
+  payload?: unknown;
+  error?: string | null;
+}): Promise<void> {
+  const { db, ...row } = input;
+  await db.from('external_sync_logs').insert({
+    source: SOURCE,
+    direction: 'inbound',
+    external_id: row.externalId,
+    entity_type: 'bidding_screenshot',
+    entity_id: row.entityId ?? null,
+    op: row.op,
+    operator: row.operator,
+    ip: row.ip,
+    duration_ms: row.durationMs,
+    status: row.status,
+    message: row.message ?? null,
+    error: row.error ?? null,
+    payload: (row.payload ?? null) as Record<string, unknown> | null,
+  });
+}
+
 export async function POST(request: NextRequest) {
+  const startedAt = Date.now();
   return withApi(async () => {
-    // 与项目外出（/api/external/chaoxing/push）保持一致：第三方推送按无鉴权设计，
-    // 入口仅通过公网 HTTPS + 业务白名单（external_id 幂等 + source 固定）控制。
     const parsed = await parseRequestBody(request);
     if ('error' in parsed) return fail('invalid_param', parsed.error, 400);
 
@@ -175,54 +240,70 @@ export async function POST(request: NextRequest) {
     const db = getAdminSupabase();
     const service = new BiddingScreenshotService(db);
     const schools = new SchoolService(db);
-    const results: Array<{ externalId: string; result: 'created' | 'updated' | 'deleted' | 'recovered' | 'skipped'; localId?: string }> = [];
+    const ip = request.headers.get('x-forwarded-for') ?? request.headers.get('x-real-ip') ?? null;
+    const results: Array<{
+      externalId: string;
+      result: 'created' | 'updated' | 'deleted' | 'recovered' | 'skipped' | 'failed';
+      localId?: string | null;
+      reason?: string;
+    }> = [];
 
     const topLevelOp = typeof topLevelMeta.op === 'string' ? String(topLevelMeta.op) : undefined;
 
     for (const item of items) {
-      const op =
+      const record = isPlainObject(item) ? item : {};
+      const mergedMeta = { ...topLevelMeta, ...record };
+      const effectiveOp =
         topLevelOp ||
-        (typeof item.op === 'string' ? String(item.op)
-        : typeof item.externalOp === 'string' ? String(item.externalOp)
+        (typeof record.op === 'string' ? String(record.op)
+        : typeof record.externalOp === 'string' ? String(record.externalOp)
         : typeof topLevelMeta.externalOp === 'string' ? String(topLevelMeta.externalOp)
         : 'upsert');
+      const mapped = parseBody(record, mergedMeta);
+      const externalId = mapped.externalId;
+      const operator = mapped.externalOperator;
+      const auditPayload = { ...topLevelMeta, op: effectiveOp, ip, receivedAt: new Date().toISOString() };
 
-      // 顶层 op 不随单条 item 覆盖
-      const effectiveOp = topLevelOp ?? op;
-      const rawRecords = Array.isArray(item.records)
-        ? item.records.filter((r): r is PushItem => !!r && typeof r === 'object')
-        : [item];
+      if (!externalId) {
+        const reason = '缺少外部记录 ID（externalId/indexID/id）';
+        results.push({ externalId: '', result: 'failed', reason });
+        await writeSyncLog({ db, externalId: '', op: effectiveOp, operator, ip, durationMs: Date.now() - startedAt, status: 'failed', error: reason, payload: auditPayload });
+        continue;
+      }
 
-      for (const record of rawRecords) {
-        const mapped = parseBody(record, { ...topLevelMeta, ...item });
-        const externalId = mapped.externalId;
-        if (!externalId) {
-          results.push({ externalId: '', result: 'skipped' });
-          continue;
-        }
+      if (REMOVE_OPS.has(effectiveOp)) {
+        const row = await service.softDeleteByExternal(SOURCE, externalId);
+        results.push({ externalId, result: row ? 'deleted' : 'skipped', localId: row?.id ?? null, reason: row ? undefined : '本地不存在该记录' });
+        await writeSyncLog({ db, externalId, op: effectiveOp, operator, ip, durationMs: Date.now() - startedAt, status: row ? 'success' : 'skipped', entityId: row?.id, message: row ? undefined : '本地不存在该记录', payload: auditPayload });
+        continue;
+      }
+      if (RECOVER_OPS.has(effectiveOp)) {
+        const row = await service.recoverByExternal(SOURCE, externalId);
+        results.push({ externalId, result: row ? 'recovered' : 'skipped', localId: row?.id ?? null, reason: row ? undefined : '本地不存在该记录' });
+        await writeSyncLog({ db, externalId, op: effectiveOp, operator, ip, durationMs: Date.now() - startedAt, status: row ? 'success' : 'skipped', entityId: row?.id, message: row ? undefined : '本地不存在该记录', payload: auditPayload });
+        continue;
+      }
+      if (!UPSERT_OPS.has(effectiveOp)) {
+        const reason = `不支持的 op：${effectiveOp}`;
+        results.push({ externalId, result: 'failed', reason });
+        await writeSyncLog({ db, externalId, op: effectiveOp, operator, ip, durationMs: Date.now() - startedAt, status: 'failed', error: reason, payload: auditPayload });
+        continue;
+      }
 
-        if (effectiveOp === 'data_remove' || effectiveOp === 'remove' || effectiveOp === 'delete') {
-          const row = await service.softDeleteByExternal(SOURCE, externalId);
-          results.push({ externalId, result: row ? 'deleted' : 'skipped', localId: row?.id });
-          continue;
-        }
-        if (effectiveOp === 'data_recover' || effectiveOp === 'recover') {
-          const row = await service.recoverByExternal(SOURCE, externalId);
-          results.push({ externalId, result: row ? 'recovered' : 'skipped', localId: row?.id });
-          continue;
-        }
+      const missing = missingRequiredFields(mapped);
+      if (missing.length > 0) {
+        const reason = `缺少必填字段：${missing.join('、')}`;
+        results.push({ externalId, result: 'failed', reason });
+        await writeSyncLog({ db, externalId, op: effectiveOp, operator, ip, durationMs: Date.now() - startedAt, status: 'failed', error: reason, payload: { ...auditPayload, recordKeys: Object.keys(record) } });
+        continue;
+      }
 
-        if (!mapped.salesManager || !mapped.projectName || !mapped.projectSchool || !mapped.submissionDate) {
-          results.push({ externalId, result: 'skipped' });
-          continue;
-        }
-
-        // 经过上面的必填校验后收窄为非空字段，避免把 string | null 传给 BiddingScreenshotInput
+      try {
         const validated = {
-          salesManager: mapped.salesManager,
-          projectName: mapped.projectName,
-          projectSchool: mapped.projectSchool,
-          submissionDate: mapped.submissionDate,
+          salesManager: mapped.salesManager as string,
+          projectName: mapped.projectName as string,
+          projectSchool: mapped.projectSchool as string,
+          submissionDate: mapped.submissionDate as string,
           projectSecondaryUnit: mapped.projectSecondaryUnit,
           isCompanyParameter: mapped.isCompanyParameter,
           dueDeliveryDate: mapped.dueDeliveryDate,
@@ -251,18 +332,23 @@ export async function POST(request: NextRequest) {
             externalSerial: mapped.externalSerial,
             externalOperator: mapped.externalOperator,
             rawPayload: record,
-            rawMeta: {
-              ...topLevelMeta,
-              ip: request.headers.get('x-forwarded-for'),
-              receivedAt: new Date().toISOString(),
-            },
+            rawMeta: auditPayload,
           },
           schoolId,
         );
         results.push({ externalId, result: created ? 'created' : 'updated', localId: row.id });
+        await writeSyncLog({ db, externalId, op: effectiveOp, operator, ip, durationMs: Date.now() - startedAt, status: 'success', entityId: row.id, message: `已${created ? '创建' : '更新'}招投标截图记录`, payload: auditPayload });
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : '数据写入失败';
+        results.push({ externalId, result: 'failed', reason });
+        await writeSyncLog({ db, externalId, op: effectiveOp, operator, ip, durationMs: Date.now() - startedAt, status: 'failed', error: reason, payload: { ...auditPayload, recordKeys: Object.keys(record) } });
       }
     }
 
+    const failed = results.filter((r) => r.result === 'failed');
+    if (failed.length > 0 && failed.length === results.length) {
+      return fail('invalid_param', failed[0].reason || '推送处理失败', 422, { results });
+    }
     return ok({ received: results.length, results });
   });
 }

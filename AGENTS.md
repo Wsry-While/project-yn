@@ -162,8 +162,10 @@
   - 与超星项目外出推送保持一致，按无鉴权接入设计，不校验 `Authorization` / token，入口仅通过公网 HTTPS + 业务幂等键控制。
   - 接受 JSON 对象/数组、`multipart/form-data`、`application/x-www-form-urlencoded`、`text/plain`(JSON 字符串)。
   - form-data / urlencoded 场景：既可把业务字段直接摊平在表单字段里（与超星 chaoxing 推送一致），也可把业务 JSON 数组放在 `data` 字段里；顶层 `op/externalId/externalSerial/operator` 会作为 meta 透传给每条记录。
-  - 顶层可传 `externalId/externalSerial/op/operator/records`，也可直接把业务字段放在顶层。
+  - 顶层可传 `externalId/externalSerial/op/operator/records/data/list/items`，也可直接把业务字段放在顶层；`records/data/list/items` 数组中的每个元素作为一条业务记录。
   - `op=data_create/data_edit/data_update/upsert` 按字段映射 upsert；`op=data_remove/remove/delete` 软删除；`op=data_recover/recover` 恢复。
+  - 必填字段缺失、op 不支持、externalId 缺失等场景返回 `422 invalid_param` 并在 `details.results` 中给出每条失败原因；禁止静默 `skipped` 吞掉业务写入失败。
+  - 每次推送都写 `external_sync_logs`（source=`bidding-screenshot`，status=`success/failed/skipped`），用于联调排障。
   - 必填字段：销售经理、项目名称、项目所属学校、提交日期。文件字段统一为 `{name,url}` 或该对象数组。
 - 超星推送 `POST /api/external/chaoxing/push`：
   - 仅接受 form-data / urlencoded，`data` 为 JSON 字符串数组，固定处理 formId=`253633`。
