@@ -3,7 +3,6 @@ import { ok, fail, withApi } from '@/lib/domain/http';
 import { getAdminSupabase } from '@/lib/domain/api-utils';
 import { BiddingScreenshotService } from '@/lib/domain/bidding-screenshot-service';
 import { SchoolService } from '@/lib/domain/school-service';
-import { authorizePushToken } from '@/lib/domain/external-push-auth';
 import {
   normalizeFile,
   normalizeFiles,
@@ -68,12 +67,8 @@ function parseBody(body: Record<string, unknown>, topLevel: Record<string, unkno
 
 export async function POST(request: NextRequest) {
   return withApi(async () => {
-    const authError = authorizePushToken(request, {
-      envNames: ['EXTERNAL_BIDDING_PUSH_TOKEN', 'EXTERNAL_PUSH_TOKEN'],
-      scope: '招投标截图推送',
-    });
-    if (authError) return authError;
-
+    // 与项目外出（/api/external/chaoxing/push）保持一致：第三方推送按无鉴权设计，
+    // 入口仅通过公网 HTTPS + 业务白名单（external_id 幂等 + source 固定）控制。
     const raw = (await request.json().catch(() => null)) as Record<string, unknown> | Record<string, unknown>[] | null;
     if (!raw) return fail('invalid_param', '请求体必须是 JSON 对象或数组', 400);
     const items = Array.isArray(raw) ? raw : [raw];
