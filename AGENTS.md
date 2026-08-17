@@ -163,14 +163,14 @@
   - 接受 JSON 对象/数组、`multipart/form-data`、`application/x-www-form-urlencoded`、`text/plain`(JSON 字符串)。
   - form-data / urlencoded 场景：既可把业务字段直接摊平在表单字段里（与超星 chaoxing 推送一致），也可把业务 JSON 数组放在 `data` 字段里；顶层 `op/externalId/externalSerial/operator` 会作为 meta 透传给每条记录。
   - 顶层可传 `externalId/externalSerial/op/operator/records/data/list/items`，也可直接把业务字段放在顶层；`records/data/list/items` 数组中的每个元素作为一条业务记录。
-  - `op=data_create/data_edit/data_update/upsert` 按字段映射 upsert；`op=data_remove/remove/delete` 软删除；`op=data_recover/recover` 恢复；`op=form_update` 仅记录审计日志并 ack；formId 不匹配返回 skipped。
+  - `op=data_create/data_edit/data_update/data_flow/upsert` 按字段映射 upsert；`op=data_remove/remove/delete` 软删除；`op=data_recover/recover` 恢复；`op=form_update` 仅记录审计日志并 ack；formId 不匹配返回 skipped。
   - 必填字段缺失、op 不支持、externalId 缺失等场景返回 `422 invalid_param` 并在 `details.results` 中给出每条失败原因；禁止静默 `skipped` 吞掉业务写入失败。
   - 每次推送都写 `external_sync_logs`（source=`bidding-screenshot`，status=`success/failed/skipped`），用于联调排障。
   - 必填字段：销售经理、项目名称、项目所属学校、提交日期。文件字段统一为 `{name,url}` 或该对象数组。
 - 超星推送 `POST /api/external/chaoxing/push`：
   - 仅接受 form-data / urlencoded，`data` 为 JSON 字符串数组，固定处理 formId=`253633`。
   - 按无鉴权接入设计，不校验 `Authorization` / token，仅通过公网 HTTPS 与 formId 白名单控制入口范围。
-  - `op=data_create/data_edit/data_update` 按 alias 固定映射并 upsert 项目外出；学校按名称自动查找/创建；`auditStatus=2` 入库但标记为 rejected。
+  - `op=data_create/data_edit/data_update/data_flow` 按 alias 固定映射并 upsert 项目外出；学校按名称自动查找/创建；`auditStatus=2` 入库但标记为 rejected。
   - `op=data_remove/data_recover` 对 `trip_requests.deleted_at` 做软删除/恢复；`op=form_update` 只记录审计日志并 ack；formId 不匹配返回 skipped。
   - alias 映射：1 编号、35 年度、3 销售经理 contact、33 学校、27 行业、4 支持类型、23 其他类型说明、26 产品多选、8 具体事宜 richtext、9 外出日期、10 开始时间、11 结束时间、36 周几（1=周一...7=周日）、13 项目经理 contact、14 是否完成、37 汇报一致、15 服务内容简述、28 销售迟到、16 销售评分、29 服务迟到、32 综合评分、17 整体评价。
   - `richtext` 入库前经 `src/lib/domain/sanitize.ts` 清洗脚本/事件/危险标签，保存 html+text；`contact` 保存 name/puid/enc；`selectmultibox` 保存为 string[]；`rate/numberinput` 保存为 number；`dateinput` 支持日期与日期时间。

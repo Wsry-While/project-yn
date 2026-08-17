@@ -14,7 +14,14 @@ import {
 
 const SOURCE = 'bidding-screenshot';
 const BIDDING_FORM_ID = '254045';
-const UPSERT_OPS = new Set(['data_create', 'data_edit', 'data_update', 'upsert']);
+// data_flow = 第三方整表/分页同步下发，语义等同于 upsert，每条记录都带全量业务字段
+const UPSERT_OPS = new Set([
+  'data_create',
+  'data_edit',
+  'data_update',
+  'data_flow',
+  'upsert',
+]);
 const REMOVE_OPS = new Set(['data_remove', 'remove', 'delete']);
 const RECOVER_OPS = new Set(['data_recover', 'recover']);
 const FORM_UPDATE_OPS = new Set(['form_update']);

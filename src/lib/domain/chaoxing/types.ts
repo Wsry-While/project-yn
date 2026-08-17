@@ -7,6 +7,7 @@ export type ChaoxingOp =
   | 'data_create'
   | 'data_edit'
   | 'data_update'
+  | 'data_flow'
   | 'data_remove'
   | 'data_recover'
   | 'form_update';
