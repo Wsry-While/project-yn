@@ -13,9 +13,11 @@ import {
 } from '@/lib/domain/bidding-normalize';
 
 const SOURCE = 'bidding-screenshot';
+const BIDDING_FORM_ID = '254045';
 const UPSERT_OPS = new Set(['data_create', 'data_edit', 'data_update', 'upsert']);
 const REMOVE_OPS = new Set(['data_remove', 'remove', 'delete']);
 const RECOVER_OPS = new Set(['data_recover', 'recover']);
+const FORM_UPDATE_OPS = new Set(['form_update']);
 
 type PushItem = Record<string, unknown>;
 type ParseResult =
@@ -249,6 +251,44 @@ export async function POST(request: NextRequest) {
     }> = [];
 
     const topLevelOp = typeof topLevelMeta.op === 'string' ? String(topLevelMeta.op) : undefined;
+    const topLevelFormId =
+      typeof topLevelMeta.formId === 'string' || typeof topLevelMeta.formId === 'number'
+        ? String(topLevelMeta.formId)
+        : undefined;
+    const topLevelFormName =
+      typeof topLevelMeta.formName === 'string' ? topLevelMeta.formName : undefined;
+
+    // formId 白名单：只处理 254045（招投标截图），其他表单 ack skipped，和 chaoxing 推送行为一致
+    if (topLevelFormId && topLevelFormId !== BIDDING_FORM_ID) {
+      await writeSyncLog({
+        db,
+        externalId: '0',
+        op: topLevelOp ?? 'unknown',
+        operator: null,
+        ip,
+        durationMs: Date.now() - startedAt,
+        status: 'skipped',
+        message: `formId 不匹配（期望 ${BIDDING_FORM_ID}，实际 ${topLevelFormId}）`,
+        payload: { ...topLevelMeta, ip, receivedAt: new Date().toISOString() },
+      });
+      return ok({ received: 0, skipped: true, reason: 'form_id_mismatch' });
+    }
+
+    // form_update：仅记录元数据，不写业务数据
+    if (topLevelOp && FORM_UPDATE_OPS.has(topLevelOp)) {
+      await writeSyncLog({
+        db,
+        externalId: '0',
+        op: topLevelOp,
+        operator: null,
+        ip,
+        durationMs: Date.now() - startedAt,
+        status: 'success',
+        message: topLevelFormName ? `表单更新：${topLevelFormName}` : '表单更新',
+        payload: { ...topLevelMeta, ip, receivedAt: new Date().toISOString() },
+      });
+      return ok({ received: 0, results: [{ externalId: '0', result: 'ack' }] });
+    }
 
     for (const item of items) {
       const record = isPlainObject(item) ? item : {};
