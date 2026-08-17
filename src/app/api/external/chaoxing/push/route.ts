@@ -22,28 +22,12 @@ import type { TripApprovalStatus } from '@/lib/domain/types';
  *   op/formId/formAlias/indexID/formUserId/uid/originUid/auditStatus/
  *   inserttime/updatetime/uuid/deptId/data(JSON 字符串)
  *
- * 鉴权（二选一）：
- *   - Authorization: Bearer <EXTERNAL_CHAOXING_TOKEN>
- *   - ?token=<EXTERNAL_CHAOXING_TOKEN>
- *
  * 幂等：按 (external_source='chaoxing', external_id=indexID) upsert。
  * 审计：每次请求写 external_sync_logs。
  */
 
 const SOURCE = 'chaoxing';
 const CONFIG_KEY = 'chaoxing_form_trip';
-
-function getPushToken(): string {
-  return process.env.EXTERNAL_CHAOXING_TOKEN || 'dev-chaoxing-token-change-me';
-}
-
-function isAuthorized(request: NextRequest): boolean {
-  const auth = request.headers.get('authorization') || '';
-  const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
-  const query = request.nextUrl.searchParams.get('token') || '';
-  const expected = getPushToken();
-  return !!expected && (bearer === expected || query === expected);
-}
 
 function approvalStatusFromCode(code: number | null): TripApprovalStatus {
   if (code === 1) return 'approved';
@@ -101,9 +85,6 @@ async function loadFormConfig(db: ReturnType<typeof getAdminSupabase>): Promise<
 export async function POST(request: NextRequest) {
   return withApi(async () => {
     const startedAt = Date.now();
-    if (!isAuthorized(request)) {
-      return fail('unauthorized', '推送 token 无效', 401);
-    }
 
     const form = await request.formData().catch(() => null);
     if (!form) return fail('invalid_param', '请求体必须是 form-data / urlencoded', 400);

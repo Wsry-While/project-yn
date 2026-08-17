@@ -145,7 +145,7 @@
 - 第三方推送 `POST /api/external/push` 通过 `x-push-token` 或 `?token=` 鉴权，token 读取 `EXTERNAL_PUSH_TOKEN`，开发兜底值 `dev-push-token-change-me`。
 - 超星推送 `POST /api/external/chaoxing/push`：
   - 仅接受 form-data / urlencoded，`data` 为 JSON 字符串数组，formId 当前配置为 `253633`。
-  - 鉴权使用 `Authorization: Bearer <EXTERNAL_CHAOXING_TOKEN>` 或 `?token=<EXTERNAL_CHAOXING_TOKEN>`，开发兜底值 `dev-chaoxing-token-change-me`，生产必须替换为强随机 token。
+  - 按无鉴权接入设计，不校验 `Authorization` / token，仅通过公网 HTTPS 与 formId 白名单控制入口范围。
   - `op=data_create/data_update` 时映射并 upsert 项目外出；学校按名称自动查找/创建；`auditStatus=2` 入库但标记为 rejected。
   - `op=data_remove/data_recover` 对 `trip_requests.deleted_at` 做软删除/恢复；`op=form_update` 只记录审计日志并 ack。
   - 字段映射保存在 `system_configs(key='chaoxing_form_trip').value.fieldMapping`；当前按中文 label 兜底，联调拿到真实 alias 后更新为 alias 优先。
