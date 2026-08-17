@@ -203,19 +203,38 @@ export interface FlatField {
   value: ExtractedValue;
 }
 
+function isEmptyValue(v: ExtractedValue): boolean {
+  if (v === null || v === undefined) return true;
+  if (typeof v === 'string') return v.trim() === '';
+  if (typeof v === 'number') return false;
+  if (Array.isArray(v)) return v.length === 0 || v.every((x) => x === null || x === undefined || String(x).trim() === '');
+  return false;
+}
+
 export function flattenFields(fields: ChaoxingField[]): {
   byAlias: Map<string, FlatField>;
   byLabel: Map<string, FlatField>;
+  byLabelAll: Map<string, FlatField[]>;
 } {
   const byAlias = new Map<string, FlatField>();
   const byLabel = new Map<string, FlatField>();
+  const byLabelAll = new Map<string, FlatField[]>();
   for (const field of fields) {
     const label = getFieldLabel(field);
     const flat: FlatField = { field, label, value: extractFieldValue(field) };
     if (field.alias) byAlias.set(String(field.alias), flat);
-    if (label) byLabel.set(label, flat);
+    if (label) {
+      // 同 label 下优先保留有值的字段；若已有值，新字段为空则不覆盖
+      const existing = byLabel.get(label);
+      if (!existing || (isEmptyValue(existing.value) && !isEmptyValue(flat.value))) {
+        byLabel.set(label, flat);
+      }
+      const arr = byLabelAll.get(label) ?? [];
+      arr.push(flat);
+      byLabelAll.set(label, arr);
+    }
   }
-  return { byAlias, byLabel };
+  return { byAlias, byLabel, byLabelAll };
 }
 
 export function toIsoFromEpoch(epoch: string | null | undefined): string | null {

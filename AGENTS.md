@@ -148,7 +148,7 @@
   - 按无鉴权接入设计，不校验 `Authorization` / token，仅通过公网 HTTPS 与 formId 白名单控制入口范围。
   - `op=data_create/data_update` 时映射并 upsert 项目外出；学校按名称自动查找/创建；`auditStatus=2` 入库但标记为 rejected。
   - `op=data_remove/data_recover` 对 `trip_requests.deleted_at` 做软删除/恢复；`op=form_update` 只记录审计日志并 ack。
-  - 字段映射保存在 `system_configs(key='chaoxing_form_trip').value.fieldMapping`；当前按中文 label 兜底，联调拿到真实 alias 后更新为 alias 优先。
+  - 字段映射保存在 `system_configs(key='chaoxing_form_trip').value.fieldMapping`；当前按中文 label 兜底，联调拿到真实 alias 后更新为 alias 优先。同一 label 出现多个字段时，解析器自动跳过空值字段，保留有值字段。
 
 ## 开发规范
 
