@@ -220,6 +220,52 @@ export interface TripOptionDict {
   updatedAt: string;
 }
 
+export interface BiddingFileRef {
+  name: string | null;
+  url: string;
+  size?: number | null;
+  type?: string | null;
+}
+
+export interface BiddingScreenshot {
+  id: string;
+  externalSource: string;
+  externalId: string | null;
+  externalSerial: string | null;
+  externalOp: string | null;
+  externalOperator: string | null;
+  rawPayload: Record<string, unknown> | null;
+  rawMeta: Record<string, unknown> | null;
+  syncedAt: string;
+  deletedAt: string | null;
+
+  salesManager: string;
+  projectName: string;
+  projectSchool: string;
+  projectSecondaryUnit: string | null;
+  isCompanyParameter: boolean;
+  submissionDate: string;
+  dueDeliveryDate: string | null;
+  reservedDays: number | null;
+  projectBiddingFile: BiddingFileRef | null;
+  projectCategory: string | null;
+  screenshotRequirement: string | null;
+  assignedProjectManager: string | null;
+  completionStatus: string | null;
+  deliveryDocument: BiddingFileRef | null;
+  deliveryRemark: string | null;
+  isMeetScreenshotRequirement: boolean | null;
+  salesFeedback: string | null;
+  attachments: BiddingFileRef[];
+  rectificationFeedback: string | null;
+  rectifiedDocument: BiddingFileRef | null;
+
+  schoolId: string | null;
+  projectId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ActivityLog {
   id: number;
   projectId: string | null;

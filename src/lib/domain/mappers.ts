@@ -12,6 +12,8 @@ import type {
   Milestone,
   TripRequest,
   TripOptionDict,
+  BiddingScreenshot,
+  BiddingFileRef,
 } from '@/lib/domain/types';
 
 interface SchoolRow {
@@ -182,6 +184,50 @@ interface TripOptionDictRow {
   color: string | null;
   sort_order: number;
   is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+interface BiddingFileRefRow {
+  name?: string | null;
+  url?: string | null;
+  size?: number | null;
+  type?: string | null;
+}
+
+interface BiddingScreenshotRow {
+  id: string;
+  external_source: string;
+  external_id: string | null;
+  external_serial: string | null;
+  external_op: string | null;
+  external_operator: string | null;
+  raw_payload: Record<string, unknown> | null;
+  raw_meta: Record<string, unknown> | null;
+  synced_at: string;
+  deleted_at: string | null;
+  sales_manager: string;
+  project_name: string;
+  project_school: string;
+  project_secondary_unit: string | null;
+  is_company_parameter: boolean;
+  submission_date: string;
+  due_delivery_date: string | null;
+  reserved_days: number | null;
+  project_bidding_file: BiddingFileRefRow | BiddingFileRefRow[] | null;
+  project_category: string | null;
+  screenshot_requirement: string | null;
+  assigned_project_manager: string | null;
+  completion_status: string | null;
+  delivery_document: BiddingFileRefRow | BiddingFileRefRow[] | null;
+  delivery_remark: string | null;
+  is_meet_screenshot_requirement: boolean | null;
+  sales_feedback: string | null;
+  attachments: BiddingFileRefRow[] | null;
+  rectification_feedback: string | null;
+  rectified_document: BiddingFileRefRow | BiddingFileRefRow[] | null;
+  school_id: string | null;
+  project_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -407,6 +453,68 @@ export function mapTripOptionDict(row: TripOptionDictRow): TripOptionDict {
   };
 }
 
+function toFileRef(row: BiddingFileRefRow | BiddingFileRefRow[] | null | undefined): BiddingFileRef | null {
+  const item = Array.isArray(row) ? row[0] : row;
+  if (!item || typeof item.url !== 'string' || !item.url) return null;
+  return {
+    name: typeof item.name === 'string' ? item.name : null,
+    url: item.url,
+    size: typeof item.size === 'number' ? item.size : null,
+    type: typeof item.type === 'string' ? item.type : null,
+  };
+}
+
+function toFileRefs(row: BiddingFileRefRow[] | BiddingFileRefRow | null | undefined): BiddingFileRef[] {
+  const items = Array.isArray(row) ? row : row ? [row] : [];
+  return items
+    .filter((x): x is BiddingFileRefRow => !!x && typeof x.url === 'string' && !!x.url)
+    .map((x) => ({
+      name: typeof x.name === 'string' ? x.name : null,
+      url: x.url as string,
+      size: typeof x.size === 'number' ? x.size : null,
+      type: typeof x.type === 'string' ? x.type : null,
+    }));
+}
+
+export function mapBiddingScreenshot(row: BiddingScreenshotRow): BiddingScreenshot {
+  return {
+    id: row.id,
+    externalSource: row.external_source,
+    externalId: row.external_id,
+    externalSerial: row.external_serial,
+    externalOp: row.external_op,
+    externalOperator: row.external_operator,
+    rawPayload: row.raw_payload,
+    rawMeta: row.raw_meta,
+    syncedAt: row.synced_at,
+    deletedAt: row.deleted_at,
+    salesManager: row.sales_manager,
+    projectName: row.project_name,
+    projectSchool: row.project_school,
+    projectSecondaryUnit: row.project_secondary_unit,
+    isCompanyParameter: row.is_company_parameter,
+    submissionDate: row.submission_date,
+    dueDeliveryDate: row.due_delivery_date,
+    reservedDays: row.reserved_days,
+    projectBiddingFile: toFileRef(row.project_bidding_file),
+    projectCategory: row.project_category,
+    screenshotRequirement: row.screenshot_requirement,
+    assignedProjectManager: row.assigned_project_manager,
+    completionStatus: row.completion_status,
+    deliveryDocument: toFileRef(row.delivery_document),
+    deliveryRemark: row.delivery_remark,
+    isMeetScreenshotRequirement: row.is_meet_screenshot_requirement,
+    salesFeedback: row.sales_feedback,
+    attachments: toFileRefs(row.attachments),
+    rectificationFeedback: row.rectification_feedback,
+    rectifiedDocument: toFileRef(row.rectified_document),
+    schoolId: row.school_id,
+    projectId: row.project_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 export type {
   SchoolRow,
   DepartmentRow,
@@ -417,4 +525,6 @@ export type {
   ActivityRow,
   TripRow,
   TripOptionDictRow,
+  BiddingScreenshotRow,
+  BiddingFileRefRow,
 };

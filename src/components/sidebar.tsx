@@ -13,6 +13,7 @@ import {
   X,
   Building2,
   Plane,
+  FileImage,
 } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
@@ -57,6 +58,13 @@ const NAV: NavItem[] = [
     icon: Plane,
     shortcut: '⌘6',
     match: (p) => p.startsWith('/trips'),
+  },
+  {
+    href: '/bidding-screenshots',
+    label: '招投标截图',
+    icon: FileImage,
+    shortcut: '⌘7',
+    match: (p) => p.startsWith('/bidding-screenshots'),
   },
   {
     href: '/team',

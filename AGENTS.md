@@ -15,9 +15,10 @@
 本项目在超星 OAuth 登录模板之上扩展为「项目中心」——一个 Linear 风格的内部团队项目管理平台，并已落地学校业务模型：
 
 - 已登录用户进入 `/dashboard`，未登录用户在首页看到超星登录入口。
-- 核心业务视图：仪表盘 `/dashboard`、任务看板 `/kanban`、学校档案 `/schools`、项目外出 `/trips`、团队 `/team`、项目设置 `/settings`。
+- 核心业务视图：仪表盘 `/dashboard`、任务看板 `/kanban`、学校档案 `/schools`、项目外出 `/trips`、招投标截图 `/bidding-screenshots`、团队 `/team`、项目设置 `/settings`。
 - 学校和部门作为客户档案；招投标、启明星建设、项目建设、日常运营等作为项目；项目内通过里程碑管理阶段。
 - 项目外出是独立业务工单，完全由超星表单推送驱动，系统内只查看/筛选/详情，不提供内部新建或编辑入口。
+- 招投标截图是第三方推送驱动的只读交付跟踪数据，按销售经理、项目名称、学校、提交日期等字段建模，系统内不提供新增或编辑入口。
 - 任务支持 HTML5 原生拖拽跨列更新，带 `version` 乐观锁，冲突返回 409 后前端回滚并 Toast 提示。
 - 内置大模型助手（普通对话、生成建设方案、生成启明星课程导入数据），SSE 增量渲染，仅面板局部 loading，不阻塞页面。
 - 第三方系统可通过 `POST /api/external/push` 推送任务，按 `external_id + source` 幂等。
@@ -32,6 +33,7 @@
 - `tasks`：任务，支持 `task_type`、产品、里程碑、学校、来源类型、来源 ID、外部幂等字段。
 - `trip_requests`：超星驱动的项目外出工单，按 `external_source='chaoxing' + external_id=indexID` 幂等。字段按真实表单反向建模：编号/年度/学校/行业/支持类型/产品/富文本事宜/日期时间/周几/销售与项目经理联系人/完成与反馈评分；richtext 拆 `*_html` + `*_text` 并在入库前 sanitize，contact 拆 `*_name/*_puid/*_enc`，布尔字段使用 boolean，删除/恢复使用 `deleted_at` 软删除。
 - `trip_option_dict`：项目外出选项自学习字典，按 `(field_key, source_value)` 唯一；超星推送出现的新支持类型、行业、产品会自动登记并启用，前端筛选用此表。
+- `bidding_screenshots`：招投标截图第三方推送数据，按 `(external_source, external_id)` 唯一；记录销售经理、项目名称、学校/二级单位、是否公司参数、提交日期、需交付日期、预留天数、项目招标文件、类别、截图需求、项目经理、完成情况、交付文档/备注、需求达成、销售反馈、附件、整改反馈与整改文档；删除/恢复使用 `deleted_at` 软删除。
 - `external_sync_logs`：记录第三方接口同步日志，包含 `direction/op/form_id/index_id/operator/ip/duration_ms/status/error/payload`，用于审计和联调排障。
 
 ## 目录结构
@@ -47,6 +49,7 @@
 │   │   │   ├── kanban/     # 任务看板
 │   │   │   ├── schools/    # 学校档案
 │   │   │   ├── trips/      # 项目外出
+│   │   │   ├── bidding-screenshots/ # 招投标截图
 │   │   │   ├── team/       # 团队管理
 │   │   │   └── settings/   # 项目设置 + 里程碑
 │   │   ├── api/            # Route Handlers
@@ -60,6 +63,7 @@
 │   │   │   ├── stats/      # 仪表盘统计
 │   │   │   ├── external/push/  # 第三方任务推送
 │   │   │   ├── external/chaoxing/push/ # 超星项目外出表单推送
+│   │   │   ├── external/bidding-screenshots/push/ # 招投标截图第三方推送
 │   │   │   ├── llm/chat/   # 大模型 SSE 对话
 │   │   │   └── agent/      # 建设方案 / 启明星课程 SSE/JSON
 │   │   ├── page.tsx        # 首页（未登录显示登录，已登录跳转 /dashboard）
@@ -73,6 +77,7 @@
 │   │   ├── milestone-section.tsx
 │   │   ├── schools-view.tsx
 │   │   ├── trips-view.tsx
+│   │   ├── bidding-screenshots-view.tsx
 │   │   ├── ai-assistant.tsx
 │   │   ├── dashboard-view.tsx / kanban-view.tsx / team-view.tsx / settings-view.tsx
 │   │   ├── modal.tsx / confirm-dialog.tsx / toast-viewport.tsx / timeline.tsx
@@ -90,6 +95,8 @@
 │   │   │   ├── task-service.ts   # 乐观锁、ConflictError
 │   │   │   ├── trip-service.ts   # 外出只读查询、超星 upsert、软删除/恢复
 │   │   │   ├── trip-option-service.ts # 外出选项字典自学习
+│   │   │   ├── bidding-screenshot-service.ts # 招投标截图第三方 upsert/软删除
+│   │   │   ├── bidding-normalize.ts # 招投标截图字段标准化
 │   │   │   ├── sanitize.ts       # richtext 入库前清洗
 │   │   │   ├── chaoxing/         # 超星 form-data 解析、字段映射
 │   │   │   ├── team-service.ts
@@ -126,13 +133,13 @@
 
 ## 数据库
 
-核心表：`schools`、`school_departments`、`projects`、`project_members`、`project_milestones`、`tasks`、`trip_requests`、`trip_option_dict`、`activity_log`、`system_configs`、`external_sync_logs`。
+核心表：`schools`、`school_departments`、`projects`、`project_members`、`project_milestones`、`tasks`、`trip_requests`、`trip_option_dict`、`bidding_screenshots`、`activity_log`、`system_configs`、`external_sync_logs`。
 
 - 所有表启用 RLS；服务端业务接口使用 admin 客户端 + 显式登录校验。
 - `tasks.version` 用于乐观锁，PATCH 必须带 `version`，冲突抛 409。
 - 学校导入脚本：`scripts/import-schools.py`，从 `assets/学校信息汇总表.xlsx` 读取并 upsert 学校/部门。
 - 项目创建时按 `project_type` 初始化默认里程碑：招投标、启明星建设、项目建设、日常运营均有阶段模板。
-- 常用查询字段已建索引：`tasks(project_id,status)`、`tasks(assignee_id)`、`tasks(milestone_id)`、`tasks(external_id, external_source)`、`school_departments(school_id)`、`trip_requests(trip_date)`、`trip_requests(support_type)`、`trip_requests(school_name)`、`trip_requests(external_source, external_id)` 部分唯一索引、`trip_requests(deleted_at)`、`trip_option_dict(field_key, source_value)` 唯一索引。
+- 常用查询字段已建索引：`tasks(project_id,status)`、`tasks(assignee_id)`、`tasks(milestone_id)`、`tasks(external_id, external_source)`、`school_departments(school_id)`、`trip_requests(trip_date)`、`trip_requests(support_type)`、`trip_requests(school_name)`、`trip_requests(external_source, external_id)` 部分唯一索引、`trip_requests(deleted_at)`、`trip_option_dict(field_key, source_value)` 唯一索引、`bidding_screenshots(project_school)`、`bidding_screenshots(sales_manager)`、`bidding_screenshots(due_delivery_date)`、`bidding_screenshots(deleted_at)`。
 - 触发器自动维护 `updated_at`。
 
 ## API 约定
@@ -146,8 +153,15 @@
   - `GET /api/trips`：项目外出只读列表，支持 search/supportType/year/limit/offset，返回 `{rows,total}`。
   - `GET /api/trips/:id`：单条项目外出详情。
   - `GET /api/trips/options?fieldKey=support_type`：外出选项字典，用于筛选；未知选项由超星推送自动学习。
+  - `GET /api/bidding-screenshots`：招投标截图只读列表，支持 search/completionStatus/salesManager/overdue/limit/offset，返回 `{rows,total}`。
+  - `GET /api/bidding-screenshots/:id`：单条招投标截图详情。
   - `GET/PATCH/DELETE /api/milestones/:id`：里程碑更新/删除。
 - 第三方推送 `POST /api/external/push` 通过 `x-push-token` 或 `?token=` 鉴权，token 读取 `EXTERNAL_PUSH_TOKEN`，开发兜底值 `dev-push-token-change-me`。
+- 第三方招投标截图推送 `POST /api/external/bidding-screenshots/push`：
+  - 接受 JSON 对象或数组，顶层可传 `externalId/externalSerial/op/operator/records`，也可直接把业务字段放在顶层。
+  - 通过 `x-push-token` 或 `?token=` 鉴权，token 读取 `EXTERNAL_PUSH_TOKEN`，开发兜底值 `dev-push-token-change-me`。
+  - `op=data_create/data_edit/data_update/upsert` 按字段映射 upsert；`op=data_remove/remove/delete` 软删除；`op=data_recover/recover` 恢复。
+  - 必填字段：销售经理、项目名称、项目所属学校、提交日期。文件字段统一为 `{name,url}` 或该对象数组。
 - 超星推送 `POST /api/external/chaoxing/push`：
   - 仅接受 form-data / urlencoded，`data` 为 JSON 字符串数组，固定处理 formId=`253633`。
   - 按无鉴权接入设计，不校验 `Authorization` / token，仅通过公网 HTTPS 与 formId 白名单控制入口范围。
@@ -181,7 +195,7 @@
 - 所有网络请求走 `apiFetch`，错误由 `ApiError` 抛出，组件层 `try/catch` 后通过 `showToast` 反馈。
 - 大模型请求必须使用 `apiFetchSSE` 增量渲染，配合 `LlmLoadingMask` 做局部 loading，**禁止全屏遮罩**。
 - 用户关键操作通过 `logActivity()` 写入本地队列并批量上报到 `/api/activity`。
-- 全局快捷键：⌘/Ctrl+1~6 切换视图，⌘N 新建任务，Esc 关闭弹窗，逻辑集中在 `src/lib/web/hotkeys.ts`。
+- 全局快捷键：⌘/Ctrl+1~7 切换视图，⌘N 新建任务，Esc 关闭弹窗，逻辑集中在 `src/lib/web/hotkeys.ts`。
 
 ## UI 设计与组件规范
 
@@ -193,4 +207,4 @@
 ## 验证
 
 - 修改代码后通过 `test_run` 同时跑静态检查和接口冒烟测试。
-- 业务接口必须至少一条 curl 冒烟；未登录场景下 `/api/auth/me`、`/api/schools`、`/api/trips` 等返回 401 属预期。
+- 业务接口必须至少一条 curl 冒烟；未登录场景下 `/api/auth/me`、`/api/schools`、`/api/trips`、`/api/bidding-screenshots` 等返回 401 属预期。
