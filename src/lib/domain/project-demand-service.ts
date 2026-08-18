@@ -30,7 +30,6 @@ export class ProjectDemandService {
         `sales_manager.ilike.${k}`,
         `project_manager.ilike.${k}`,
         `demand_type.ilike.${k}`,
-        `product.ilike.${k}`,
       ].join(',');
       q = q.or(orQuery);
     }

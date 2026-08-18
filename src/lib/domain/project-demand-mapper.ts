@@ -10,7 +10,7 @@ export type ProjectDemandRow = {
   project_year: string | null;
   sales_manager: string | null;
   demand_type: string | null;
-  product: string | null;
+  product: unknown;
   company: string | null;
   industry_category: string | null;
   demand_desc_html: string | null;
@@ -65,6 +65,25 @@ function mapStringArray(value: unknown): string[] {
   return value.filter((x): x is string => typeof x === 'string');
 }
 
+/** Postgres 里可能以数组 / JSON 字符串 / 逗号分隔字符串三种形式返回，统一收敛成 string[] */
+function mapStringArrayFlexible(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((x): x is string => typeof x === 'string');
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+    if (trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) return parsed.filter((x): x is string => typeof x === 'string');
+      } catch {
+        // fall through
+      }
+    }
+    return trimmed.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+  }
+  return [];
+}
+
 export function mapProjectDemand(row: ProjectDemandRow): ProjectDemand {
   return {
     id: row.id,
@@ -76,7 +95,7 @@ export function mapProjectDemand(row: ProjectDemandRow): ProjectDemand {
     projectYear: row.project_year,
     salesManager: row.sales_manager,
     demandType: row.demand_type,
-    product: row.product,
+    product: mapStringArrayFlexible(row.product),
     company: row.company,
     industryCategory: row.industry_category,
     demandDescHtml: row.demand_desc_html,

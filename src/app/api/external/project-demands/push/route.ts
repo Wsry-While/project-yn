@@ -47,31 +47,39 @@ async function writeSyncLog(input: {
   });
 }
 
-function pickField(data: Array<{ alias: string | number; compt: string; values?: unknown }>, alias: string) {
-  return data.find((f) => String(f.alias) === alias);
-}
-
 function asString(v: unknown): string | null {
   if (v === null || v === undefined) return null;
   if (typeof v === 'string') return v.trim() || null;
   if (typeof v === 'number' || typeof v === 'boolean') return String(v);
   if (Array.isArray(v)) {
-    const first = v.find((x) => x !== null && x !== undefined && x !== '');
-    return first === undefined ? null : asString(first);
+    for (const item of v) {
+      const s = asString(item);
+      if (s) return s;
+    }
+    return null;
   }
   if (typeof v === 'object') {
     const obj = v as Record<string, unknown>;
-    if (typeof obj.value === 'string') return obj.value;
-    if (typeof obj.name === 'string') return obj.name;
-    if (typeof obj.uname === 'string') return obj.uname;
-    if (typeof obj.text === 'string') return obj.text;
+    // 超星 selectbox/dateinput 等：优先 val/realDateVal，然后 name/uname/text
+    return asString(obj.val ?? obj.realDateVal ?? obj.name ?? obj.uname ?? obj.text ?? obj.value);
   }
   return null;
 }
 
 function asStrings(v: unknown): string[] {
   if (Array.isArray(v)) {
-    return v.map(asString).filter((x): x is string => !!x);
+    const out: string[] = [];
+    for (const item of v) {
+      if (item && typeof item === 'object') {
+        const obj = item as Record<string, unknown>;
+        const s = asString(obj.val ?? obj.name ?? obj.text);
+        if (s) out.push(s);
+      } else {
+        const s = asString(item);
+        if (s) out.push(s);
+      }
+    }
+    return out;
   }
   const s = asString(v);
   return s ? [s] : [];
@@ -83,7 +91,7 @@ function asContactName(v: unknown): string | null {
   }
   if (v && typeof v === 'object') {
     const obj = v as Record<string, unknown>;
-    return asString(obj.uname ?? obj.name ?? obj.value);
+    return asString(obj.uname ?? obj.name ?? obj.val ?? obj.value);
   }
   return asString(v);
 }
@@ -98,16 +106,19 @@ function asDate(v: unknown): string | null {
     return null;
   }
   if (typeof v === 'number') {
-    // 超星日期可能是毫秒时间戳
     const ms = v < 1e12 ? v * 1000 : v;
     const d = new Date(ms);
     if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
     return null;
   }
+  if (typeof v === 'object') {
+    const obj = v as Record<string, unknown>;
+    // 优先 realDateVal（毫秒），其次 val（"2026-08-09" 或完整时间）
+    return asDate(obj.realDateVal ?? obj.val ?? obj.value);
+  }
   if (typeof v === 'string') {
     const s = v.trim();
     if (!s) return null;
-    // YYYY-MM-DD 或 YYYY/MM/DD 或带时间
     const m = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/.exec(s);
     if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
     const n = Number(s);
@@ -119,7 +130,6 @@ function asDate(v: unknown): string | null {
 }
 
 function asYear(v: unknown): string | null {
-  // 年度可能是 "2025"、"2025年"、数字
   const s = asString(v);
   if (!s) return null;
   const m = /(\d{4})/.exec(s);
@@ -140,8 +150,15 @@ function asRichText(v: unknown): { html: string | null; text: string | null } {
   if (Array.isArray(v)) return asRichText(v[0]);
   if (typeof v === 'object') {
     const obj = v as Record<string, unknown>;
-    const html = asString(obj.html ?? obj.content ?? obj.value);
-    const text = asString(obj.text ?? obj.plainText);
+    // 超星 richtext: val = 原始 html；content = 纯文本（可能含换行）
+    const html = asString(obj.val ?? obj.html);
+    const contentText = asString(obj.content);
+    const text =
+      contentText && contentText !== html
+        ? contentText
+        : html
+          ? html.replace(/<[^>]+>/g, '').trim() || null
+          : asString(obj.text ?? obj.plainText);
     return { html, text };
   }
   return { html: null, text: null };
@@ -289,31 +306,37 @@ export async function POST(request: NextRequest) {
 
     // upsert 流程
     try {
-      const data = payload.data;
-      const f = (alias: string) => pickField(data, alias);
-      const v = (alias: string) => f(alias)?.values;
+      // 超星真实字段 alias 不连续（1,3,4,7,8,10,11,12,13,14,15,16,17,18,20,21,22,23），
+      // 不能按序号兜底，统一按 fields[].label（中文名）匹配，英文 alias 作为 fallback。
+      const byLabel = (label: string) =>
+        payload.data.find((f) => {
+          const labels = f.fields?.map((x) => x.label).filter(Boolean) as string[] | undefined;
+          return labels?.includes(label);
+        });
+      const v = (label: string, alias?: string) =>
+        byLabel(label)?.values ?? (alias ? payload.data.find((f) => String(f.alias) === alias)?.values : undefined);
 
-      // 字段映射（alias 按实际表单回填，当前先按英文/数字双兜底）
-      const projectYear = asYear(v('projectYear') ?? v('1'));
-      const salesManager = asContactName(v('salesManager') ?? v('2'));
-      const demandType = asString(v('demandType') ?? v('3'));
-      const product = asString(v('product') ?? v('4'));
-      const company = asString(v('company') ?? v('5'));
-      const industryCategory = asString(v('industryCategory') ?? v('6'));
-      const demandDesc = asRichText(v('demandDesc') ?? v('7'));
-      const providedMaterials = asFiles(v('providedMaterials') ?? v('8'));
-      const requiredFinishDate = asDate(v('requiredFinishTime') ?? v('9'));
-      const projectManager = asContactName(v('projectManager') ?? v('10'));
-      const completionStatus = asString(v('completionStatus') ?? v('11'));
-      const estimatedFinishDate = asDate(v('estimatedFinishTime') ?? v('12'));
-      const deliveryContent = asString(v('deliveryContent') ?? v('13'));
-      const otherDeliveryContent = asString(v('otherDeliveryContent') ?? v('14'));
-      const deliveryDocType = asStrings(v('deliveryDocType') ?? v('15'));
-      const deliveryDocs = asFiles(v('deliveryDocUpload') ?? v('16'));
-      const deliveryRemark = asString(v('deliveryRemark') ?? v('17'));
+      const projectYear = asYear(v('项目所属年度'));
+      const salesManager = asContactName(v('负责销售经理'));
+      const demandType = asString(v('需求类型'));
+      const product = asStrings(v('所属产品'));
+      const company = asString(v('所属单位'));
+      const industryCategory = asString(v('所属行业类别'));
+      const demandDesc = asRichText(v('具体事宜及需求说明'));
+      const providedMaterials = asFiles(v('所提供的材料'));
+      const requiredFinishDate = asDate(v('要求完成时间'));
+      const projectManager = asContactName(v('项目负责人'));
+      const completionStatus = asString(v('完成情况'));
+      const estimatedFinishDate = asDate(v('预计完成时间'));
+      const deliveryContent = asString(v('交付内容'));
+      const otherDeliveryContent = asString(v('交付内容（其他）'));
+      const deliveryDocType = asStrings(v('交付文档类型'));
+      const deliveryDocs = asFiles(v('交付文档上传'));
+      const deliveryRemarkRich = asRichText(v('交付信息备注'));
+      const deliveryRemark = deliveryRemarkRich.text ?? deliveryRemarkRich.html;
 
       if (!salesManager || !company) {
-        throw new Error('缺少必填字段：负责销售经理（salesManager）或所属单位（company）');
+        throw new Error('缺少必填字段：负责销售经理 / 所属单位');
       }
 
       const service = new ProjectDemandService(db);

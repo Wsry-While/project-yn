@@ -295,7 +295,7 @@ export interface ProjectDemand {
   projectYear: string | null;
   salesManager: string | null;
   demandType: string | null;
-  product: string | null;
+  product: string[];
   company: string | null;
   industryCategory: string | null;
   demandDescHtml: string | null;
@@ -328,7 +328,7 @@ export interface ProjectDemandInput {
   projectYear: string | null;
   salesManager: string;
   demandType: string | null;
-  product: string | null;
+  product: string[];
   company: string;
   industryCategory: string | null;
   demandDescHtml: string | null;
