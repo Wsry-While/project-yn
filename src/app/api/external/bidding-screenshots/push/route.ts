@@ -98,17 +98,36 @@ async function parseRequestBody(request: NextRequest): Promise<ParseResult> {
   const form = await request.formData().catch(() => null);
   if (!form) return { error: '请求体必须是 form-data / urlencoded' };
   const topLevelMeta = flattenForm(form);
+
+  // 1) 超星风格：formData 是 JSON 字符串数组（与文件原文一致）
+  const formDataRaw = form.get('formData');
+  if (typeof formDataRaw === 'string' && formDataRaw.trim()) {
+    const parsedFormData = tryParseJson(formDataRaw);
+    if (parsedFormData !== null && typeof parsedFormData === 'object') {
+      const envelope = coerceChaoxingEnvelope({ ...topLevelMeta, formData: parsedFormData });
+      if (envelope) return envelope;
+    }
+  }
+
+  // 2) 通用：data 字段为 JSON 对象/数组
   const rawData = form.get('data');
   if (typeof rawData === 'string' && rawData.trim()) {
     const parsed = tryParseJson(rawData);
     if (!parsed || typeof parsed !== 'object') return { error: 'data 字段必须是 JSON 对象或数组' };
+    // data 可能是超星单条 {formData:[...]} 包装
+    if (isPlainObject(parsed)) {
+      const envelope = coerceChaoxingEnvelope({ ...topLevelMeta, ...parsed });
+      if (envelope) return envelope;
+    }
     return { items: expandRecords(parsed, topLevelMeta), topLevelMeta };
   }
+
+  // 3) form-data 直接摊平业务字段
   const record: PushItem = {};
   for (const [key, value] of form.entries()) {
     if (typeof value === 'string') record[key] = value;
   }
-  if (Object.keys(record).length === 0) return { error: 'form-data 缺少 data JSON 字符串或业务字段' };
+  if (Object.keys(record).length === 0) return { error: 'form-data 缺少 formData / data JSON 字符串或业务字段' };
   return { items: expandRecords(record, topLevelMeta), topLevelMeta };
 }
 
