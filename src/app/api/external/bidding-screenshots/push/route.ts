@@ -1,7 +1,8 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, after } from 'next/server';
 import { ok, fail, withApi } from '@/lib/domain/http';
 import { getAdminSupabase } from '@/lib/domain/api-utils';
 import { BiddingScreenshotService } from '@/lib/domain/bidding-screenshot-service';
+import { processBiddingAttachments } from '@/lib/domain/bidding-attachment-service';
 import { SchoolService } from '@/lib/domain/school-service';
 import {
   normalizeFile,
@@ -17,6 +18,9 @@ import { flattenChaoxingFormData } from '@/lib/domain/bidding-form-data';
 
 const SOURCE = 'bidding-screenshot';
 const BIDDING_FORM_ID = '254045';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 // data_flow = 第三方整表/分页同步下发，语义等同于 upsert，每条记录都带全量业务字段
 const UPSERT_OPS = new Set([
   'data_create',
@@ -445,6 +449,13 @@ export async function POST(request: NextRequest) {
         );
         results.push({ externalId, result: created ? 'created' : 'updated', localId: row.id });
         await writeSyncLog({ db, externalId, op: effectiveOp, operator, ip, durationMs: Date.now() - startedAt, status: 'success', entityId: row.id, message: `已${created ? '创建' : '更新'}招投标截图记录`, payload: auditPayload });
+        after(async () => {
+          try {
+            await processBiddingAttachments(row);
+          } catch (err) {
+            console.error(JSON.stringify({ service: 'bidding-push', level: 'error', message: 'async attachment transfer failed', externalId, error: (err as Error).message }));
+          }
+        });
       } catch (err) {
         const reason = err instanceof Error ? err.message : '数据写入失败';
         results.push({ externalId, result: 'failed', reason });

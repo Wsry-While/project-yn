@@ -43,18 +43,43 @@ export function normalizeFile(value: unknown): BiddingFileRef | null {
             : null,
       size:
         typeof obj.byteSize === 'string' && obj.byteSize.trim()
-          ? Number(obj.byteSize)
+          ? String(Number(obj.byteSize) || obj.byteSize)
           : typeof obj.size === 'number'
-            ? obj.size
+            ? String(obj.size)
+            : typeof obj.size === 'string'
+              ? obj.size
+              : null,
+      byteSize:
+        typeof obj.byteSize === 'number'
+          ? obj.byteSize
+          : typeof obj.byteSize === 'string' && obj.byteSize.trim()
+            ? Number(obj.byteSize) || null
+            : typeof obj.size === 'number'
+              ? obj.size
+              : null,
+      suffix:
+        typeof obj.suffix === 'string' && obj.suffix.trim()
+          ? obj.suffix.trim().replace(/^\./, '')
+          : null,
+      enc: typeof obj.enc === 'string' ? obj.enc : null,
+      puid:
+        typeof obj.puid === 'number'
+          ? obj.puid
+          : typeof obj.puid === 'string' && /^\d+$/.test(obj.puid)
+            ? Number(obj.puid)
+            : null,
+      modifyDate:
+        typeof obj.modifyDate === 'number'
+          ? obj.modifyDate
+          : typeof obj.modifyDate === 'string' && /^\d+$/.test(obj.modifyDate)
+            ? Number(obj.modifyDate)
             : null,
       type:
-        typeof obj.suffix === 'string'
-          ? obj.suffix
-          : typeof obj.type === 'string'
-            ? obj.type
-            : typeof obj.contentType === 'string'
-              ? obj.contentType
-              : null,
+        typeof obj.type === 'string'
+          ? obj.type
+          : typeof obj.contentType === 'string'
+            ? obj.contentType
+            : null,
     };
   }
   return null;

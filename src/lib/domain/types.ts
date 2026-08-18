@@ -220,13 +220,27 @@ export interface TripOptionDict {
   updatedAt: string;
 }
 
+export type BiddingFileStorageStatus = 'pending' | 'fetching' | 'stored' | 'failed';
+
 export interface BiddingFileRef {
   name: string | null;
   url: string | null;
   objectId?: string | null;
   resid?: string | null;
-  size?: number | null;
+  enc?: string | null;
+  puid?: number | null;
+  suffix?: string | null;
+  size?: string | null;
+  byteSize?: number | null;
+  modifyDate?: number | null;
   type?: string | null;
+  // 转存到我方对象存储后的状态
+  assetId?: string | null;
+  bucket?: string | null;
+  storageKey?: string | null;
+  storageStatus?: BiddingFileStorageStatus;
+  storedAt?: string | null;
+  storageError?: string | null;
 }
 
 export interface BiddingScreenshot {

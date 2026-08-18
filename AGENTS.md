@@ -172,7 +172,8 @@
   - 必填字段缺失、op 不支持、externalId 缺失等场景返回 `422 invalid_param` 并在 `details.results` 中给出每条失败原因；禁止静默 `skipped` 吞掉业务写入失败。
   - 每次推送都写 `external_sync_logs`（source=`bidding-screenshot`，status=`success/failed/skipped`），用于联调排障；单条原始 formData 存在 `bidding_screenshots.raw_payload`。
   - 必填字段：销售经理、项目名称、项目所属学校、提交日期。
-  - 文件字段统一为 `{name,url?,objectId?,resid?,size?,type?}` 或该对象数组；超星 fileupload 只有 `objectId/resid` 没有外链时，`url=null`，前端展示"待换取下载链接"。
+  - 文件字段统一为 `BiddingFileRef`（`{name,url?,objectId?,resid?,enc?,puid?,suffix?,size?,byteSize?,modifyDate?,type?,assetId?,bucket?,storageKey?,storageStatus?,storedAt?,storageError?}`）或该对象数组；超星 fileupload 只有 `objectId/resid` 没有外链时 `url=null`。
+  - 附件转存：upsert 成功后通过 Next.js `after()` 异步触发 `processBiddingAttachments`，按 `(source='chaoxing', object_id)` 幂等下载（UA=`ProjectCenter-ChaoXing-FileProxy/1.0`，Referer 必须为空，32 位 hex objectId 校验防 SSRF，100MB 上限、30s 超时），上传到 Supabase Storage bucket `bidding-attachments`（可由 `STORAGE_BUCKET` 覆盖以区分环境）。转存状态回写 `external_file_assets` 与业务记录附件 JSONB（`storageStatus: pending/fetching/stored/failed`）。已登录用户通过 `GET /api/files/attachments/:assetId` 换签名 URL 后 307 重定向下载。
   - `projectCategory`（multipleselect）存 `text[]`；`assignedProjectManager`（多 contact）把 `uname` 用「、」拼接；`isCompanyParameter/isMeetScreenshotRequirement`（radiobutton 是/否）存 boolean；日期字段按本地 `YYYY-MM-DD` 存储，不走 UTC 偏移。
 - 超星推送 `POST /api/external/chaoxing/push`：
   - 仅接受 form-data / urlencoded，`data` 为 JSON 字符串数组，固定处理 formId=`253633`。

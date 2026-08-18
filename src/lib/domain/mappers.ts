@@ -455,33 +455,48 @@ export function mapTripOptionDict(row: TripOptionDictRow): TripOptionDict {
   };
 }
 
+function pickFileRefFields(x: BiddingFileRefRow): BiddingFileRef {
+  return {
+    name: typeof x.name === 'string' ? x.name : null,
+    url: typeof x.url === 'string' ? x.url : null,
+    objectId: typeof x.objectId === 'string' ? x.objectId : null,
+    resid: typeof x.resid === 'string' ? x.resid : null,
+    enc: typeof (x as Record<string, unknown>).enc === 'string' ? ((x as Record<string, unknown>).enc as string) : null,
+    puid: typeof (x as Record<string, unknown>).puid === 'number' ? ((x as Record<string, unknown>).puid as number) : null,
+    suffix: typeof (x as Record<string, unknown>).suffix === 'string' ? ((x as Record<string, unknown>).suffix as string) : null,
+    size: typeof x.size === 'string' ? x.size : null,
+    byteSize:
+      typeof (x as Record<string, unknown>).byteSize === 'number'
+        ? ((x as Record<string, unknown>).byteSize as number)
+        : typeof (x as Record<string, unknown>).byteSize === 'string'
+          ? Number((x as Record<string, unknown>).byteSize) || null
+          : null,
+    modifyDate: typeof (x as Record<string, unknown>).modifyDate === 'number' ? ((x as Record<string, unknown>).modifyDate as number) : null,
+    type: typeof x.type === 'string' ? x.type : null,
+    assetId: typeof (x as Record<string, unknown>).assetId === 'string' ? ((x as Record<string, unknown>).assetId as string) : null,
+    bucket: typeof (x as Record<string, unknown>).bucket === 'string' ? ((x as Record<string, unknown>).bucket as string) : null,
+    storageKey: typeof (x as Record<string, unknown>).storageKey === 'string' ? ((x as Record<string, unknown>).storageKey as string) : null,
+    storageStatus: (['pending', 'fetching', 'stored', 'failed'].includes(String((x as Record<string, unknown>).storageStatus))
+      ? (x as Record<string, unknown>).storageStatus
+      : null) as BiddingFileRef['storageStatus'],
+    storedAt: typeof (x as Record<string, unknown>).storedAt === 'string' ? ((x as Record<string, unknown>).storedAt as string) : null,
+    storageError: typeof (x as Record<string, unknown>).storageError === 'string' ? ((x as Record<string, unknown>).storageError as string) : null,
+  };
+}
+
 function toFileRef(row: BiddingFileRefRow | BiddingFileRefRow[] | null | undefined): BiddingFileRef | null {
   const item = Array.isArray(row) ? row[0] : row;
   if (!item) return null;
   // url 可空：超星 fileupload 只给 objectId/resid，外链由后续换取
   if (!item.url && !item.objectId && !item.resid) return null;
-  return {
-    name: typeof item.name === 'string' ? item.name : null,
-    url: typeof item.url === 'string' ? item.url : null,
-    objectId: typeof item.objectId === 'string' ? item.objectId : null,
-    resid: typeof item.resid === 'string' ? item.resid : null,
-    size: typeof item.size === 'number' ? item.size : null,
-    type: typeof item.type === 'string' ? item.type : null,
-  };
+  return pickFileRefFields(item);
 }
 
 function toFileRefs(row: BiddingFileRefRow[] | BiddingFileRefRow | null | undefined): BiddingFileRef[] {
   const items = Array.isArray(row) ? row : row ? [row] : [];
   return items
     .filter((x): x is BiddingFileRefRow => !!x && (!!x.url || !!x.objectId || !!x.resid))
-    .map((x) => ({
-      name: typeof x.name === 'string' ? x.name : null,
-      url: typeof x.url === 'string' ? x.url : null,
-      objectId: typeof x.objectId === 'string' ? x.objectId : null,
-      resid: typeof x.resid === 'string' ? x.resid : null,
-      size: typeof x.size === 'number' ? x.size : null,
-      type: typeof x.type === 'string' ? x.type : null,
-    }));
+    .map(pickFileRefFields);
 }
 
 export function mapBiddingScreenshot(row: BiddingScreenshotRow): BiddingScreenshot {

@@ -37,28 +37,52 @@ function isOverdue(row: BiddingScreenshot): boolean {
   return row.dueDeliveryDate < today;
 }
 
+function storageStatusBadge(file: BiddingFileRef): { label: string; className: string } | null {
+  switch (file.storageStatus) {
+    case 'pending':
+      return { label: '待转存', className: 'bg-zinc-500/10 text-zinc-500' };
+    case 'fetching':
+      return { label: '转存中', className: 'bg-brand/10 text-brand' };
+    case 'failed':
+      return { label: '转存失败', className: 'bg-red-500/10 text-red-500' };
+    case 'stored':
+    default:
+      return null;
+  }
+}
+
 function FileLink({ file, label }: { file: BiddingFileRef | null; label: string }) {
   if (!file) return <span className="text-muted-foreground">—</span>;
-  if (!file.url) {
-    // 超星 fileupload 只给 objectId/resid，暂无可直链
+  const badge = storageStatusBadge(file);
+  const downloadHref = file.assetId ? `/api/files/attachments/${file.assetId}` : file.url;
+  const downloadable = !!downloadHref && file.storageStatus !== 'failed';
+  const inner = (
+    <>
+      <FileText className="h-3.5 w-3.5" />
+      <span className="truncate">{file.name || label}</span>
+      {badge ? (
+        <span className={`ml-1 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${badge.className}`}>
+          {badge.label}
+        </span>
+      ) : null}
+    </>
+  );
+  if (downloadable) {
     return (
-      <span className="inline-flex items-center gap-1 text-sm text-muted-foreground">
-        <FileText className="h-3.5 w-3.5" />
-        {file.name || label}
-        <span className="text-xs">（待换取下载链接）</span>
-      </span>
+      <a
+        href={downloadHref}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex max-w-full items-center gap-1 text-sm text-brand hover:underline"
+      >
+        {inner}
+      </a>
     );
   }
   return (
-    <a
-      href={file.url}
-      target="_blank"
-      rel="noreferrer"
-      className="inline-flex items-center gap-1 text-sm text-brand hover:underline"
-    >
-      <FileText className="h-3.5 w-3.5" />
-      {file.name || label}
-    </a>
+    <span className="inline-flex max-w-full items-center gap-1 text-sm text-muted-foreground" title={file.storageError ?? undefined}>
+      {inner}
+    </span>
   );
 }
 
@@ -66,29 +90,41 @@ function AttachmentList({ files }: { files: BiddingFileRef[] }) {
   if (!files.length) return <span className="text-muted-foreground">—</span>;
   return (
     <div className="flex flex-col gap-1">
-      {files.map((file, i) =>
-        file.url ? (
+      {files.map((file, i) => {
+        const badge = storageStatusBadge(file);
+        const href = file.assetId ? `/api/files/attachments/${file.assetId}` : file.url;
+        const downloadable = !!href && file.storageStatus !== 'failed';
+        const inner = (
+          <>
+            <Paperclip className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">{file.name || `附件 ${i + 1}`}</span>
+            {badge ? (
+              <span className={`ml-1 shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${badge.className}`}>
+                {badge.label}
+              </span>
+            ) : null}
+          </>
+        );
+        return downloadable ? (
           <a
-            key={`${file.objectId ?? file.url}-${i}`}
-            href={file.url}
+            key={`${file.objectId ?? file.assetId ?? file.url ?? i}`}
+            href={href}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex w-fit items-center gap-1 text-sm text-brand hover:underline"
+            className="inline-flex max-w-full items-center gap-1 text-sm text-brand hover:underline"
           >
-            <Paperclip className="h-3.5 w-3.5" />
-            {file.name || `附件 ${i + 1}`}
+            {inner}
           </a>
         ) : (
           <span
-            key={`${file.objectId ?? file.resid ?? i}`}
-            className="inline-flex w-fit items-center gap-1 text-sm text-muted-foreground"
+            key={`${file.objectId ?? file.assetId ?? i}`}
+            className="inline-flex max-w-full items-center gap-1 text-sm text-muted-foreground"
+            title={file.storageError ?? undefined}
           >
-            <Paperclip className="h-3.5 w-3.5" />
-            {file.name || `附件 ${i + 1}`}
-            <span className="text-xs">（待换取下载链接）</span>
+            {inner}
           </span>
-        ),
-      )}
+        );
+      })}
     </div>
   );
 }
