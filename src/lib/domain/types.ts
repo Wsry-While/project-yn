@@ -282,6 +282,71 @@ export interface BiddingScreenshot {
   updatedAt: string;
 }
 
+// ============== 项目建设申请（超星推送） ==============
+
+export interface ProjectDemand {
+  id: string;
+  externalSource: string;
+  externalId: string | null;
+  externalOp: string | null;
+  externalSerial: string | null;
+  externalOperator: string | null;
+
+  projectYear: string | null;
+  salesManager: string | null;
+  demandType: string | null;
+  product: string | null;
+  company: string | null;
+  industryCategory: string | null;
+  demandDescHtml: string | null;
+  demandDescText: string | null;
+  providedMaterials: BiddingFileRef[];
+  requiredFinishDate: string | null;
+  projectManager: string | null;
+  completionStatus: string | null;
+  estimatedFinishDate: string | null;
+  deliveryContent: string | null;
+  otherDeliveryContent: string | null;
+  deliveryDocType: string[];
+  deliveryDocs: BiddingFileRef[];
+  deliveryRemark: string | null;
+
+  rawPayload: Record<string, unknown> | null;
+  rawMeta: Record<string, unknown> | null;
+  syncedAt: string;
+  deletedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectDemandInput {
+  externalId: string;
+  externalSource: string;
+  externalOp?: string | null;
+  externalSerial?: string | null;
+  externalOperator?: string | null;
+  projectYear: string | null;
+  salesManager: string;
+  demandType: string | null;
+  product: string | null;
+  company: string;
+  industryCategory: string | null;
+  demandDescHtml: string | null;
+  demandDescText: string | null;
+  providedMaterials: BiddingFileRef[];
+  requiredFinishDate: string | null;
+  projectManager: string | null;
+  completionStatus: string | null;
+  estimatedFinishDate: string | null;
+  deliveryContent: string | null;
+  otherDeliveryContent: string | null;
+  deliveryDocType: string[];
+  deliveryDocs: BiddingFileRef[];
+  deliveryRemark: string | null;
+  rawPayload?: unknown;
+  rawMeta?: unknown;
+}
+
 export interface ActivityLog {
   id: number;
   projectId: string | null;

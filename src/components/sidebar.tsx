@@ -14,6 +14,7 @@ import {
   Building2,
   Plane,
   FileImage,
+  ClipboardList,
 } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
@@ -65,6 +66,13 @@ const NAV: NavItem[] = [
     icon: FileImage,
     shortcut: '⌘7',
     match: (p) => p.startsWith('/bidding-screenshots'),
+  },
+  {
+    href: '/project-demands',
+    label: '项目建设申请',
+    icon: ClipboardList,
+    shortcut: '⌘8',
+    match: (p) => p.startsWith('/project-demands'),
   },
   {
     href: '/team',
