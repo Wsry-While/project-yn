@@ -6,7 +6,7 @@ import { ProjectDemandService } from '@/lib/domain/project-demand-service';
 import { processDemandAttachments } from '@/lib/domain/project-demand-attachment-service';
 
 const SOURCE = 'chaoxing';
-const DEMAND_FORM_ID = (process.env.CHAOXING_DEMAND_FORM_ID || '').trim();
+const DEMAND_FORM_ID = (process.env.CHAOXING_DEMAND_FORM_ID || '254046').trim();
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
