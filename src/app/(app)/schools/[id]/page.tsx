@@ -250,6 +250,99 @@ export default function School360Page() {
           </section>
         )}
 
+        {view && view.threads.length > 0 && (
+          <section className="rounded-md border border-border bg-card">
+            <header className="flex items-center justify-between border-b border-border px-5 py-3">
+              <div>
+                <h2 className="flex items-center gap-2 text-sm font-semibold">
+                  <ClipboardList className="h-4 w-4 text-brand" />
+                  项目主线
+                </h2>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  按项目名自动聚类招投标 / 建设申请 / 启明星 / 外出工单，串联从线索到交付的全过程
+                </p>
+              </div>
+              <Badge tone="neutral" className="font-mono">
+                {view.threads.length} 条主线
+              </Badge>
+            </header>
+            <div className="divide-y divide-border">
+              {view.threads.map((thread) => {
+                const sourceBadges: Array<{ key: string; label: string; tone: 'brand' | 'success' | 'warning' | 'neutral' | 'danger' | 'info' }> = [];
+                if (thread.sources.includes('bidding')) sourceBadges.push({ key: 'bidding', label: '招投标', tone: 'info' });
+                if (thread.sources.includes('demand')) sourceBadges.push({ key: 'demand', label: '建设申请', tone: 'warning' });
+                if (thread.sources.includes('qiming')) sourceBadges.push({ key: 'qiming', label: '启明星', tone: 'success' });
+                if (thread.sources.includes('trip')) sourceBadges.push({ key: 'trip', label: '外出', tone: 'brand' });
+                return (
+                  <div key={thread.key} className="px-5 py-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-sm font-semibold text-foreground">{thread.displayName}</h3>
+                        <div className="flex flex-wrap items-center gap-1">
+                          {sourceBadges.map((s) => (
+                            <Badge key={s.key} tone={s.tone}>
+                              {s.label}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3 font-mono text-[11px] text-muted-foreground">
+                        {thread.startDate && <span>{thread.startDate.slice(0, 10)}</span>}
+                        {(thread.startDate || thread.endDate) && <span className="text-border">→</span>}
+                        {thread.endDate && <span>{thread.endDate.slice(0, 10)}</span>}
+                        <span className="text-border">·</span>
+                        <span>{thread.items.length} 个节点</span>
+                        {thread.hasOpen && <Badge tone="warning" dot>进行中</Badge>}
+                      </div>
+                    </div>
+                    <ol className="mt-3 grid gap-1.5 md:grid-cols-2 lg:grid-cols-3">
+                      {thread.items.map((it) => {
+                        const meta = SOURCE_META[it.source];
+                        const { rest } = formatTitle(it.title);
+                        return (
+                          <li key={`${it.source}-${it.id}`}>
+                            <Link
+                              href={it.url}
+                              className={cn(
+                                'flex items-start gap-2 rounded-md border px-2.5 py-2 text-xs transition',
+                                it.isOpen
+                                  ? 'border-status-warning/30 bg-status-warning/5 hover:bg-status-warning/10'
+                                  : 'border-border bg-background hover:bg-muted/40',
+                              )}
+                            >
+                              <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                                <meta.icon className="h-3 w-3" />
+                              </span>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+                                    {meta.label}
+                                  </span>
+                                  <span className="font-mono text-[10px] text-muted-foreground/70">
+                                    {it.date ? it.date.slice(0, 10) : '—'}
+                                  </span>
+                                </div>
+                                <div className="mt-0.5 line-clamp-1 text-[12px] font-medium text-foreground/85">
+                                  {rest}
+                                </div>
+                                {it.status && (
+                                  <div className="mt-0.5 truncate text-[10px] text-muted-foreground">
+                                    {it.status}
+                                  </div>
+                                )}
+                              </div>
+                            </Link>
+                          </li>
+                        );
+                      })}
+                    </ol>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           <div className="rounded-lg border border-border bg-card lg:col-span-2">
             <header className="flex items-center justify-between border-b border-border px-5 py-3">

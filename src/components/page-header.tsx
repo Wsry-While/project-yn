@@ -3,10 +3,11 @@ import { cn } from '@/lib/utils';
 interface PageHeaderProps {
   title: string;
   subtitle?: string;
-  icon?: React.ComponentType<{ className?: string }>;
+  icon?: React.ComponentType<{ className?: string }> | React.ReactNode;
   breadcrumb?: Array<{ label: string; href?: string }>;
   actions?: React.ReactNode;
   className?: string;
+  children?: React.ReactNode;
 }
 
 /**
@@ -15,7 +16,8 @@ interface PageHeaderProps {
  * - 左侧大标题 + 副标题 + 图标底色块
  * - 右侧 actions 区
  */
-export function PageHeader({ title, subtitle, icon: Icon, breadcrumb, actions, className }: PageHeaderProps) {
+export function PageHeader({ title, subtitle, icon, breadcrumb, actions, className, children }: PageHeaderProps) {
+  const IconNode = typeof icon === 'function' ? icon : null;
   return (
     <div className={cn('border-b border-border bg-card px-6 py-4', className)}>
       {breadcrumb && breadcrumb.length > 0 && (
@@ -32,9 +34,9 @@ export function PageHeader({ title, subtitle, icon: Icon, breadcrumb, actions, c
       )}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-center gap-3">
-          {Icon && (
+          {icon && (
             <div className="flex h-10 w-10 items-center justify-center rounded-md bg-brand/10 text-brand">
-              <Icon className="h-5 w-5" />
+              {IconNode ? <IconNode className="h-5 w-5" /> : (icon as React.ReactNode)}
             </div>
           )}
           <div>
@@ -44,6 +46,7 @@ export function PageHeader({ title, subtitle, icon: Icon, breadcrumb, actions, c
         </div>
         {actions && <div className="flex items-center gap-2">{actions}</div>}
       </div>
+      {children && <div className="mt-3">{children}</div>}
     </div>
   );
 }

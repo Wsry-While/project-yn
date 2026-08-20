@@ -26,6 +26,17 @@
 - 第三方系统可通过 `POST /api/external/push` 推送任务，按 `external_id + source` 幂等。
 - 超星表单可通过 `POST /api/external/chaoxing/push` 推送项目外出数据，formId=`253633`，按 `external_source='chaoxing' + external_id=indexID` 幂等，删除/恢复使用软删除。
 
+### 六大增值分析模块
+
+在四张只读业务表（招投标/建设申请/启明星/项目外出）之上构建跨源聚合与分析能力，全部为只读：
+
+- **项目生命周期时间线**：学校 360 视图内，`School360Service.buildThreads()` 按 `normalizeProjectName()`（去除"项目/工程/建设/一期/二期"等后缀后归一）把同一项目名下的招投标→建设申请→启明星→外出记录聚合成一条主线，前端组件 `SchoolProjectThreads` 以四源节点时间线呈现，直观看到从商机到交付的全过程。
+- **风险预警雷达**：`RiskService.list()` 跨四源跑规则引擎，输出 high/medium/insight 三级风险。规则含：招投标逾期（`due_delivery_date < today` 且未完成）、预留天数≤3、未满足截图需求；建设申请逾期/7天内到期；启明星未签合同且临近交付/已逾期；项目外出综合评分≤2、负面反馈；高频外出但无立项。页面 `/risks`，接口 `GET /api/risks`（支持 severity/ownerId 过滤）。
+- **客户经理 360**：`Person360Service.get(personId)` 与学校 360 对称，按 `sales_manager_id` 聚合四源数据，输出 KPI（在办/本月外出/均分/逾期率）、近 6 月堆叠业务量、评分趋势、Top 学校、最近动态。页面 `/team/[id]`，接口 `GET /api/team/:id/360`。
+- **AI 周报**：`WeeklyReportService.build(filter)` 按时间范围（默认近 7 天，可按销售/学校过滤）汇总四源数据与风险，`POST /api/reports/weekly/generate` 通过 SSE 流式生成五段式 Markdown 周报（概览/进展/交付/风险/下周计划），先发 `meta` 事件（range+summary）再发 `delta`；前端支持复制与下载 `.md`。数据预览接口 `GET /api/reports/weekly/data`。
+- **数据对齐工作台**：`DataAlignService` 读取 `data_align_queue`，按 entity_type/status 筛选待人工复核的解析记录，支持 PATCH 标记 resolved/ignored 并写 resolution_note。页面 `/data-align`，接口 `GET /api/data-align`、`PATCH /api/data-align/:id`。
+- **多维分析台 + 学校健康分 + 自然语言查询**：`AnalyticsService.dimension()` 支持 school/industry/sales/product/year 五维 × volume/ontime/score/trips 四指标的 Top N 排名；`AnalyticsService.schoolHealth()` 按活跃度 0.2 / 满意度 0.25 / 转化 0.2 / 准时率 0.2 / 合同 0.15 加权计算 0–100 健康分并给出雷达图五维；`POST /api/analytics/nl-query` 用 LLM 把中文问题解析为 `{source, filters, intent}` 后执行 Supabase 查询并返回带跳转链接的结果行。页面 `/analytics`。
+
 ## 业务数据模型
 
 - `schools`：学校主档，名称唯一，保存行业、地区、层级、第三方来源字段。
@@ -155,7 +166,7 @@
 - 所有 JSON 接口返回 `ApiResponse<T>`：成功 `{ success:true, data }`，失败 `{ success:false, error:{ code, message, details } }`。
 - 统一错误码：`unauthorized` 表示登录会话失效；参数错误使用 `invalid_param`；未捕获异常使用 `internal_error`。只有 `/api/external/push`（第三方任务推送）使用 token 鉴权，其失败码为 `missing_push_token` / `invalid_push_token` / `push_token_not_configured`。
 - 使用 `withApi` 包装 handler 以统一 500 错误。
-- SSE 接口（`/api/llm/chat`、`/api/agent/build-plan`）使用 `ReadableStream`，事件类型 `delta/done/error`。
+- SSE 接口（`/api/llm/chat`、`/api/agent/build-plan`、`/api/reports/weekly/generate`）使用 `ReadableStream`，事件类型 `delta/done/error`；周报生成额外先发 `meta` 事件。`apiFetchSSE` 的 handlers 支持 `onMeta` 回调。
 - 业务接口：
   - `GET /api/schools`：学校档案列表，支持 search/salesOwner/limit。
   - `GET /api/schools/:id`：学校详情及部门列表。
@@ -169,6 +180,14 @@
   - `GET /api/qiming-construction`：启明星建设只读列表，支持 search/year/salesManager/school/limit/offset，返回 `{rows,total}`。
   - `GET /api/qiming-construction/:id`：单条启明星建设详情。
   - `GET/PATCH/DELETE /api/milestones/:id`：里程碑更新/删除。
+  - `GET /api/risks`：跨四源风险预警，支持 severity（high/medium/insight）、ownerId 过滤，返回 `RiskSummary`。
+  - `GET /api/team/:id/360`：客户经理 360 视图，按 sales_manager_id 聚合四源 KPI/趋势/Top 学校。
+  - `GET /api/reports/weekly/data`：周报数据预览，支持 startDate/endDate/days/salesManagerId/schoolId。
+  - `POST /api/reports/weekly/generate`：AI 周报 SSE 流式生成，事件 `meta`（range+summary）/`delta`/`done`/`error`。
+  - `GET /api/data-align` / `PATCH /api/data-align/:id`：数据对齐队列查询与状态更新（pending/resolved/ignored + resolution_note）。
+  - `GET /api/analytics/dimension`：多维排名，参数 dimension（school/industry/sales/product/year）、metric（volume/ontime/score/trips）、limit。
+  - `GET /api/analytics/school-health`：学校健康分（五维加权），参数 limit。
+  - `POST /api/analytics/nl-query`：自然语言查询，body `{query}`，LLM 解析后返回 `{intent,source,count,rows[]}`，rows 带 url 跳转。
 - 第三方推送 `POST /api/external/push` 通过 `x-push-token`、`Authorization: Bearer` 或 `?token=` 鉴权，token 读取 `EXTERNAL_PUSH_TOKEN`，开发兜底值 `dev-push-token-change-me`。
 - 第三方招投标截图推送 `POST /api/external/bidding-screenshots/push`：
   - 与超星项目外出推送保持一致，按无鉴权接入设计，不校验 `Authorization` / token，入口仅通过公网 HTTPS + `formId=254045` 白名单 + 业务幂等键控制。

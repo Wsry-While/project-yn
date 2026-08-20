@@ -17,6 +17,10 @@ import {
   ClipboardList,
   Star,
   Inbox,
+  ShieldAlert,
+  FileText,
+  GitMerge,
+  BarChart3,
 } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
@@ -29,7 +33,7 @@ interface NavItem {
   href: string;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
-  shortcut: string;
+  shortcut?: string;
   match: (pathname: string) => boolean;
 }
 
@@ -49,53 +53,77 @@ const NAV: NavItem[] = [
     match: (p) => p.startsWith('/workbench'),
   },
   {
+    href: '/risks',
+    label: '风险中心',
+    icon: ShieldAlert,
+    shortcut: '⌘3',
+    match: (p) => p.startsWith('/risks'),
+  },
+  {
     href: '/kanban',
     label: '任务看板',
     icon: KanbanSquare,
-    shortcut: '⌘3',
+    shortcut: '⌘4',
     match: (p) => p.startsWith('/kanban'),
   },
   {
     href: '/schools',
     label: '学校档案',
     icon: Building2,
-    shortcut: '⌘4',
+    shortcut: '⌘5',
     match: (p) => p.startsWith('/schools'),
   },
   {
     href: '/trips',
     label: '项目外出',
     icon: Plane,
-    shortcut: '⌘5',
+    shortcut: '⌘6',
     match: (p) => p.startsWith('/trips'),
   },
   {
     href: '/bidding-screenshots',
     label: '招投标截图',
     icon: FileImage,
-    shortcut: '⌘6',
+    shortcut: '⌘7',
     match: (p) => p.startsWith('/bidding-screenshots'),
   },
   {
     href: '/project-demands',
     label: '项目建设申请',
     icon: ClipboardList,
-    shortcut: '⌘7',
+    shortcut: '⌘8',
     match: (p) => p.startsWith('/project-demands'),
   },
   {
     href: '/qiming-construction',
     label: '启明星建设',
     icon: Star,
-    shortcut: '⌘8',
+    shortcut: '⌘9',
     match: (p) => p.startsWith('/qiming-construction'),
+  },
+  {
+    href: '/reports',
+    label: 'AI 周报',
+    icon: FileText,
+    match: (p) => p.startsWith('/reports'),
+  },
+  {
+    href: '/analytics',
+    label: '多维分析',
+    icon: BarChart3,
+    match: (p) => p.startsWith('/analytics'),
   },
   {
     href: '/team',
     label: '团队',
     icon: Users,
-    shortcut: '⌘9',
     match: (p) => p.startsWith('/team'),
+  },
+  {
+    href: '/data-align',
+    label: '数据对齐',
+    icon: GitMerge,
+    match: (p) => p.startsWith('/data-align'),
   },
   {
     href: '/settings',
@@ -166,9 +194,11 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
             )}
             <Icon className="h-4 w-4" />
             <span className="flex-1">{item.label}</span>
-            <kbd className="rounded bg-sidebar-foreground/5 px-1.5 py-0.5 font-mono text-[10px] text-sidebar-foreground/40 group-hover:bg-sidebar-foreground/10">
-              {item.shortcut}
-            </kbd>
+            {item.shortcut && (
+              <kbd className="rounded bg-sidebar-foreground/5 px-1.5 py-0.5 font-mono text-[10px] text-sidebar-foreground/40 group-hover:bg-sidebar-foreground/10">
+                {item.shortcut}
+              </kbd>
+            )}
           </Link>
         );
       })}

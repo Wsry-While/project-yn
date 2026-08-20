@@ -70,6 +70,7 @@ export function apiFetchSSE(
     onDelta: (text: string) => void;
     onDone: () => void;
     onError: (err: Error) => void;
+    onMeta?: (meta: unknown) => void;
   },
 ): () => void {
   const controller = new AbortController();
@@ -101,12 +102,14 @@ export function apiFetchSSE(
           if (!payload) continue;
           try {
             const evt = JSON.parse(payload) as {
-              type: 'delta' | 'done' | 'error';
+              type: 'delta' | 'done' | 'error' | 'meta';
               content?: string;
               message?: string;
+              [k: string]: unknown;
             };
             if (evt.type === 'delta' && evt.content) handlers.onDelta(evt.content);
             else if (evt.type === 'done') handlers.onDone();
+            else if (evt.type === 'meta') handlers.onMeta?.(evt);
             else if (evt.type === 'error') throw new Error(evt.message ?? '流式响应错误');
           } catch (err) {
             handlers.onError(err instanceof Error ? err : new Error(String(err)));

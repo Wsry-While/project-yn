@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 export type NavTarget =
   | 'dashboard'
   | 'workbench'
+  | 'risks'
   | 'kanban'
   | 'schools'
   | 'trips'
@@ -50,6 +51,7 @@ export function useHotkeys(map: HotkeyMap): void {
         const targets: NavTarget[] = [
           'dashboard',
           'workbench',
+          'risks',
           'kanban',
           'schools',
           'trips',

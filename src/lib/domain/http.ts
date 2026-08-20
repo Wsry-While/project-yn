@@ -27,8 +27,10 @@ export function fail(
 /**
  * 包装 API 逻辑，把未捕获异常统一转为 500，避免向客户端泄露堆栈。
  */
+type AnyHandler<T extends Response> = (...args: never[]) => Promise<T>;
+
 export async function withApi<T extends Response>(
-  fn: () => Promise<T>,
+  fn: AnyHandler<T>,
 ): Promise<T | NextResponse<ApiResponse<never>>> {
   try {
     return await fn();
