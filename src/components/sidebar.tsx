@@ -16,6 +16,7 @@ import {
   FileImage,
   ClipboardList,
   Star,
+  Inbox,
 } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
@@ -41,75 +42,82 @@ const NAV: NavItem[] = [
     match: (p) => p === '/dashboard' || p === '/',
   },
   {
+    href: '/workbench',
+    label: '我的工作台',
+    icon: Inbox,
+    shortcut: '⌘2',
+    match: (p) => p.startsWith('/workbench'),
+  },
+  {
     href: '/kanban',
     label: '任务看板',
     icon: KanbanSquare,
-    shortcut: '⌘2',
+    shortcut: '⌘3',
     match: (p) => p.startsWith('/kanban'),
   },
   {
     href: '/schools',
     label: '学校档案',
     icon: Building2,
-    shortcut: '⌘3',
+    shortcut: '⌘4',
     match: (p) => p.startsWith('/schools'),
   },
   {
     href: '/trips',
     label: '项目外出',
     icon: Plane,
-    shortcut: '⌘4',
+    shortcut: '⌘5',
     match: (p) => p.startsWith('/trips'),
   },
   {
     href: '/bidding-screenshots',
     label: '招投标截图',
     icon: FileImage,
-    shortcut: '⌘5',
+    shortcut: '⌘6',
     match: (p) => p.startsWith('/bidding-screenshots'),
   },
   {
     href: '/project-demands',
     label: '项目建设申请',
     icon: ClipboardList,
-    shortcut: '⌘6',
+    shortcut: '⌘7',
     match: (p) => p.startsWith('/project-demands'),
   },
   {
     href: '/qiming-construction',
     label: '启明星建设',
     icon: Star,
-    shortcut: '⌘7',
+    shortcut: '⌘8',
     match: (p) => p.startsWith('/qiming-construction'),
   },
   {
     href: '/team',
     label: '团队',
     icon: Users,
-    shortcut: '⌘8',
+    shortcut: '⌘9',
     match: (p) => p.startsWith('/team'),
   },
   {
     href: '/settings',
     label: '项目设置',
     icon: Settings,
-    shortcut: '⌘9',
+    shortcut: '⌘0',
     match: (p) => p.startsWith('/settings'),
   },
 ];
 
 function Brand() {
   return (
-    <div className="flex items-center gap-2 px-2">
-      <div className="flex h-8 w-8 items-center justify-center rounded-md bg-brand text-brand-foreground shadow-[0_1px_0_rgba(255,255,255,0.16)_inset]">
-        <Sparkles className="h-4 w-4" aria-hidden />
+    <div className="flex items-center gap-2.5 px-2">
+      <div className="flex h-9 w-9 items-center justify-center rounded-md bg-gradient-to-br from-brand to-brand/80 text-brand-foreground shadow-[0_1px_0_rgba(255,255,255,0.16)_inset,0_4px_12px_-4px_rgba(22,119,255,0.5)]">
+        <Sparkles className="h-4.5 w-4.5" aria-hidden />
       </div>
       <div className="leading-tight">
         <div className="text-[15px] font-semibold tracking-tight text-sidebar-foreground">
           项目中心
         </div>
-        <div className="font-mono text-[10px] text-sidebar-foreground/50">
-          Project Hub · v1.0
+        <div className="text-[10px] text-sidebar-foreground/50">
+          教育信息化项目管理平台
         </div>
       </div>
     </div>

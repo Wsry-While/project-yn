@@ -17,16 +17,34 @@ import { showToast } from '@/lib/web/toast-store';
 import { LlmLoadingMask } from '@/components/llm-loading-mask';
 import { Input } from '@/components/ui/input';
 import { Modal } from '@/components/modal';
+import { PageHeader } from '@/components/page-header';
+import { Badge } from '@/components/ui/badge';
+import { Pagination } from '@/components/ui/pagination';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import type { TripOptionDict, TripRequest } from '@/lib/domain/types';
 import { cn } from '@/lib/utils';
 
+const PAGE_SIZE = 20;
+
+const APPROVAL_TONE: Record<TripRequest['approvalStatus'], 'success' | 'danger' | 'warning'> = {
+  approved: 'success',
+  rejected: 'danger',
+  pending: 'warning',
+};
+
 const APPROVAL_META: Record<
   TripRequest['approvalStatus'],
-  { label: string; className: string; icon: typeof Clock }
+  { label: string; icon: typeof Clock }
 > = {
-  approved: { label: '已通过', className: 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20', icon: CheckCircle2 },
-  rejected: { label: '已拒绝', className: 'text-red-500 bg-red-500/10 border-red-500/20', icon: XCircle },
-  pending: { label: '待审批', className: 'text-amber-500 bg-amber-500/10 border-amber-500/20', icon: Clock },
+  approved: { label: '已通过', icon: CheckCircle2 },
+  rejected: { label: '已拒绝', icon: XCircle },
+  pending: { label: '待审批', icon: Clock },
 };
 
 function weekdayLabel(n: number | null): string {
@@ -60,6 +78,8 @@ export function TripsView() {
   const [detail, setDetail] = useState<TripRequest | null>(null);
   const [filterType, setFilterType] = useState<string>('');
   const [q, setQ] = useState('');
+  const [page, setPage] = useState(1);
+  const [focusId, setFocusId] = useState<string | null>(null);
 
   const refresh = () => {
     setLoading(true);
@@ -81,6 +101,12 @@ export function TripsView() {
     refresh();
   }, []);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const focus = params.get('focus');
+    if (focus) setFocusId(focus);
+  }, []);
+
   const filtered = useMemo(() => {
     const k = q.trim().toLowerCase();
     return trips.filter((t) => {
@@ -97,72 +123,77 @@ export function TripsView() {
     });
   }, [trips, q, filterType]);
 
+  const total = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const paged = useMemo(
+    () => filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE),
+    [filtered, safePage],
+  );
+
+  useEffect(() => {
+    if (safePage !== page) setPage(safePage);
+  }, [safePage, page]);
+
   return (
     <LlmLoadingMask loading={loading} label="同步项目外出记录…" className="min-h-[70vh]">
-      <div className="mx-auto w-full max-w-7xl p-4 sm:p-6">
-        <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              chaoxing synced
-            </div>
-            <h1 className="text-xl font-semibold tracking-tight">项目外出</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              数据由超星表单推送驱动，共 {trips.length} 条记录；本页仅查看与筛选。
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={refresh}
-            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-3 text-xs text-muted-foreground transition hover:text-foreground"
-            aria-label="刷新"
-          >
-            <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
-            刷新
-          </button>
-        </div>
-
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          <div className="relative h-8 max-w-xs flex-1">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="搜索学校、支持人员、事宜"
-              className="h-8 pl-8 text-sm"
-            />
-          </div>
-          <div className="flex flex-wrap gap-1">
+      <div className="mx-auto w-full max-w-[1400px] p-4 sm:p-6">
+        <PageHeader
+          icon={Plane}
+          title="项目外出"
+          subtitle={`数据由超星表单推送驱动，共 ${trips.length} 条记录；本页仅查看与筛选。`}
+          breadcrumb={[{ label: '工作台' }, { label: '项目外出' }]}
+          actions={
             <button
               type="button"
-              onClick={() => setFilterType('')}
-              className={cn(
-                'rounded-md border px-2 py-1 text-xs transition',
-                !filterType
-                  ? 'border-brand bg-brand/10 text-brand'
-                  : 'border-border text-muted-foreground hover:text-foreground',
-              )}
+              onClick={refresh}
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-card px-3 text-xs text-muted-foreground transition hover:text-foreground"
+              aria-label="刷新"
             >
-              全部
+              <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+              刷新
             </button>
-            {options.map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                onClick={() => setFilterType(opt.sourceValue)}
-                className={cn(
-                  'rounded-md border px-2 py-1 text-xs transition',
-                  filterType === opt.sourceValue
-                    ? 'border-brand bg-brand/10 text-brand'
-                    : 'border-border text-muted-foreground hover:text-foreground',
-                )}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
+          }
+        />
 
-        <div className="overflow-hidden rounded-lg border border-border bg-card">
+        <div className="rounded-b-md border border-t-0 border-border bg-card">
+          <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
+            <div className="relative h-8 min-w-[220px] flex-1 max-w-sm">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={q}
+                onChange={(e) => {
+                  setQ(e.target.value);
+                  setPage(1);
+                }}
+                placeholder="搜索学校、支持人员、事宜"
+                className="h-8 pl-8 text-sm"
+              />
+            </div>
+            <Select
+              value={filterType || '__all__'}
+              onValueChange={(v) => {
+                setFilterType(v === '__all__' ? '' : v);
+                setPage(1);
+              }}
+            >
+              <SelectTrigger size="sm" className="h-8 w-[160px] text-xs">
+                <SelectValue placeholder="支持类型" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">全部支持类型</SelectItem>
+                {options.map((opt) => (
+                  <SelectItem key={opt.id} value={opt.sourceValue}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="ml-auto font-mono text-[11px] text-muted-foreground">
+              筛选结果 <span className="text-foreground">{total}</span>
+            </div>
+          </div>
+
           <div className="hidden grid-cols-[1.4fr_.8fr_.9fr_.9fr_.7fr_.8fr] gap-3 border-b border-border bg-muted/30 px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground md:grid">
             <span>学校 / 事宜</span>
             <span>类型</span>
@@ -172,15 +203,19 @@ export function TripsView() {
             <span className="text-right">同步时间</span>
           </div>
           <div className="divide-y divide-border">
-            {filtered.map((t) => {
+            {paged.map((t) => {
               const meta = APPROVAL_META[t.approvalStatus];
               const Icon = meta.icon;
+              const isFocus = focusId === t.id;
               return (
                 <button
                   type="button"
                   key={t.id}
                   onClick={() => setDetail(t)}
-                  className="grid w-full grid-cols-1 gap-2 px-4 py-3 text-left transition hover:bg-muted/30 md:grid-cols-[1.4fr_.8fr_.9fr_.9fr_.7fr_.8fr] md:items-center md:gap-3"
+                  className={cn(
+                    'grid w-full grid-cols-1 gap-2 px-4 py-3 text-left transition hover:bg-muted/30 md:grid-cols-[1.4fr_.8fr_.9fr_.9fr_.7fr_.8fr] md:items-center md:gap-3',
+                    isFocus && 'bg-brand/5 ring-1 ring-inset ring-brand/40',
+                  )}
                 >
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
@@ -232,15 +267,10 @@ export function TripsView() {
                     </div>
                   </div>
 
-                  <span
-                    className={cn(
-                      'inline-flex w-fit items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium',
-                      meta.className,
-                    )}
-                  >
+                  <Badge tone={APPROVAL_TONE[t.approvalStatus]} dot>
                     <Icon className="h-3 w-3" />
                     {meta.label}
-                  </span>
+                  </Badge>
 
                   <div className="text-right text-[11px] text-muted-foreground">
                     {formatSyncedAt(t.syncedAt)}
@@ -248,12 +278,15 @@ export function TripsView() {
                 </button>
               );
             })}
-            {filtered.length === 0 && !loading && (
+            {paged.length === 0 && !loading && (
               <div className="p-10 text-center text-sm text-muted-foreground">
                 暂无项目外出记录
               </div>
             )}
           </div>
+          {total > PAGE_SIZE && (
+            <Pagination page={safePage} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} />
+          )}
         </div>
       </div>
 
@@ -304,14 +337,9 @@ function TripDetailModal({ trip, onClose }: { trip: TripRequest | null; onClose:
             <DetailRow label="编号">{trip.externalSerial ?? trip.externalId}</DetailRow>
             <DetailRow label="所属年度">{trip.year ?? '—'}</DetailRow>
             <DetailRow label="审批状态">
-              <span
-                className={cn(
-                  'inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium',
-                  APPROVAL_META[trip.approvalStatus].className,
-                )}
-              >
+              <Badge tone={APPROVAL_TONE[trip.approvalStatus]} dot>
                 {APPROVAL_META[trip.approvalStatus].label}
-              </span>
+              </Badge>
             </DetailRow>
             <DetailRow label="学校">{trip.schoolName}</DetailRow>
             <DetailRow label="所属行业">{trip.industry ?? '—'}</DetailRow>

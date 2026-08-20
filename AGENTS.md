@@ -12,10 +12,10 @@
 
 ## 业务概览
 
-本项目在超星 OAuth 登录模板之上扩展为「项目中心」——一个 Linear 风格的内部团队项目管理平台，并已落地学校业务模型：
+本项目在超星 OAuth 登录模板之上扩展为「项目中心」——一个企业信息化驾驶舱风格的内部团队项目管理平台，并已落地学校业务模型：
 
 - 已登录用户进入 `/dashboard`，未登录用户在首页看到超星登录入口。
-- 核心业务视图：仪表盘 `/dashboard`、任务看板 `/kanban`、学校档案 `/schools`、项目外出 `/trips`、招投标截图 `/bidding-screenshots`、项目建设申请 `/project-demands`、启明星建设 `/qiming-construction`、团队 `/team`、项目设置 `/settings`。
+- 核心业务视图：仪表盘 `/dashboard`、我的工作台 `/workbench`、任务看板 `/kanban`、学校档案 `/schools`、项目外出 `/trips`、招投标截图 `/bidding-screenshots`、项目建设申请 `/project-demands`、启明星建设 `/qiming-construction`、团队 `/team`、项目设置 `/settings`。
 - 学校和部门作为客户档案；招投标、启明星建设、项目建设、日常运营等作为项目；项目内通过里程碑管理阶段。
 - 项目外出是独立业务工单，完全由超星表单推送驱动，系统内只查看/筛选/详情，不提供内部新建或编辑入口。
 - 招投标截图是第三方推送驱动的只读交付跟踪数据，按销售经理、项目名称、学校、提交日期等字段建模，系统内不提供新增或编辑入口。
@@ -127,7 +127,7 @@
 │   └── server.ts           # 自定义服务端入口
 ├── next.config.ts
 ├── package.json
-├── DESIGN.md               # 视觉/交互设计规范（Linear 风格）
+├── DESIGN.md               # 视觉/交互设计规范（企业信息化驾驶舱风格）
 └── tsconfig.json
 ```
 
@@ -229,10 +229,10 @@
 
 ## UI 设计与组件规范
 
-- 基础组件使用 `src/components/ui/` 下的 shadcn/ui 组件；按钮主色使用 `bg-brand`（Indigo `#4F46E5`），不要回到默认 `primary`。
+- 基础组件使用 `src/components/ui/` 下的 shadcn/ui 组件；按钮主色使用 `bg-brand`（科技蓝 `#1677FF`），不要回到默认 `primary`。
 - 颜色、圆角、阴影、动画统一使用 `globals.css` 中定义的语义变量（`bg-card`、`text-muted-foreground`、`rounded-lg` 等），禁止硬编码 Hex 或 Tailwind 原生色盘。
 - 业务标签使用半透明状态色；项目类型、任务类型、产品和里程碑标签保持小写工程感，不使用彩色大卡片。
-- 视觉规范以 `DESIGN.md` 为准（Linear 风格、Zinc 灰阶、Inter + JetBrains Mono、克制动效）。
+- 视觉规范以 `DESIGN.md` 为准（企业信息化驾驶舱风格、科技蓝主色 + 深蓝侧边栏、Inter + JetBrains Mono、KPI 卡 + Recharts 图表）。
 
 ## 验证
 

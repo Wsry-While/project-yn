@@ -15,19 +15,32 @@ import { showToast } from '@/lib/web/toast-store';
 import { LlmLoadingMask } from '@/components/llm-loading-mask';
 import { Input } from '@/components/ui/input';
 import { Modal } from '@/components/modal';
+import { PageHeader } from '@/components/page-header';
+import { Badge } from '@/components/ui/badge';
+import { Pagination } from '@/components/ui/pagination';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import type { BiddingFileRef, BiddingScreenshot } from '@/lib/domain/types';
 import { cn } from '@/lib/utils';
 
-const STATUS_META: Record<string, { label: string; className: string }> = {
-  已完成: { label: '已完成', className: 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20' },
-  已交付: { label: '已交付', className: 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20' },
-  待交付: { label: '待交付', className: 'text-amber-500 bg-amber-500/10 border-amber-500/20' },
-  处理中: { label: '处理中', className: 'text-brand bg-brand/10 border-brand/20' },
+const PAGE_SIZE = 20;
+
+type BadgeTone = 'success' | 'warning' | 'brand' | 'neutral' | 'danger';
+const STATUS_TONE: Record<string, BadgeTone> = {
+  已完成: 'success',
+  已交付: 'success',
+  待交付: 'warning',
+  处理中: 'brand',
 };
 
-function statusMeta(status: string | null) {
-  if (status && STATUS_META[status]) return STATUS_META[status];
-  return { label: status || '待处理', className: 'text-zinc-500 bg-zinc-500/10 border-zinc-500/20' };
+function statusMeta(status: string | null): { label: string; tone: BadgeTone } {
+  if (status && STATUS_TONE[status]) return { label: status, tone: STATUS_TONE[status] };
+  return { label: status || '待处理', tone: 'neutral' };
 }
 
 function isOverdue(row: BiddingScreenshot): boolean {
@@ -136,6 +149,8 @@ export function BiddingScreenshotsView() {
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('');
   const [overdueOnly, setOverdueOnly] = useState(false);
+  const [page, setPage] = useState(1);
+  const [focusId, setFocusId] = useState<string | null>(null);
 
   const refresh = () => {
     setLoading(true);
@@ -148,6 +163,12 @@ export function BiddingScreenshotsView() {
 
   useEffect(() => {
     refresh();
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const focus = params.get('focus');
+    if (focus) setFocusId(focus);
   }, []);
 
   const filtered = useMemo(() => {
@@ -168,57 +189,91 @@ export function BiddingScreenshotsView() {
     [rows],
   );
 
+  const total = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const paged = useMemo(
+    () => filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE),
+    [filtered, safePage],
+  );
+
+  useEffect(() => {
+    if (safePage !== page) setPage(safePage);
+  }, [safePage, page]);
+
   return (
     <LlmLoadingMask loading={loading} label="加载招投标截图…" className="min-h-[70vh]">
-      <div className="mx-auto w-full max-w-7xl p-4 sm:p-6">
-        <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              third-party synced
+      <div className="mx-auto w-full max-w-[1400px] p-4 sm:p-6">
+        <PageHeader
+          icon={FileText}
+          title="招投标截图"
+          subtitle={`数据由第三方系统推送，共 ${rows.length} 条，系统内仅查看与筛选。`}
+          breadcrumb={[{ label: '工作台' }, { label: '招投标截图' }]}
+          actions={
+            <button
+              type="button"
+              onClick={refresh}
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-card px-3 text-xs text-muted-foreground transition hover:text-foreground"
+            >
+              <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+              刷新
+            </button>
+          }
+        />
+
+        <div className="rounded-b-md border border-t-0 border-border bg-card">
+          <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
+            <div className="relative h-8 min-w-[220px] flex-1 max-w-sm">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={q}
+                onChange={(e) => {
+                  setQ(e.target.value);
+                  setPage(1);
+                }}
+                placeholder="搜索项目、学校、销售"
+                className="h-8 pl-8 text-sm"
+              />
             </div>
-            <h1 className="text-xl font-semibold tracking-tight">招投标截图</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              数据由第三方系统推送，共 {rows.length} 条，系统内仅查看与筛选。
-            </p>
+            <Select
+              value={status || '__all__'}
+              onValueChange={(v) => {
+                setStatus(v === '__all__' ? '' : v);
+                setPage(1);
+              }}
+            >
+              <SelectTrigger size="sm" className="h-8 w-[140px] text-xs">
+                <SelectValue placeholder="完成状态" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">全部状态</SelectItem>
+                {statusOptions.map((s) => (
+                  <SelectItem key={s} value={s}>
+                    {s}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <button
+              type="button"
+              onClick={() => {
+                setOverdueOnly((v) => !v);
+                setPage(1);
+              }}
+              className={cn(
+                'h-8 rounded-md border px-2.5 text-xs transition',
+                overdueOnly
+                  ? 'border-status-danger/40 bg-status-danger/10 text-status-danger'
+                  : 'border-border text-muted-foreground hover:text-foreground',
+              )}
+            >
+              仅逾期
+            </button>
+            <div className="ml-auto font-mono text-[11px] text-muted-foreground">
+              筛选结果 <span className="text-foreground">{total}</span>
+            </div>
           </div>
-          <button
-            type="button"
-            onClick={refresh}
-            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-3 text-xs text-muted-foreground transition hover:text-foreground"
-          >
-            <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
-            刷新
-          </button>
-        </div>
 
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          <div className="relative h-8 max-w-xs flex-1">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索项目、学校、销售" className="h-8 pl-8 text-sm" />
-          </div>
-          <select
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
-            className="h-8 rounded-md border border-border bg-input px-2 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-          >
-            <option value="">全部状态</option>
-            {statusOptions.map((s) => (
-              <option key={s} value={s}>{s}</option>
-            ))}
-          </select>
-          <button
-            type="button"
-            onClick={() => setOverdueOnly((v) => !v)}
-            className={cn(
-              'rounded-md border px-2 py-1 text-xs transition',
-              overdueOnly ? 'border-red-500/40 bg-red-500/10 text-red-500' : 'border-border text-muted-foreground hover:text-foreground',
-            )}
-          >
-            仅逾期
-          </button>
-        </div>
-
-        <div className="overflow-hidden rounded-lg border border-border bg-card">
           <div className="hidden grid-cols-[1.4fr_1fr_.9fr_.9fr_.8fr_.8fr] gap-3 border-b border-border bg-muted/30 px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground lg:grid">
             <span>项目 / 学校</span>
             <span>销售 / 项目经理</span>
@@ -228,15 +283,19 @@ export function BiddingScreenshotsView() {
             <span className="text-right">预留天数</span>
           </div>
           <div className="divide-y divide-border">
-            {filtered.map((row) => {
+            {paged.map((row) => {
               const meta = statusMeta(row.completionStatus);
               const overdue = isOverdue(row);
+              const isFocus = focusId === row.id;
               return (
                 <button
                   type="button"
                   key={row.id}
                   onClick={() => setDetail(row)}
-                  className="grid w-full grid-cols-1 gap-2 px-4 py-3 text-left transition hover:bg-muted/30 lg:grid-cols-[1.4fr_1fr_.9fr_.9fr_.8fr_.8fr] lg:items-center lg:gap-3"
+                  className={cn(
+                    'grid w-full grid-cols-1 gap-2 px-4 py-3 text-left transition hover:bg-muted/30 lg:grid-cols-[1.4fr_1fr_.9fr_.9fr_.8fr_.8fr] lg:items-center lg:gap-3',
+                    isFocus && 'bg-brand/5 ring-1 ring-inset ring-brand/40',
+                  )}
                 >
                   <div className="min-w-0">
                     <div className="truncate text-sm font-medium">{row.projectName}</div>
@@ -248,7 +307,12 @@ export function BiddingScreenshotsView() {
                   </div>
                   <div className="text-xs text-muted-foreground">
                     <div>提交 {row.submissionDate}</div>
-                    <div className={cn('mt-0.5 inline-flex items-center gap-1', overdue && 'text-red-500')}>
+                    <div
+                      className={cn(
+                        'mt-0.5 inline-flex items-center gap-1',
+                        overdue && 'text-status-danger',
+                      )}
+                    >
                       <CalendarClock className="h-3 w-3" />
                       {row.dueDeliveryDate || '—'}
                     </div>
@@ -257,18 +321,27 @@ export function BiddingScreenshotsView() {
                     <div>{row.projectCategory?.length ? row.projectCategory.join('、') : '—'}</div>
                     <div className="mt-0.5">{row.projectBiddingFile ? '含招标文件' : '无招标文件'}</div>
                   </div>
-                  <span className={cn('inline-flex w-fit items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium', meta.className)}>
-                    {row.completionStatus === '已完成' || row.completionStatus === '已交付' ? <CheckCircle2 className="h-3 w-3" /> : <Clock className="h-3 w-3" />}
+                  <Badge tone={meta.tone} dot={overdue && meta.tone !== 'danger'}>
+                    {row.completionStatus === '已完成' || row.completionStatus === '已交付' ? (
+                      <CheckCircle2 className="h-3 w-3" />
+                    ) : (
+                      <Clock className="h-3 w-3" />
+                    )}
                     {meta.label}
-                  </span>
-                  <div className="text-right text-xs text-muted-foreground">{row.reservedDays ?? '—'} 天</div>
+                  </Badge>
+                  <div className="text-right text-xs text-muted-foreground">
+                    {row.reservedDays ?? '—'} 天
+                  </div>
                 </button>
               );
             })}
-            {filtered.length === 0 && !loading && (
+            {paged.length === 0 && !loading && (
               <div className="p-10 text-center text-sm text-muted-foreground">暂无招投标截图记录</div>
             )}
           </div>
+          {total > PAGE_SIZE && (
+            <Pagination page={safePage} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} />
+          )}
         </div>
       </div>
 

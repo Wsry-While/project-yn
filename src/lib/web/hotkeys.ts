@@ -1,10 +1,20 @@
 'use client';
 import { useEffect } from 'react';
 
-export type NavTarget = 'dashboard' | 'kanban' | 'schools' | 'trips' | 'bidding-screenshots' | 'project-demands' | 'qiming-construction' | 'team' | 'settings';
+export type NavTarget =
+  | 'dashboard'
+  | 'workbench'
+  | 'kanban'
+  | 'schools'
+  | 'trips'
+  | 'bidding-screenshots'
+  | 'project-demands'
+  | 'qiming-construction'
+  | 'team'
+  | 'settings';
 
 export interface HotkeyMap {
-  /** 数字键 1-9：切页；key 为目标路径 */
+  /** 数字键 0-9：切页；key 为目标路径 */
   navigation?: (target: NavTarget) => void;
   newTask?: () => void;
   closeAll?: () => void;
@@ -12,9 +22,9 @@ export interface HotkeyMap {
 
 /**
  * 全局键盘快捷键：
- * - ⌘/Ctrl + 1..9   切换页面
- * - ⌘/Ctrl + N       新建任务
- * - Esc              关闭所有浮层
+ * - ⌘/Ctrl + 1..9, 0   切换页面
+ * - ⌘/Ctrl + N          新建任务
+ * - Esc                 关闭所有浮层
  *
  * 在输入框中打字时，仅保留 Esc 生效，避免劫持用户输入。
  */
@@ -35,10 +45,11 @@ export function useHotkeys(map: HotkeyMap): void {
       if (isEditing) return;
       if (!(e.metaKey || e.ctrlKey)) return;
 
-      if (e.key >= '1' && e.key <= '9') {
+      if ((e.key >= '1' && e.key <= '9') || e.key === '0') {
         e.preventDefault();
         const targets: NavTarget[] = [
           'dashboard',
+          'workbench',
           'kanban',
           'schools',
           'trips',
@@ -48,7 +59,8 @@ export function useHotkeys(map: HotkeyMap): void {
           'team',
           'settings',
         ];
-        map.navigation?.(targets[Number(e.key) - 1]);
+        const idx = e.key === '0' ? 9 : Number(e.key) - 1;
+        map.navigation?.(targets[idx]);
         return;
       }
       if (e.key.toLowerCase() === 'n') {

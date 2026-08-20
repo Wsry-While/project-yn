@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import {
@@ -12,9 +12,21 @@ import {
   Star,
   CalendarDays,
 } from 'lucide-react';
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import { apiFetch } from '@/lib/web/api-client';
 import { LlmLoadingMask } from '@/components/llm-loading-mask';
 import { Button } from '@/components/ui/button';
+import { KpiCard } from '@/components/kpi-card';
+import { Badge } from '@/components/ui/badge';
 import type { School, SchoolDepartment } from '@/lib/domain/types';
 import type { School360View } from '@/lib/domain/school-360-service';
 import { cn } from '@/lib/utils';
@@ -28,33 +40,6 @@ const SOURCE_META: Record<
   demand: { label: '建设申请', icon: ClipboardList },
   qiming: { label: '启明星', icon: Star },
 };
-
-function CountCard({
-  label,
-  counts,
-  icon: Icon,
-}: {
-  label: string;
-  counts: { total: number; open: number; year: number };
-  icon: React.ComponentType<{ className?: string }>;
-}) {
-  return (
-    <div className="rounded-md border border-border bg-card px-4 py-3 transition-colors hover:border-border/80">
-      <div className="flex items-center justify-between text-[11px] uppercase tracking-wider text-muted-foreground">
-        <span>{label}</span>
-        <Icon className="h-3.5 w-3.5 text-muted-foreground/60" />
-      </div>
-      <div className="mt-1.5 font-mono text-2xl font-semibold tabular-nums text-foreground">
-        {counts.total}
-      </div>
-      <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
-        <span>未完成 <span className="font-mono text-foreground/70">{counts.open}</span></span>
-        <span className="text-border">·</span>
-        <span>12 月内 <span className="font-mono text-foreground/70">{counts.year}</span></span>
-      </div>
-    </div>
-  );
-}
 
 function formatTitle(raw: string): { source: string; rest: string } {
   const idx = raw.indexOf(' · ');
@@ -101,6 +86,16 @@ export default function School360Page() {
       view.counts.qiming.total
     : 0;
 
+  const chartData = useMemo<Array<{ name: string; total: number; open: number; fill: string }>>(() => {
+    if (!view) return [];
+    return [
+      { name: '外出', total: view.counts.trips.total, open: view.counts.trips.open, fill: 'var(--chart-1)' },
+      { name: '招投标', total: view.counts.bidding.total, open: view.counts.bidding.open, fill: 'var(--chart-2)' },
+      { name: '建设申请', total: view.counts.demands.total, open: view.counts.demands.open, fill: 'var(--chart-3)' },
+      { name: '启明星', total: view.counts.qiming.total, open: view.counts.qiming.open, fill: 'var(--chart-4)' },
+    ];
+  }, [view]);
+
   return (
     <LlmLoadingMask loading={loading} label="加载学校档案…" className="min-h-[60vh]">
       <div className="mx-auto w-full max-w-6xl space-y-5 p-5 sm:p-6">
@@ -123,14 +118,19 @@ export default function School360Page() {
         )}
 
         {school && (
-          <header className="rounded-lg border border-border bg-card p-5">
-            <div className="flex flex-wrap items-start justify-between gap-3">
+          <header className="rounded-md border border-border bg-card">
+            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-5 py-4">
               <div className="flex items-start gap-3">
-                <div className="flex h-9 w-9 items-center justify-center rounded-md bg-muted text-muted-foreground">
-                  <Building2 className="h-4 w-4" />
+                <div className="flex h-10 w-10 items-center justify-center rounded-md bg-brand/10 text-brand">
+                  <Building2 className="h-5 w-5" />
                 </div>
                 <div>
-                  <h1 className="text-lg font-semibold tracking-tight">{school.name}</h1>
+                  <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                    <Link href="/schools" className="hover:text-foreground">学校档案</Link>
+                    <span className="text-border">/</span>
+                    <span>360° 视图</span>
+                  </div>
+                  <h1 className="mt-0.5 text-xl font-semibold tracking-tight">{school.name}</h1>
                   <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                     {school.industry && <span>{school.industry}</span>}
                     {school.level && (
@@ -153,20 +153,101 @@ export default function School360Page() {
                   </div>
                 </div>
               </div>
-              <span className="rounded border border-border bg-muted px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              <Badge tone="brand" className="font-mono">
                 360°
-              </span>
+              </Badge>
             </div>
           </header>
         )}
 
         {view && (
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <CountCard label="项目外出" counts={view.counts.trips} icon={Plane} />
-            <CountCard label="招投标" counts={view.counts.bidding} icon={FileText} />
-            <CountCard label="建设申请" counts={view.counts.demands} icon={ClipboardList} />
-            <CountCard label="启明星" counts={view.counts.qiming} icon={Star} />
+            <KpiCard
+              label="项目外出"
+              value={view.counts.trips.total}
+              icon={Plane}
+              tone="brand"
+              hint={`未完成 ${view.counts.trips.open} · 12月内 ${view.counts.trips.year}`}
+            />
+            <KpiCard
+              label="招投标"
+              value={view.counts.bidding.total}
+              icon={FileText}
+              tone="neutral"
+              hint={`未完成 ${view.counts.bidding.open} · 12月内 ${view.counts.bidding.year}`}
+            />
+            <KpiCard
+              label="建设申请"
+              value={view.counts.demands.total}
+              icon={ClipboardList}
+              tone="warning"
+              hint={`未完成 ${view.counts.demands.open} · 12月内 ${view.counts.demands.year}`}
+            />
+            <KpiCard
+              label="启明星"
+              value={view.counts.qiming.total}
+              icon={Star}
+              tone="success"
+              hint={`未完成 ${view.counts.qiming.open} · 12月内 ${view.counts.qiming.year}`}
+            />
           </div>
+        )}
+
+        {view && (
+          <section className="rounded-md border border-border bg-card">
+            <header className="flex items-center justify-between border-b border-border px-5 py-3">
+              <div>
+                <h2 className="text-sm font-semibold">业务量分布</h2>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  按四类业务源统计的总量与未完成数量对比
+                </p>
+              </div>
+              <Badge tone="neutral" className="font-mono">
+                {totalRecords} 条
+              </Badge>
+            </header>
+            <div className="h-[240px] p-4">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={chartData} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                  <XAxis
+                    dataKey="name"
+                    tickLine={false}
+                    axisLine={{ stroke: 'var(--border)' }}
+                    tick={{ fill: 'var(--muted-foreground)', fontSize: 11 }}
+                  />
+                  <YAxis
+                    allowDecimals={false}
+                    tickLine={false}
+                    axisLine={false}
+                    tick={{ fill: 'var(--muted-foreground)', fontSize: 11 }}
+                    width={36}
+                  />
+                  <Tooltip
+                    cursor={{ fill: 'var(--muted)', opacity: 0.3 }}
+                    contentStyle={{
+                      background: 'var(--card)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 6,
+                      fontSize: 12,
+                    }}
+                  />
+                  <Bar dataKey="total" name="总量" radius={[4, 4, 0, 0]} barSize={28}>
+                    {chartData.map((entry, idx) => (
+                      <Cell key={idx} fill={entry.fill} />
+                    ))}
+                  </Bar>
+                  <Bar
+                    dataKey="open"
+                    name="未完成"
+                    radius={[4, 4, 0, 0]}
+                    barSize={28}
+                    fill="var(--status-warning)"
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </section>
         )}
 
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">

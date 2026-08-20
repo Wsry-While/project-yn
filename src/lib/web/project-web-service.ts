@@ -18,6 +18,17 @@ export interface DashboardStats {
 
 type TaskStatus = 'todo' | 'in_progress' | 'review' | 'done';
 
+export interface TrendPoint {
+  date: string;
+  created: number;
+  completed: number;
+}
+
+export interface TypeDistributionPoint {
+  type: string;
+  count: number;
+}
+
 export const projectWebService = {
   list(): Promise<Project[]> {
     return apiFetch<Project[]>('/api/projects');
@@ -58,5 +69,11 @@ export const projectWebService = {
   },
   stats(projectId: string): Promise<DashboardStats> {
     return apiFetch<DashboardStats>('/api/stats/dashboard', { query: { projectId } });
+  },
+  trend(projectId: string, days = 30): Promise<TrendPoint[]> {
+    return apiFetch<TrendPoint[]>('/api/stats/trend', { query: { projectId, days: String(days) } });
+  },
+  byType(projectId: string): Promise<TypeDistributionPoint[]> {
+    return apiFetch<TypeDistributionPoint[]>('/api/stats/by-type', { query: { projectId } });
   },
 };
