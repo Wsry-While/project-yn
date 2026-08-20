@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
-import { Search, Building2, Users, MapPin, ChevronRight, Loader2 } from 'lucide-react';
+import Link from 'next/link';
+import { Search, Building2, Users, MapPin, ChevronRight, Loader2, ExternalLink } from 'lucide-react';
 import { schoolWebService } from '@/lib/web/school-web-service';
 import { showToast } from '@/lib/web/toast-store';
 import { LlmLoadingMask } from '@/components/llm-loading-mask';
@@ -133,9 +134,18 @@ export function SchoolsView() {
                     {new Set(active.departments.map((d) => d.salesOwner).filter(Boolean) as string[]).size} 位销售
                   </p>
                 </div>
-                <span className="rounded border border-border bg-muted px-2 py-1 text-[11px] text-muted-foreground">
-                  学校档案
-                </span>
+                <div className="flex items-center gap-2">
+                  <Link
+                    href={`/schools/${active.id}`}
+                    className="inline-flex items-center gap-1 rounded border border-border bg-muted px-2 py-1 text-[11px] text-muted-foreground transition hover:border-brand/40 hover:text-brand"
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    360° 视图
+                  </Link>
+                  <span className="rounded border border-border bg-muted px-2 py-1 text-[11px] text-muted-foreground">
+                    学校档案
+                  </span>
+                </div>
               </header>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">

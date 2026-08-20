@@ -25,12 +25,19 @@ export class ProjectService {
   async listForUser(userId: string): Promise<Project[]> {
     const { data, error } = await this.db
       .from('projects')
-      .select('*')
-      .or(`owner_id.eq.${userId},project_members.user_id.eq.${userId}`)
+      .select('*, project_members!left(*)')
       .eq('status', 'active')
+      .or(`owner_id.eq.${userId},project_members.user_id.eq.${userId}`)
       .order('updated_at', { ascending: false });
     if (error) throw error;
-    return (data as ProjectRow[]).map(mapProject);
+    // 去重（join 后同 project 可能出现多行）
+    const seen = new Set<string>();
+    const rows = (data as ProjectRow[]).filter((r) => {
+      if (seen.has(r.id)) return false;
+      seen.add(r.id);
+      return true;
+    });
+    return rows.map(mapProject);
   }
 
   async findFirstForUser(userId: string): Promise<Project | null> {
