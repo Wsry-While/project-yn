@@ -15,11 +15,12 @@
 本项目在超星 OAuth 登录模板之上扩展为「项目中心」——一个 Linear 风格的内部团队项目管理平台，并已落地学校业务模型：
 
 - 已登录用户进入 `/dashboard`，未登录用户在首页看到超星登录入口。
-- 核心业务视图：仪表盘 `/dashboard`、任务看板 `/kanban`、学校档案 `/schools`、项目外出 `/trips`、招投标截图 `/bidding-screenshots`、团队 `/team`、项目设置 `/settings`。
+- 核心业务视图：仪表盘 `/dashboard`、任务看板 `/kanban`、学校档案 `/schools`、项目外出 `/trips`、招投标截图 `/bidding-screenshots`、项目建设申请 `/project-demands`、启明星建设 `/qiming-construction`、团队 `/team`、项目设置 `/settings`。
 - 学校和部门作为客户档案；招投标、启明星建设、项目建设、日常运营等作为项目；项目内通过里程碑管理阶段。
 - 项目外出是独立业务工单，完全由超星表单推送驱动，系统内只查看/筛选/详情，不提供内部新建或编辑入口。
 - 招投标截图是第三方推送驱动的只读交付跟踪数据，按销售经理、项目名称、学校、提交日期等字段建模，系统内不提供新增或编辑入口。
 - 项目建设申请（`project_demands`）是超星表单（formId=`254046`，可由 `CHAOXING_DEMAND_FORM_ID` 覆盖）推送的只读需求工单，字段 alias 不连续（1,3,4,7,8,10,11,12,13,14,15,16,17,18,20,21,22,23），路由统一按 `fields[].label`（中文名）映射，不按序号兜底：项目所属年度/负责销售经理(contact)/需求类型/所属产品(multipleselect→text[])/所属单位/所属行业类别/具体事宜及需求说明(richtext→sanitize)/所提供的材料(fileupload[])/要求完成时间/项目负责人(contact多值用「、」拼接)/完成情况/预计完成时间/交付内容/交付内容（其他）/交付文档类型/交付文档上传(fileupload[])/交付信息备注(richtext)，系统内不提供新增或编辑入口，附件转存规则同招投标截图（共用 `external_file_assets` + `bidding-attachments` bucket，已登录用户通过 `/api/files/demand-attachments/:assetId` 换签名 URL 下载）。
+- 启明星建设（`qiming_construction`）是超星表单推送的只读建设工单，formId 由 `CHAOXING_QIMING_FORM_ID` 指定（未配置时不做白名单过滤，仅用于联调）。字段按 `fields[].label`（中文名）映射：负责销售经理(contact)/所属年度/项目名称/是否签合同(radiobutton 是/否→boolean)/学校/学院/学校层级/建设专业/建设内容(richtext→sanitize)/建设内容特殊说明及材料(richtext→sanitize)/项目相关资料(fileupload[])/项目交付时间(dateinput 保留为 timestamptz)/负责项目经理(contact)/项目情况反馈。按 `external_source='chaoxing' + external_id=indexID` 幂等，删除/恢复使用 `deleted_at` 软删除。附件转存规则同项目建设申请，已登录用户通过 `/api/files/qiming-attachments/:assetId` 换签名 URL 下载。
 - 任务支持 HTML5 原生拖拽跨列更新，带 `version` 乐观锁，冲突返回 409 后前端回滚并 Toast 提示。
 - 内置大模型助手（普通对话、生成建设方案、生成启明星课程导入数据），SSE 增量渲染，仅面板局部 loading，不阻塞页面。
 - 第三方系统可通过 `POST /api/external/push` 推送任务，按 `external_id + source` 幂等。
@@ -35,6 +36,7 @@
 - `trip_requests`：超星驱动的项目外出工单，按 `external_source='chaoxing' + external_id=indexID` 幂等。字段按真实表单反向建模：编号/年度/学校/行业/支持类型/产品/富文本事宜/日期时间/周几/销售与项目经理联系人/完成与反馈评分；richtext 拆 `*_html` + `*_text` 并在入库前 sanitize，contact 拆 `*_name/*_puid/*_enc`，布尔字段使用 boolean，删除/恢复使用 `deleted_at` 软删除。
 - `trip_option_dict`：项目外出选项自学习字典，按 `(field_key, source_value)` 唯一；超星推送出现的新支持类型、行业、产品会自动登记并启用，前端筛选用此表。
 - `bidding_screenshots`：招投标截图第三方推送数据，按 `(external_source, external_id)` 唯一；记录销售经理、项目名称、学校/二级单位、是否公司参数、提交日期、需交付日期、预留天数、项目招标文件、类别、截图需求、项目经理、完成情况、交付文档/备注、需求达成、销售反馈、附件、整改反馈与整改文档；删除/恢复使用 `deleted_at` 软删除。
+- `qiming_construction`：启明星建设超星推送数据，按 `(external_source, external_id)` 唯一；记录负责销售经理/所属年度/项目名称/是否签合同/学校/学院/学校层级/建设专业/建设内容(richtext html+text)/建设内容特殊说明(richtext)/项目相关资料(jsonb 文件数组)/项目交付时间(timestamptz)/负责项目经理/项目情况反馈；删除/恢复使用 `deleted_at` 软删除。
 - `external_sync_logs`：记录第三方接口同步日志，包含 `direction/op/form_id/index_id/operator/ip/duration_ms/status/error/payload`，用于审计和联调排障。
 
 ## 目录结构
@@ -140,7 +142,7 @@
 - `tasks.version` 用于乐观锁，PATCH 必须带 `version`，冲突抛 409。
 - 学校导入脚本：`scripts/import-schools.py`，从 `assets/学校信息汇总表.xlsx` 读取并 upsert 学校/部门。
 - 项目创建时按 `project_type` 初始化默认里程碑：招投标、启明星建设、项目建设、日常运营均有阶段模板。
-- 常用查询字段已建索引：`tasks(project_id,status)`、`tasks(assignee_id)`、`tasks(milestone_id)`、`tasks(external_id, external_source)`、`school_departments(school_id)`、`trip_requests(trip_date)`、`trip_requests(support_type)`、`trip_requests(school_name)`、`trip_requests(external_source, external_id)` 部分唯一索引、`trip_requests(deleted_at)`、`trip_option_dict(field_key, source_value)` 唯一索引、`bidding_screenshots(project_school)`、`bidding_screenshots(sales_manager)`、`bidding_screenshots(due_delivery_date)`、`bidding_screenshots(deleted_at)`。
+- 常用查询字段已建索引：`tasks(project_id,status)`、`tasks(assignee_id)`、`tasks(milestone_id)`、`tasks(external_id, external_source)`、`school_departments(school_id)`、`trip_requests(trip_date)`、`trip_requests(support_type)`、`trip_requests(school_name)`、`trip_requests(external_source, external_id)` 部分唯一索引、`trip_requests(deleted_at)`、`trip_option_dict(field_key, source_value)` 唯一索引、`bidding_screenshots(project_school)`、`bidding_screenshots(sales_manager)`、`bidding_screenshots(due_delivery_date)`、`bidding_screenshots(deleted_at)`、`qiming_construction(project_year)`、`qiming_construction(sales_manager)`、`qiming_construction(school)`、`qiming_construction(project_name)`、`qiming_construction(project_delivery_time)`、`qiming_construction(deleted_at)`、`qiming_construction(external_source, external_id)` 唯一索引。
 - 触发器自动维护 `updated_at`。
 
 ## API 约定
@@ -157,6 +159,10 @@
   - `GET /api/trips/options?fieldKey=support_type`：外出选项字典，用于筛选；未知选项由超星推送自动学习。
   - `GET /api/bidding-screenshots`：招投标截图只读列表，支持 search/completionStatus/salesManager/overdue/limit/offset，返回 `{rows,total}`。
   - `GET /api/bidding-screenshots/:id`：单条招投标截图详情。
+  - `GET /api/project-demands`：项目建设申请只读列表，支持 search/year/salesManager/completionStatus/limit/offset，返回 `{rows,total}`。
+  - `GET /api/project-demands/:id`：单条项目建设申请详情。
+  - `GET /api/qiming-construction`：启明星建设只读列表，支持 search/year/salesManager/school/limit/offset，返回 `{rows,total}`。
+  - `GET /api/qiming-construction/:id`：单条启明星建设详情。
   - `GET/PATCH/DELETE /api/milestones/:id`：里程碑更新/删除。
 - 第三方推送 `POST /api/external/push` 通过 `x-push-token`、`Authorization: Bearer` 或 `?token=` 鉴权，token 读取 `EXTERNAL_PUSH_TOKEN`，开发兜底值 `dev-push-token-change-me`。
 - 第三方招投标截图推送 `POST /api/external/bidding-screenshots/push`：
@@ -183,6 +189,11 @@
   - `op=data_remove/data_recover` 对 `trip_requests.deleted_at` 做软删除/恢复；`op=form_update` 只记录审计日志并 ack；formId 不匹配返回 skipped。
   - alias 映射：1 编号、35 年度、3 销售经理 contact、33 学校、27 行业、4 支持类型、23 其他类型说明、26 产品多选、8 具体事宜 richtext、9 外出日期、10 开始时间、11 结束时间、36 周几（1=周一...7=周日）、13 项目经理 contact、14 是否完成、37 汇报一致、15 服务内容简述、28 销售迟到、16 销售评分、29 服务迟到、32 综合评分、17 整体评价。
   - `richtext` 入库前经 `src/lib/domain/sanitize.ts` 清洗脚本/事件/危险标签，保存 html+text；`contact` 保存 name/puid/enc；`selectmultibox` 保存为 string[]；`rate/numberinput` 保存为 number；`dateinput` 支持日期与日期时间。
+- 超星推送 `POST /api/external/qiming-construction/push`：
+  - 与项目外出/项目建设申请保持一致的无鉴权接入；formId 由 `CHAOXING_QIMING_FORM_ID` 指定，未配置时不做白名单过滤（联调用），配好后不匹配返回 skipped。
+  - 字段按 `fields[].label`（中文名）固定映射：负责销售经理(contact)/所属年度/项目名称/是否签合同(radiobutton 是/否，存 boolean)/学校/学院/学校层级/建设专业/建设内容(richtext→sanitize)/建设内容特殊说明及材料(richtext→sanitize)/项目相关资料(fileupload[])/项目交付时间(dateinput 存 timestamptz)/负责项目经理(contact)/项目情况反馈(edittextarea)。
+  - `op=data_create/data_edit/data_update/data_flow` upsert；`data_remove/data_recover` 软删/恢复；`form_update` ack；按 `external_source='chaoxing' + external_id=indexID` 幂等。
+  - 每次推送写 `external_sync_logs`（source=`qiming-construction`）；附件转存规则与项目建设申请一致（共用 `external_file_assets` + `bidding-attachments` bucket，已登录用户通过 `/api/files/qiming-attachments/:assetId` 换签名 URL 下载）。
 
 ## 开发规范
 

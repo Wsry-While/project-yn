@@ -15,6 +15,7 @@ import {
   Plane,
   FileImage,
   ClipboardList,
+  Star,
 } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
@@ -73,6 +74,13 @@ const NAV: NavItem[] = [
     icon: ClipboardList,
     shortcut: '⌘8',
     match: (p) => p.startsWith('/project-demands'),
+  },
+  {
+    href: '/qiming-construction',
+    label: '启明星建设',
+    icon: Star,
+    shortcut: '⌘9',
+    match: (p) => p.startsWith('/qiming-construction'),
   },
   {
     href: '/team',

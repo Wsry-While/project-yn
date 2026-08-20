@@ -347,6 +347,69 @@ export interface ProjectDemandInput {
   rawMeta?: unknown;
 }
 
+// ============== 启明星建设（超星推送） ==============
+
+export interface QimingConstruction {
+  id: string;
+  externalSource: string;
+  externalId: string | null;
+  externalOp: string | null;
+  externalSerial: string | null;
+  externalOperator: string | null;
+
+  salesManager: string | null;
+  projectYear: string | null;
+  projectName: string | null;
+  isSignContract: boolean | null;
+  school: string | null;
+  college: string | null;
+  schoolLevel: string | null;
+  buildMajor: string | null;
+  buildContentHtml: string | null;
+  buildContentText: string | null;
+  buildSpecialDescHtml: string | null;
+  buildSpecialDescText: string | null;
+  projectMaterials: BiddingFileRef[];
+  projectDeliveryTime: string | null;
+  projectManager: string | null;
+  projectStatusFeedback: string | null;
+
+  rawPayload: Record<string, unknown> | null;
+  rawMeta: Record<string, unknown> | null;
+  syncedAt: string;
+  deletedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface QimingConstructionInput {
+  externalId: string;
+  externalSource: string;
+  externalOp?: string | null;
+  externalSerial?: string | null;
+  externalOperator?: string | null;
+
+  salesManager: string | null;
+  projectYear: string | null;
+  projectName: string | null;
+  isSignContract: boolean | null;
+  school: string | null;
+  college: string | null;
+  schoolLevel: string | null;
+  buildMajor: string | null;
+  buildContentHtml: string | null;
+  buildContentText: string | null;
+  buildSpecialDescHtml: string | null;
+  buildSpecialDescText: string | null;
+  projectMaterials: BiddingFileRef[];
+  projectDeliveryTime: string | null;
+  projectManager: string | null;
+  projectStatusFeedback: string | null;
+
+  rawPayload?: unknown;
+  rawMeta?: unknown;
+}
+
 export interface ActivityLog {
   id: number;
   projectId: string | null;
