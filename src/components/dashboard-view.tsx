@@ -9,9 +9,6 @@ import {
   ArrowRight,
   KanbanSquare,
   Inbox,
-  CalendarClock,
-  CalendarDays,
-  CalendarRange,
 } from 'lucide-react';
 import { appStore } from '@/lib/web/app-store';
 import { projectWebService, type DashboardStats } from '@/lib/web/project-web-service';
@@ -36,99 +33,107 @@ function StatCard({
   label,
   value,
   icon: Icon,
-  tone,
   hint,
 }: {
   label: string;
   value: number | string;
   icon: React.ComponentType<{ className?: string }>;
-  tone: string;
   hint?: string;
 }) {
   return (
-    <div className="group relative overflow-hidden rounded-lg border border-border bg-card p-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_8px_24px_rgba(0,0,0,0.08)]">
-      <div className="flex items-start justify-between">
-        <div>
-          <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            {label}
-          </div>
-          <div className="mt-2 font-mono text-3xl font-semibold tabular-nums text-foreground">
-            {value}
-          </div>
-          {hint && <div className="mt-1 text-xs text-muted-foreground">{hint}</div>}
-        </div>
-        <div
-          className={cn(
-            'flex h-8 w-8 items-center justify-center rounded-md bg-muted',
-            tone,
-          )}
-        >
-          <Icon className="h-4 w-4" />
-        </div>
+    <div className="rounded-md border border-border bg-card px-4 py-3 transition-colors hover:border-border/80">
+      <div className="flex items-center justify-between text-[11px] uppercase tracking-wider text-muted-foreground">
+        <span>{label}</span>
+        <Icon className="h-3.5 w-3.5 text-muted-foreground/70" />
       </div>
+      <div className="mt-1.5 font-mono text-2xl font-semibold tabular-nums text-foreground">
+        {value}
+      </div>
+      {hint && <div className="mt-0.5 text-[11px] text-muted-foreground">{hint}</div>}
     </div>
   );
 }
 
 const SOURCE_META: Record<
   string,
-  { label: string; tone: string }
+  { label: string }
 > = {
-  trip: { label: '外出', tone: 'text-sky-500' },
-  bidding: { label: '招投标', tone: 'text-violet-500' },
-  demand: { label: '建设申请', tone: 'text-teal-500' },
-  qiming: { label: '启明星', tone: 'text-amber-500' },
+  trip: { label: '外出' },
+  bidding: { label: '招投标' },
+  demand: { label: '建设申请' },
+  qiming: { label: '启明星' },
+};
+
+const BUCKET_META: Record<
+  keyof MyWorkbench['items'],
+  { label: string; tone: string; dot: string }
+> = {
+  overdue: {
+    label: '已逾期',
+    tone: 'text-red-500',
+    dot: 'bg-red-500',
+  },
+  today: {
+    label: '今日到期',
+    tone: 'text-amber-600 dark:text-amber-500',
+    dot: 'bg-amber-500',
+  },
+  week: {
+    label: '7 天内',
+    tone: 'text-brand',
+    dot: 'bg-brand',
+  },
+  later: {
+    label: '以后',
+    tone: 'text-muted-foreground',
+    dot: 'bg-muted-foreground/40',
+  },
 };
 
 function WorkbenchBucket({
-  label,
-  icon: Icon,
-  tone,
+  bucket,
   items,
   cap = 6,
 }: {
-  label: string;
-  icon: React.ComponentType<{ className?: string }>;
-  tone: string;
+  bucket: keyof MyWorkbench['items'];
   items: MyWorkbench['items'][keyof MyWorkbench['items']];
   cap?: number;
 }) {
+  const meta = BUCKET_META[bucket];
   const shown = items.slice(0, cap);
   const remaining = items.length - shown.length;
   return (
-    <div className="flex min-h-[200px] flex-col p-4">
-      <div className="mb-3 flex items-center justify-between">
-        <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-          <Icon className={cn('h-3.5 w-3.5', tone)} />
-          {label}
+    <div className="flex min-w-0 flex-col border-border p-3 [&:not(:last-child)]:border-b md:[&:not(:last-child)]:border-b-0 md:[&:not(:last-child)]:border-r">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          <span className={cn('h-1.5 w-1.5 rounded-full', meta.dot)} aria-hidden />
+          {meta.label}
         </div>
-        <span className="font-mono text-xs tabular-nums text-foreground">{items.length}</span>
+        <span className="font-mono text-[11px] tabular-nums text-foreground/70">{items.length}</span>
       </div>
       {shown.length === 0 ? (
-        <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground/60">
-          —
-        </div>
+        <div className="py-6 text-center text-[11px] text-muted-foreground/50">—</div>
       ) : (
-        <ul className="space-y-1.5">
+        <ul className="space-y-px">
           {shown.map((it) => {
-            const meta = SOURCE_META[it.source];
+            const source = SOURCE_META[it.source];
             return (
               <li key={`${it.source}-${it.id}`}>
                 <Link
                   href={it.url}
-                  className="group flex items-start gap-2 rounded-md border border-transparent px-2 py-1.5 text-xs hover:border-border hover:bg-muted/60"
+                  className="group flex items-center gap-2 rounded px-1.5 py-1 text-xs transition-colors hover:bg-muted/60"
                 >
-                  <span className={cn('mt-0.5 shrink-0 font-mono text-[10px] uppercase', meta.tone)}>
-                    {meta.label}
+                  <span className="shrink-0 rounded bg-muted px-1 py-px font-mono text-[10px] uppercase tracking-wide text-muted-foreground group-hover:text-foreground/80">
+                    {source.label}
                   </span>
-                  <span className="flex-1 truncate text-foreground/90 group-hover:text-foreground">
-                    {it.title.replace(/^[^·]+·\s*/, '')}
+                  <span className="min-w-0 flex-1 truncate text-foreground/85 group-hover:text-foreground">
+                    {it.title}
                   </span>
                   {it.date && (
                     <span
                       className={cn(
                         'shrink-0 font-mono text-[10px] tabular-nums',
-                        tone === 'text-red-500' ? 'text-red-500' : 'text-muted-foreground',
+                        bucket === 'overdue' ? 'text-red-500' : 'text-muted-foreground/70',
                       )}
                     >
                       {it.date.slice(5, 10)}
@@ -139,8 +144,8 @@ function WorkbenchBucket({
             );
           })}
           {remaining > 0 && (
-            <li className="px-2 pt-1 text-center text-[10px] text-muted-foreground">
-              还有 {remaining} 条…
+            <li className="px-1.5 pt-1 text-center text-[10px] text-muted-foreground/70">
+              还有 {remaining} 条
             </li>
           )}
         </ul>
@@ -165,7 +170,7 @@ function ProgressBar({ ratio }: { ratio: number }) {
         aria-valuemax={100}
       >
         <div
-          className="animate-progress h-full rounded-full bg-gradient-to-r from-brand to-brand/70"
+          className="animate-progress h-full rounded-full bg-brand"
           style={{ width: `${pct}%` }}
         />
       </div>
@@ -264,85 +269,70 @@ export function DashboardView() {
                 )}
               </h2>
             </div>
-            <div className="flex items-center gap-3 font-mono text-xs text-muted-foreground">
-              <span>外出 {workbench?.bySource.trip ?? 0}</span>
-              <span>招投标 {workbench?.bySource.bidding ?? 0}</span>
-              <span>建设申请 {workbench?.bySource.demand ?? 0}</span>
-              <span>启明星 {workbench?.bySource.qiming ?? 0}</span>
+            <div className="flex items-center gap-3 font-mono text-[11px] text-muted-foreground">
+              <span>外出 <span className="text-foreground/70">{workbench?.bySource.trip ?? 0}</span></span>
+              <span className="text-border">·</span>
+              <span>招投标 <span className="text-foreground/70">{workbench?.bySource.bidding ?? 0}</span></span>
+              <span className="text-border">·</span>
+              <span>建设 <span className="text-foreground/70">{workbench?.bySource.demand ?? 0}</span></span>
+              <span className="text-border">·</span>
+              <span>启明星 <span className="text-foreground/70">{workbench?.bySource.qiming ?? 0}</span></span>
             </div>
           </div>
 
           {!workbench?.member ? (
-            <div className="px-5 py-8 text-center text-sm text-muted-foreground">
-              尚未在员工档案中匹配到你的账号
-              {workbench?.selfUid ? (
-                <>
-                  （超星 UID：<span className="font-mono">{workbench.selfUid}</span>）
-                </>
-              ) : (
-                '（未获取到超星 UID）'
-              )}
-              。等业务推送一条你参与的工单后即可自动关联；若你已有参与工单仍看不到，请联系管理员在「团队」里补全你的超星 UID。
+            <div className="flex flex-col items-center gap-2 px-5 py-10 text-center">
+              <div className="flex h-9 w-9 items-center justify-center rounded-full border border-dashed border-border text-muted-foreground">
+                <Inbox className="h-4 w-4" />
+              </div>
+              <p className="text-sm text-foreground/80">尚未在员工档案中匹配到你的账号</p>
+              <p className="max-w-md text-xs text-muted-foreground">
+                {workbench?.selfUid ? (
+                  <>当前超星 UID：<span className="font-mono">{workbench.selfUid}</span>。</>
+                ) : (
+                  '未获取到超星 UID。'
+                )}
+                {' '}等业务推送一条你参与的工单后即可自动关联；若你已有参与工单仍看不到，请联系管理员在「团队」里补全该 UID。
+              </p>
             </div>
           ) : workbench.counts.total === 0 ? (
-            <div className="px-5 py-8 text-center text-sm text-muted-foreground">
-              目前没有未完成的工单 🎉
+            <div className="flex flex-col items-center gap-2 px-5 py-10 text-center">
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-500">
+                <CheckCircle2 className="h-4 w-4" />
+              </div>
+              <p className="text-sm text-foreground/80">目前没有未完成的工单</p>
+              <p className="text-xs text-muted-foreground">所有分配给你的事项都已关闭。</p>
             </div>
           ) : (
             <div className="grid grid-cols-1 divide-y divide-border md:grid-cols-4 md:divide-x md:divide-y-0">
-              <WorkbenchBucket
-                label="已逾期"
-                icon={AlertTriangle}
-                tone="text-red-500"
-                items={workbench.items.overdue}
-              />
-              <WorkbenchBucket
-                label="今日到期"
-                icon={Clock}
-                tone="text-amber-500"
-                items={workbench.items.today}
-              />
-              <WorkbenchBucket
-                label="7 天内"
-                icon={CalendarRange}
-                tone="text-brand"
-                items={workbench.items.week}
-              />
-              <WorkbenchBucket
-                label="以后"
-                icon={CalendarDays}
-                tone="text-muted-foreground"
-                items={workbench.items.later}
-                cap={5}
-              />
+              <WorkbenchBucket bucket="overdue" items={workbench.items.overdue} />
+              <WorkbenchBucket bucket="today" items={workbench.items.today} />
+              <WorkbenchBucket bucket="week" items={workbench.items.week} />
+              <WorkbenchBucket bucket="later" items={workbench.items.later} cap={5} />
             </div>
           )}
         </section>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <StatCard
             label="待办"
-            value={stats?.totals.todo ?? (project ? '—' : '—')}
+            value={stats?.totals.todo ?? '—'}
             icon={Circle}
-            tone="text-zinc-500"
           />
           <StatCard
             label="进行中"
             value={stats?.totals.in_progress ?? '—'}
             icon={Clock}
-            tone="text-brand"
           />
           <StatCard
             label="审阅中"
             value={stats?.totals.review ?? '—'}
             icon={AlertTriangle}
-            tone="text-amber-500"
           />
           <StatCard
             label="已完成"
             value={stats?.totals.done ?? '—'}
             icon={CheckCircle2}
-            tone="text-emerald-500"
             hint={stats ? `共 ${stats.total} 个任务` : undefined}
           />
         </div>

@@ -51,49 +51,49 @@ const NAV: NavItem[] = [
     href: '/schools',
     label: '学校档案',
     icon: Building2,
-    shortcut: '⌘5',
+    shortcut: '⌘3',
     match: (p) => p.startsWith('/schools'),
   },
   {
     href: '/trips',
     label: '项目外出',
     icon: Plane,
-    shortcut: '⌘6',
+    shortcut: '⌘4',
     match: (p) => p.startsWith('/trips'),
   },
   {
     href: '/bidding-screenshots',
     label: '招投标截图',
     icon: FileImage,
-    shortcut: '⌘7',
+    shortcut: '⌘5',
     match: (p) => p.startsWith('/bidding-screenshots'),
   },
   {
     href: '/project-demands',
     label: '项目建设申请',
     icon: ClipboardList,
-    shortcut: '⌘8',
+    shortcut: '⌘6',
     match: (p) => p.startsWith('/project-demands'),
   },
   {
     href: '/qiming-construction',
     label: '启明星建设',
     icon: Star,
-    shortcut: '⌘9',
+    shortcut: '⌘7',
     match: (p) => p.startsWith('/qiming-construction'),
   },
   {
     href: '/team',
     label: '团队',
     icon: Users,
-    shortcut: '⌘3',
+    shortcut: '⌘8',
     match: (p) => p.startsWith('/team'),
   },
   {
     href: '/settings',
     label: '项目设置',
     icon: Settings,
-    shortcut: '⌘4',
+    shortcut: '⌘9',
     match: (p) => p.startsWith('/settings'),
   },
 ];
@@ -188,7 +188,7 @@ function SidebarFooter() {
           className="h-8 w-8 shrink-0 rounded-full object-cover"
         />
       ) : (
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-brand to-zinc-600 text-[11px] font-semibold text-white">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-sidebar-foreground/10 text-[11px] font-semibold text-sidebar-foreground">
           {initial}
         </div>
       )}
