@@ -4,6 +4,9 @@ import { getAdminSupabase } from '@/lib/domain/api-utils';
 import { parseChaoxingFormData, isValidOp, toIsoFromEpoch } from '@/lib/domain/chaoxing/parser';
 import { ProjectDemandService } from '@/lib/domain/project-demand-service';
 import { processDemandAttachments } from '@/lib/domain/project-demand-attachment-service';
+import { TeamMemberService } from '@/lib/domain/team-member-service';
+import { DictService } from '@/lib/domain/dict-service';
+import { ReferenceResolver } from '@/lib/domain/reference-resolver';
 
 const SOURCE = 'chaoxing';
 const DEMAND_FORM_ID = (process.env.CHAOXING_DEMAND_FORM_ID || '254046').trim();
@@ -339,6 +342,23 @@ export async function POST(request: NextRequest) {
         throw new Error('缺少必填字段：负责销售经理 / 所属单位');
       }
 
+      // 引用解析：学校、员工、字典归一
+      const resolver = new ReferenceResolver(db);
+      const memberService = new TeamMemberService(db);
+      const dictService = new DictService(db);
+
+      const [schoolId, salesMember, pmMembers, demandTypeNorm, industryNorm] = await Promise.all([
+        resolver.resolveSchool(company),
+        memberService.upsertByContact(v('负责销售经理'), 'sales'),
+        memberService.upsertManyByContacts(v('项目负责人'), 'pm'),
+        dictService.normalize('demand_type', demandType),
+        dictService.normalize('industry_category', industryCategory),
+      ]);
+
+      // 多 PM：取首位作为 project_manager_id，其余写入关联表
+      const primaryPmId = pmMembers[0]?.id ?? null;
+      const extraPmIds = pmMembers.slice(1).map((m) => m.id);
+
       const service = new ProjectDemandService(db);
       const { row, created } = await service.upsertFromExternal({
         externalId: payload.indexId,
@@ -348,15 +368,20 @@ export async function POST(request: NextRequest) {
         externalOperator: payload.uid || null,
         projectYear,
         salesManager,
+        salesManagerId: salesMember?.id ?? null,
         demandType,
+        demandTypeNorm,
         product,
         company,
+        schoolId,
         industryCategory,
+        industryCategoryNorm: industryNorm,
         demandDescHtml: demandDesc.html,
         demandDescText: demandDesc.text,
         providedMaterials,
         requiredFinishDate,
         projectManager,
+        projectManagerId: primaryPmId,
         completionStatus,
         estimatedFinishDate,
         deliveryContent,
@@ -367,6 +392,21 @@ export async function POST(request: NextRequest) {
         rawPayload: payload.data,
         rawMeta: auditPayload,
       });
+
+      // 维护多值 PM 关联表：先清空再重建
+      if (row.id) {
+        const allPmIds = pmMembers.map((m) => m.id);
+        await db.from('project_demand_managers').delete().eq('demand_id', row.id);
+        if (allPmIds.length > 0) {
+          await db.from('project_demand_managers').insert(
+            allPmIds.map((memberId, idx) => ({
+              demand_id: row.id,
+              member_id: memberId,
+              sort_order: idx,
+            })),
+          );
+        }
+      }
 
       await writeSyncLog({
         db,

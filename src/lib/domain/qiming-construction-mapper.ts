@@ -9,13 +9,18 @@ export type QimingConstructionRow = {
   external_operator: string | null;
 
   sales_manager: string | null;
+  sales_manager_id: string | null;
   project_year: string | null;
   project_name: string | null;
   is_sign_contract: boolean | null;
   school: string | null;
+  school_id: string | null;
   college: string | null;
+  college_id: string | null;
   school_level: string | null;
+  school_level_norm: string | null;
   build_major: string | null;
+  build_major_norm: string | null;
   build_content_html: string | null;
   build_content_text: string | null;
   build_special_desc_html: string | null;
@@ -23,6 +28,7 @@ export type QimingConstructionRow = {
   project_materials: unknown;
   project_delivery_time: string | null;
   project_manager: string | null;
+  project_manager_id: string | null;
   project_status_feedback: string | null;
 
   raw_payload: unknown;
@@ -67,13 +73,18 @@ export function mapQimingConstruction(row: QimingConstructionRow): QimingConstru
     externalOperator: row.external_operator,
 
     salesManager: row.sales_manager,
+    salesManagerId: row.sales_manager_id,
     projectYear: row.project_year,
     projectName: row.project_name,
     isSignContract: row.is_sign_contract,
     school: row.school,
+    schoolId: row.school_id,
     college: row.college,
+    collegeId: row.college_id,
     schoolLevel: row.school_level,
+    schoolLevelNorm: row.school_level_norm,
     buildMajor: row.build_major,
+    buildMajorNorm: row.build_major_norm,
     buildContentHtml: row.build_content_html,
     buildContentText: row.build_content_text,
     buildSpecialDescHtml: row.build_special_desc_html,
@@ -81,6 +92,7 @@ export function mapQimingConstruction(row: QimingConstructionRow): QimingConstru
     projectMaterials: mapFileArray(row.project_materials),
     projectDeliveryTime: row.project_delivery_time,
     projectManager: row.project_manager,
+    projectManagerId: row.project_manager_id,
     projectStatusFeedback: row.project_status_feedback,
 
     rawPayload: (row.raw_payload ?? null) as Record<string, unknown> | null,

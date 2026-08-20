@@ -4,6 +4,9 @@ import { getAdminSupabase } from '@/lib/domain/api-utils';
 import { parseChaoxingFormData, isValidOp, toIsoFromEpoch } from '@/lib/domain/chaoxing/parser';
 import { QimingConstructionService } from '@/lib/domain/qiming-construction-service';
 import { processQimingAttachments } from '@/lib/domain/qiming-construction-attachment-service';
+import { TeamMemberService } from '@/lib/domain/team-member-service';
+import { DictService } from '@/lib/domain/dict-service';
+import { ReferenceResolver } from '@/lib/domain/reference-resolver';
 
 const SOURCE = 'chaoxing';
 // 启明星建设表单 formId，由 CHAOXING_QIMING_FORM_ID 指定；未配置时不做白名单过滤（联调期）。
@@ -330,6 +333,22 @@ export async function POST(request: NextRequest) {
       const projectManager = asContactName(v('负责项目经理'));
       const projectStatusFeedback = asString(v('项目情况反馈'));
 
+      // 引用解析：学校/学院、员工、字典归一
+      const resolver = new ReferenceResolver(db);
+      const memberService = new TeamMemberService(db);
+      const dictService = new DictService(db);
+
+      const schoolId = await resolver.resolveSchool(school);
+      const [collegeId, salesMember, pmMembers, schoolLevelNorm, buildMajorNorm] = await Promise.all([
+        resolver.resolveDepartment(schoolId, college, 'college'),
+        memberService.upsertByContact(v('负责销售经理'), 'sales'),
+        memberService.upsertManyByContacts(v('负责项目经理'), 'pm'),
+        dictService.normalize('school_level', schoolLevel),
+        dictService.normalize('build_major', buildMajor),
+      ]);
+
+      const primaryPmId = pmMembers[0]?.id ?? null;
+
       const service = new QimingConstructionService(db);
       const { row, created } = await service.upsertFromExternal({
         externalId: payload.indexId,
@@ -338,13 +357,18 @@ export async function POST(request: NextRequest) {
         externalSerial: payload.uuid || null,
         externalOperator: payload.uid || null,
         salesManager,
+        salesManagerId: salesMember?.id ?? null,
         projectYear,
         projectName,
         isSignContract,
         school,
+        schoolId,
         college,
+        collegeId,
         schoolLevel,
+        schoolLevelNorm,
         buildMajor,
+        buildMajorNorm,
         buildContentHtml: buildContent.html,
         buildContentText: buildContent.text,
         buildSpecialDescHtml: buildSpecialDesc.html,
@@ -352,10 +376,26 @@ export async function POST(request: NextRequest) {
         projectMaterials,
         projectDeliveryTime,
         projectManager,
+        projectManagerId: primaryPmId,
         projectStatusFeedback,
         rawPayload: payload.data,
         rawMeta: auditPayload,
       });
+
+      // 维护多值 PM 关联表：先清空再重建
+      if (row.id) {
+        const allPmIds = pmMembers.map((m) => m.id);
+        await db.from('qiming_pm_members').delete().eq('qiming_id', row.id);
+        if (allPmIds.length > 0) {
+          await db.from('qiming_pm_members').insert(
+            allPmIds.map((memberId, idx) => ({
+              qiming_id: row.id,
+              member_id: memberId,
+              sort_order: idx,
+            })),
+          );
+        }
+      }
 
       await writeSyncLog({
         db,

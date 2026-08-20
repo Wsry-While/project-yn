@@ -2,7 +2,9 @@ import { NextRequest } from 'next/server';
 import { ok, fail, withApi } from '@/lib/domain/http';
 import { getAdminSupabase } from '@/lib/domain/api-utils';
 import { TripService } from '@/lib/domain/trip-service';
-import { SchoolService } from '@/lib/domain/school-service';
+import { ReferenceResolver } from '@/lib/domain/reference-resolver';
+import { TeamMemberService } from '@/lib/domain/team-member-service';
+import { DictService } from '@/lib/domain/dict-service';
 import { parseChaoxingFormData, isValidOp, toIsoFromEpoch } from '@/lib/domain/chaoxing/parser';
 import { mapTripFields, MapFieldError } from '@/lib/domain/chaoxing/mapping';
 
@@ -155,8 +157,34 @@ export async function POST(request: NextRequest) {
       if (!mapped.schoolName || !mapped.tripDate || !mapped.supportType) {
         throw new MapFieldError('缺少必填字段：学校（alias=33）、外出支持类型（alias=4）或外出日期（alias=9）');
       }
-      const schoolService = new SchoolService(db);
-      const schoolId = await schoolService.findOrCreateSchoolByName(mapped.schoolName, mapped.industry);
+      const resolver = new ReferenceResolver(db);
+      const memberService = new TeamMemberService(db);
+      const dictService = new DictService(db);
+
+      const schoolId = await resolver.resolveSchool(mapped.schoolName);
+      const [salesMember, pmMember, supportTypeNorm, industryNorm, productsNorm] = await Promise.all([
+        mapped.salesManager?.name
+          ? memberService.upsert({
+              puid: mapped.salesManager.puid,
+              name: mapped.salesManager.name,
+              contactRaw: mapped.salesManager as unknown as Record<string, unknown>,
+              syncedFrom: 'chaoxing',
+              role: 'sales',
+            })
+          : Promise.resolve(null),
+        mapped.projectManager?.name
+          ? memberService.upsert({
+              puid: mapped.projectManager.puid,
+              name: mapped.projectManager.name,
+              contactRaw: mapped.projectManager as unknown as Record<string, unknown>,
+              syncedFrom: 'chaoxing',
+              role: 'pm',
+            })
+          : Promise.resolve(null),
+        dictService.normalize('trip_support_type', mapped.supportType),
+        dictService.normalize('trip_industry', mapped.industry),
+        dictService.normalizeMany('trip_product', mapped.products),
+      ]);
 
       const service = new TripService(db);
       const { row, created } = await service.upsertFromExternal(
@@ -165,6 +193,11 @@ export async function POST(request: NextRequest) {
           schoolName: mapped.schoolName,
           tripDate: mapped.tripDate,
           supportType: mapped.supportType,
+          salesManagerId: salesMember?.id ?? null,
+          projectManagerId: pmMember?.id ?? null,
+          supportTypeNorm,
+          industryNorm,
+          productsNorm,
           externalId: payload.indexId,
           externalSource: SOURCE,
           externalUuid: payload.uuid || null,

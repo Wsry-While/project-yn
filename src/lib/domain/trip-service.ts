@@ -45,6 +45,11 @@ export interface TripExternalInput {
   externalOriginOperator?: string | null;
   auditStatus?: number | null;
   approvalStatus?: TripApprovalStatus;
+  salesManagerId?: string | null;
+  projectManagerId?: string | null;
+  supportTypeNorm?: string | null;
+  industryNorm?: string | null;
+  productsNorm?: string[] | null;
   rawPayload?: unknown;
   rawMeta?: Record<string, unknown> | null;
 }
@@ -163,10 +168,13 @@ export class TripService {
       school_name: input.schoolName.trim().slice(0, 200),
       school_id: null,
       industry: input.industry?.trim() || null,
+      industry_norm: input.industryNorm ?? null,
       support_type: input.supportType.trim().slice(0, 80),
+      support_type_norm: input.supportTypeNorm ?? null,
       support_type_other:
         input.supportType === '其他' ? input.supportTypeOther?.trim() || null : null,
       products: input.products,
+      products_norm: input.productsNorm ?? null,
       ...richTextToRow('detail', input.detail),
       trip_date: tripDate,
       start_at: input.startAt ?? null,
@@ -174,6 +182,8 @@ export class TripService {
       weekday: input.weekday ?? null,
       ...contactRow('sales_manager', input.salesManager),
       ...contactRow('project_manager', input.projectManager),
+      sales_manager_id: input.salesManagerId ?? null,
+      project_manager_id: input.projectManagerId ?? null,
 
       is_completed: input.isCompleted,
       report_consistent: input.reportConsistent,

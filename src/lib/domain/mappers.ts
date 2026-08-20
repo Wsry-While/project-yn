@@ -144,18 +144,23 @@ interface TripRow {
   school_id: string | null;
   school_name: string;
   industry: string | null;
+  industry_norm: string | null;
   support_type: string;
+  support_type_norm: string | null;
   support_type_other: string | null;
   products: string[] | null;
+  products_norm: string[] | null;
   detail_html: string | null;
   detail_text: string | null;
   trip_date: string;
   start_at: string | null;
   end_at: string | null;
   weekday: number | null;
+  sales_manager_id: string | null;
   sales_manager_name: string | null;
   sales_manager_puid: string | null;
   sales_manager_enc: string | null;
+  project_manager_id: string | null;
   project_manager_name: string | null;
   project_manager_puid: string | null;
   project_manager_enc: string | null;
@@ -209,6 +214,7 @@ interface BiddingScreenshotRow {
   synced_at: string;
   deleted_at: string | null;
   sales_manager: string;
+  sales_manager_id: string | null;
   project_name: string;
   project_school: string;
   project_secondary_unit: string | null;
@@ -218,9 +224,12 @@ interface BiddingScreenshotRow {
   reserved_days: number | null;
   project_bidding_file: BiddingFileRefRow | BiddingFileRefRow[] | null;
   project_category: string[] | null;
+  project_category_norm: string[] | null;
   screenshot_requirement: string | null;
   assigned_project_manager: string | null;
+  assigned_pm_id: string | null;
   completion_status: string | null;
+  completion_status_norm: string | null;
   delivery_document: BiddingFileRefRow | BiddingFileRefRow[] | null;
   delivery_remark: string | null;
   is_meet_screenshot_requirement: boolean | null;
@@ -392,9 +401,12 @@ export function mapTrip(row: TripRow): TripRequest {
     schoolId: row.school_id,
     schoolName: row.school_name,
     industry: row.industry,
+    industryNorm: row.industry_norm,
     supportType: row.support_type,
+    supportTypeNorm: row.support_type_norm,
     supportTypeOther: row.support_type_other,
     products: row.products ?? [],
+    productsNorm: row.products_norm ?? [],
     detail:
       row.detail_html || row.detail_text
         ? { html: row.detail_html, text: row.detail_text }
@@ -403,6 +415,7 @@ export function mapTrip(row: TripRow): TripRequest {
     startAt: row.start_at,
     endAt: row.end_at,
     weekday: row.weekday,
+    salesManagerId: row.sales_manager_id,
     salesManager: row.sales_manager_name
       ? {
           name: row.sales_manager_name,
@@ -411,6 +424,7 @@ export function mapTrip(row: TripRow): TripRequest {
           uidEnc: null,
         }
       : null,
+    projectManagerId: row.project_manager_id,
     projectManager: row.project_manager_name
       ? {
           name: row.project_manager_name,
@@ -512,6 +526,7 @@ export function mapBiddingScreenshot(row: BiddingScreenshotRow): BiddingScreensh
     syncedAt: row.synced_at,
     deletedAt: row.deleted_at,
     salesManager: row.sales_manager,
+    salesManagerId: row.sales_manager_id,
     projectName: row.project_name,
     projectSchool: row.project_school,
     projectSecondaryUnit: row.project_secondary_unit,
@@ -521,9 +536,12 @@ export function mapBiddingScreenshot(row: BiddingScreenshotRow): BiddingScreensh
     reservedDays: row.reserved_days,
     projectBiddingFile: toFileRef(row.project_bidding_file),
     projectCategory: row.project_category ?? [],
+    projectCategoryNorm: row.project_category_norm ?? [],
     screenshotRequirement: row.screenshot_requirement,
     assignedProjectManager: row.assigned_project_manager,
+    assignedPmId: row.assigned_pm_id,
     completionStatus: row.completion_status,
+    completionStatusNorm: row.completion_status_norm,
     deliveryDocument: toFileRef(row.delivery_document),
     deliveryRemark: row.delivery_remark,
     isMeetScreenshotRequirement: row.is_meet_screenshot_requirement,

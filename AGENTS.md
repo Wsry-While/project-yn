@@ -37,6 +37,11 @@
 - `trip_option_dict`：项目外出选项自学习字典，按 `(field_key, source_value)` 唯一；超星推送出现的新支持类型、行业、产品会自动登记并启用，前端筛选用此表。
 - `bidding_screenshots`：招投标截图第三方推送数据，按 `(external_source, external_id)` 唯一；记录销售经理、项目名称、学校/二级单位、是否公司参数、提交日期、需交付日期、预留天数、项目招标文件、类别、截图需求、项目经理、完成情况、交付文档/备注、需求达成、销售反馈、附件、整改反馈与整改文档；删除/恢复使用 `deleted_at` 软删除。
 - `qiming_construction`：启明星建设超星推送数据，按 `(external_source, external_id)` 唯一；记录负责销售经理/所属年度/项目名称/是否签合同/学校/学院/学校层级/建设专业/建设内容(richtext html+text)/建设内容特殊说明(richtext)/项目相关资料(jsonb 文件数组)/项目交付时间(timestamptz)/负责项目经理/项目情况反馈；删除/恢复使用 `deleted_at` 软删除。
+- `team_members`：员工基础数据表，以超星 `puid` 为稳定标识（唯一），name 为 fallback；四张业务表的 `sales_manager_id` / `project_manager_id` / `assigned_pm_id` 外键都指向它，替代早期纯中文姓名存储。推送时由 `TeamMemberService.upsertByContact` 自动 upsert，多项目经理写入 `qiming_pm_members` / `bidding_pm_members` / `project_demand_managers` 关联表。
+- `dict_options`：统一字典表（category+value 唯一，支持 aliases 别名数组），取代早期分散的 `trip_option_dict` 和业务表里的裸文本枚举。推送时 `DictService.normalize(category, rawValue)` 做「精确→别名→自动登记」三级归一，未命中值自动登记为新 option（自学习），管理员事后在字典管理页合并/重命名。已启用分类：`trip_support_type` / `trip_industry` / `trip_product` / `bidding_category` / `bidding_completion` / `demand_type` / `industry_category` / `school_level` / `build_major`。
+- `school_aliases` / `school_department_aliases`：学校与部门别名表，支持同一学校多个名称（如"XX大学"与"XX大学XX校区"）命中同一 `school_id`。`ReferenceResolver.resolveSchool/resolveDepartment` 按「精确名称→别名→规范化（去空格/全角空格/括号备注）→子串模糊→自动创建」五级查找，四张业务表推送时统一调用。
+- 业务表设计原则：**旧中文文本列（`sales_manager` / `school` / `college` / `support_type` 等）全部保留为快照，不删不改 NOT NULL 约束**；新增的 uuid 外键列与 `*_norm` 标准化列承载规范化引用，用于关联查询、"我的工作台"按当前用户聚合、学校 360 视图等深度应用。历史数据通过 `scripts/backfill-master-data.ts` 回填，支持 `--dry-run` 和 `--table=...`。
+- `data_align_queue`：数据对齐队列表，记录自动解析置信度不足或字典未命中需要人工复核的字段（entity_type/entity_id/field/raw_value/reason/suggestion_id/status），供"数据对齐"管理台批量处理。
 - `external_sync_logs`：记录第三方接口同步日志，包含 `direction/op/form_id/index_id/operator/ip/duration_ms/status/error/payload`，用于审计和联调排障。
 
 ## 目录结构

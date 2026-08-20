@@ -180,15 +180,20 @@ export interface TripRequest {
   schoolId: string | null;
   schoolName: string;
   industry: string | null;
+  industryNorm: string | null;
   supportType: string;
+  supportTypeNorm: string | null;
   supportTypeOther: string | null;
   products: string[];
+  productsNorm: string[];
   detail: TripRichText | null;
   tripDate: string;
   startAt: string | null;
   endAt: string | null;
   weekday: number | null;
+  salesManagerId: string | null;
   salesManager: TripContact | null;
+  projectManagerId: string | null;
   projectManager: TripContact | null;
 
   isCompleted: boolean;
@@ -256,6 +261,7 @@ export interface BiddingScreenshot {
   deletedAt: string | null;
 
   salesManager: string;
+  salesManagerId: string | null;
   projectName: string;
   projectSchool: string;
   projectSecondaryUnit: string | null;
@@ -265,9 +271,12 @@ export interface BiddingScreenshot {
   reservedDays: number | null;
   projectBiddingFile: BiddingFileRef | null;
   projectCategory: string[];
+  projectCategoryNorm: string[];
   screenshotRequirement: string | null;
   assignedProjectManager: string | null;
+  assignedPmId: string | null;
   completionStatus: string | null;
+  completionStatusNorm: string | null;
   deliveryDocument: BiddingFileRef | null;
   deliveryRemark: string | null;
   isMeetScreenshotRequirement: boolean | null;
@@ -294,15 +303,20 @@ export interface ProjectDemand {
 
   projectYear: string | null;
   salesManager: string | null;
+  salesManagerId: string | null;
   demandType: string | null;
+  demandTypeNorm: string | null;
   product: string[];
   company: string | null;
+  schoolId: string | null;
   industryCategory: string | null;
+  industryCategoryNorm: string | null;
   demandDescHtml: string | null;
   demandDescText: string | null;
   providedMaterials: BiddingFileRef[];
   requiredFinishDate: string | null;
   projectManager: string | null;
+  projectManagerId: string | null;
   completionStatus: string | null;
   estimatedFinishDate: string | null;
   deliveryContent: string | null;
@@ -327,15 +341,20 @@ export interface ProjectDemandInput {
   externalOperator?: string | null;
   projectYear: string | null;
   salesManager: string;
+  salesManagerId?: string | null;
   demandType: string | null;
+  demandTypeNorm?: string | null;
   product: string[];
   company: string;
+  schoolId?: string | null;
   industryCategory: string | null;
+  industryCategoryNorm?: string | null;
   demandDescHtml: string | null;
   demandDescText: string | null;
   providedMaterials: BiddingFileRef[];
   requiredFinishDate: string | null;
   projectManager: string | null;
+  projectManagerId?: string | null;
   completionStatus: string | null;
   estimatedFinishDate: string | null;
   deliveryContent: string | null;
@@ -345,6 +364,49 @@ export interface ProjectDemandInput {
   deliveryRemark: string | null;
   rawPayload?: unknown;
   rawMeta?: unknown;
+}
+
+// ============== 基础数据：员工 ==============
+
+export interface TeamMember {
+  id: string;
+  puid: string | null;
+  name: string;
+  displayName: string | null;
+  email: string | null;
+  phone: string | null;
+  role: string | null;
+  active: boolean;
+  syncedFrom: string;
+  contactRaw: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TeamMemberInput {
+  puid?: string | null;
+  name: string;
+  displayName?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  role?: string | null;
+  active?: boolean;
+  syncedFrom?: string;
+  contactRaw?: Record<string, unknown> | null;
+}
+
+// ============== 基础数据：字典 ==============
+
+export interface DictOption {
+  id: string;
+  category: string;
+  value: string;
+  aliases: string[];
+  sortOrder: number;
+  active: boolean;
+  source: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 // ============== 启明星建设（超星推送） ==============
@@ -358,13 +420,18 @@ export interface QimingConstruction {
   externalOperator: string | null;
 
   salesManager: string | null;
+  salesManagerId: string | null;
   projectYear: string | null;
   projectName: string | null;
   isSignContract: boolean | null;
   school: string | null;
+  schoolId: string | null;
   college: string | null;
+  collegeId: string | null;
   schoolLevel: string | null;
+  schoolLevelNorm: string | null;
   buildMajor: string | null;
+  buildMajorNorm: string | null;
   buildContentHtml: string | null;
   buildContentText: string | null;
   buildSpecialDescHtml: string | null;
@@ -372,6 +439,7 @@ export interface QimingConstruction {
   projectMaterials: BiddingFileRef[];
   projectDeliveryTime: string | null;
   projectManager: string | null;
+  projectManagerId: string | null;
   projectStatusFeedback: string | null;
 
   rawPayload: Record<string, unknown> | null;
@@ -390,13 +458,18 @@ export interface QimingConstructionInput {
   externalOperator?: string | null;
 
   salesManager: string | null;
+  salesManagerId?: string | null;
   projectYear: string | null;
   projectName: string | null;
   isSignContract: boolean | null;
   school: string | null;
+  schoolId?: string | null;
   college: string | null;
+  collegeId?: string | null;
   schoolLevel: string | null;
+  schoolLevelNorm?: string | null;
   buildMajor: string | null;
+  buildMajorNorm?: string | null;
   buildContentHtml: string | null;
   buildContentText: string | null;
   buildSpecialDescHtml: string | null;
@@ -404,6 +477,7 @@ export interface QimingConstructionInput {
   projectMaterials: BiddingFileRef[];
   projectDeliveryTime: string | null;
   projectManager: string | null;
+  projectManagerId?: string | null;
   projectStatusFeedback: string | null;
 
   rawPayload?: unknown;

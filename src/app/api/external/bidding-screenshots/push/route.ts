@@ -3,7 +3,9 @@ import { ok, fail, withApi } from '@/lib/domain/http';
 import { getAdminSupabase } from '@/lib/domain/api-utils';
 import { BiddingScreenshotService } from '@/lib/domain/bidding-screenshot-service';
 import { processBiddingAttachments } from '@/lib/domain/bidding-attachment-service';
-import { SchoolService } from '@/lib/domain/school-service';
+import { TeamMemberService } from '@/lib/domain/team-member-service';
+import { DictService } from '@/lib/domain/dict-service';
+import { ReferenceResolver } from '@/lib/domain/reference-resolver';
 import {
   normalizeFile,
   normalizeFiles,
@@ -196,9 +198,14 @@ function coerceChaoxingEnvelope(parsed: unknown): { items: PushItem[]; topLevelM
 
 function parseBody(body: PushItem, topLevel: PushItem = {}) {
   const read = (...keys: string[]) => readField(body, topLevel, keys);
+  const salesManagerContact =
+    body.salesManager ?? body.sales_manager ?? body['销售经理'] ??
+    topLevel.salesManager ?? topLevel.sales_manager;
+  const pmContact =
+    body.assignedProjectManager ?? body.assigned_project_manager ?? body['指派项目经理'] ?? body['项目经理'] ??
+    topLevel.assignedProjectManager ?? topLevel.assigned_project_manager;
   const salesManager =
-    pickContactName(body.salesManager) ||
-    read('salesManager', 'sales_manager', '销售经理') ||
+    pickContactName(salesManagerContact) ||
     read('salesManagerName', 'salesOwner');
   const projectName = read('projectName', 'project_name', '项目名称');
   const projectSchool = read('projectSchool', 'project_school', '项目所属学校', '学校', 'schoolName');
@@ -209,6 +216,8 @@ function parseBody(body: PushItem, topLevel: PushItem = {}) {
 
   return {
     salesManager,
+    salesManagerContact,
+    pmContact,
     projectName,
     projectSchool,
     submissionDate,
@@ -312,7 +321,9 @@ export async function POST(request: NextRequest) {
 
     const db = getAdminSupabase();
     const service = new BiddingScreenshotService(db);
-    const schools = new SchoolService(db);
+    const resolver = new ReferenceResolver(db);
+    const memberService = new TeamMemberService(db);
+    const dictService = new DictService(db);
     const ip = request.headers.get('x-forwarded-for') ?? request.headers.get('x-real-ip') ?? null;
     const results: Array<{
       externalId: string;
@@ -433,10 +444,22 @@ export async function POST(request: NextRequest) {
           rectifiedDocument: mapped.rectifiedDocument,
         };
 
-        const schoolId = await schools.findOrCreateSchoolByName(validated.projectSchool);
+        const schoolId = await resolver.resolveSchool(validated.projectSchool);
+        const [salesMember, pmMembers, normCategories, normCompletion] = await Promise.all([
+          memberService.upsertByContact(mapped.salesManagerContact, 'sales'),
+          memberService.upsertManyByContacts(mapped.pmContact, 'pm'),
+          dictService.normalizeMany('bidding_category', validated.projectCategory ?? []),
+          dictService.normalize('bidding_completion', validated.completionStatus),
+        ]);
+        const primaryPmId = pmMembers[0]?.id ?? null;
         const { row, created } = await service.upsertFromExternal(
           {
             ...validated,
+            projectCategory: validated.projectCategory ?? [],
+            projectCategoryNorm: normCategories,
+            completionStatusNorm: normCompletion,
+            salesManagerId: salesMember?.id ?? null,
+            assignedPmId: primaryPmId,
             externalId,
             externalSource: SOURCE,
             externalOp: effectiveOp,
@@ -447,6 +470,21 @@ export async function POST(request: NextRequest) {
           },
           schoolId,
         );
+
+        // 维护多值 PM 关联表
+        if (row.id) {
+          const allPmIds = pmMembers.map((m) => m.id);
+          await db.from('bidding_pm_members').delete().eq('bidding_id', row.id);
+          if (allPmIds.length > 0) {
+            await db.from('bidding_pm_members').insert(
+              allPmIds.map((memberId, idx) => ({
+                bidding_id: row.id,
+                member_id: memberId,
+                sort_order: idx,
+              })),
+            );
+          }
+        }
         results.push({ externalId, result: created ? 'created' : 'updated', localId: row.id });
         await writeSyncLog({ db, externalId, op: effectiveOp, operator, ip, durationMs: Date.now() - startedAt, status: 'success', entityId: row.id, message: `已${created ? '创建' : '更新'}招投标截图记录`, payload: auditPayload });
         after(async () => {

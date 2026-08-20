@@ -14,6 +14,7 @@ export interface BiddingScreenshotListFilter {
 
 export interface BiddingScreenshotInput {
   salesManager: string;
+  salesManagerId?: string | null;
   projectName: string;
   projectSchool: string;
   projectSecondaryUnit?: string | null;
@@ -23,9 +24,12 @@ export interface BiddingScreenshotInput {
   reservedDays?: number | null;
   projectBiddingFile?: BiddingFileRef | null;
   projectCategory?: string[] | null;
+  projectCategoryNorm?: string[] | null;
   screenshotRequirement?: string | null;
   assignedProjectManager?: string | null;
+  assignedPmId?: string | null;
   completionStatus?: string | null;
+  completionStatusNorm?: string | null;
   deliveryDocument?: BiddingFileRef | null;
   deliveryRemark?: string | null;
   isMeetScreenshotRequirement?: boolean | null;
@@ -122,9 +126,11 @@ export class BiddingScreenshotService {
       reserved_days: input.reservedDays ?? null,
       project_bidding_file: input.projectBiddingFile ?? null,
       project_category: input.projectCategory ?? [],
+      project_category_norm: input.projectCategoryNorm ?? input.projectCategory ?? [],
       screenshot_requirement: input.screenshotRequirement?.trim() || null,
       assigned_project_manager: input.assignedProjectManager?.trim() || null,
       completion_status: input.completionStatus?.trim() || null,
+      completion_status_norm: input.completionStatusNorm ?? (input.completionStatus?.trim() || null),
       delivery_document: input.deliveryDocument ?? null,
       delivery_remark: input.deliveryRemark?.trim() || null,
       is_meet_screenshot_requirement: input.isMeetScreenshotRequirement ?? null,
@@ -133,6 +139,8 @@ export class BiddingScreenshotService {
       rectification_feedback: input.rectificationFeedback?.trim() || null,
       rectified_document: input.rectifiedDocument ?? null,
       school_id: schoolId,
+      sales_manager_id: input.salesManagerId ?? null,
+      assigned_pm_id: input.assignedPmId ?? null,
     };
   }
 

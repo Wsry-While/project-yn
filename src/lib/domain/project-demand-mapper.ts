@@ -9,15 +9,20 @@ export type ProjectDemandRow = {
   external_operator: string | null;
   project_year: string | null;
   sales_manager: string | null;
+  sales_manager_id: string | null;
   demand_type: string | null;
+  demand_type_norm: string | null;
   product: unknown;
   company: string | null;
+  school_id: string | null;
   industry_category: string | null;
+  industry_category_norm: string | null;
   demand_desc_html: string | null;
   demand_desc_text: string | null;
   provided_materials: unknown;
   required_finish_date: string | null;
   project_manager: string | null;
+  project_manager_id: string | null;
   completion_status: string | null;
   estimated_finish_date: string | null;
   delivery_content: string | null;
@@ -94,15 +99,20 @@ export function mapProjectDemand(row: ProjectDemandRow): ProjectDemand {
     externalOperator: row.external_operator,
     projectYear: row.project_year,
     salesManager: row.sales_manager,
+    salesManagerId: row.sales_manager_id,
     demandType: row.demand_type,
+    demandTypeNorm: row.demand_type_norm,
     product: mapStringArrayFlexible(row.product),
     company: row.company,
+    schoolId: row.school_id,
     industryCategory: row.industry_category,
+    industryCategoryNorm: row.industry_category_norm,
     demandDescHtml: row.demand_desc_html,
     demandDescText: row.demand_desc_text,
     providedMaterials: mapFileArray(row.provided_materials),
     requiredFinishDate: row.required_finish_date,
     projectManager: row.project_manager,
+    projectManagerId: row.project_manager_id,
     completionStatus: row.completion_status,
     estimatedFinishDate: row.estimated_finish_date,
     deliveryContent: row.delivery_content,
