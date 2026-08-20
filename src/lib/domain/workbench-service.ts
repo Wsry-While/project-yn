@@ -19,6 +19,8 @@ export interface WorkbenchItem {
 
 export interface MyWorkbench {
   member: { id: string; name: string } | null;
+  /** 调试/提示用：当前登录用户的超星 UID（可能为空字符串） */
+  selfUid: string;
   counts: {
     total: number;
     overdue: number;
@@ -78,8 +80,10 @@ export class WorkbenchService {
 
   async forUser(user: SessionUserLike): Promise<MyWorkbench> {
     const memberId = await resolveCurrentMemberId(this.db, user);
+    const selfUid = user.chaoxing.uid?.trim() ?? '';
     const empty: MyWorkbench = {
       member: null,
+      selfUid,
       counts: { total: 0, overdue: 0, today: 0, week: 0, later: 0 },
       bySource: { trip: 0, bidding: 0, demand: 0, qiming: 0 },
       items: { overdue: [], today: [], week: [], later: [] },
@@ -131,6 +135,7 @@ export class WorkbenchService {
 
     return {
       member: { id: member.id, name: member.name },
+      selfUid,
       counts: {
         total: items.filter((i) => !i.isCompleted).length,
         overdue: buckets.overdue.length,

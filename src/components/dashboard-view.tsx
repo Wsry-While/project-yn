@@ -204,14 +204,6 @@ export function DashboardView() {
     };
   }, [project]);
 
-  if (!project) {
-    return (
-      <div className="p-6 text-sm text-muted-foreground">
-        尚未选择项目，请联系管理员创建项目后刷新。
-      </div>
-    );
-  }
-
   const items: TimelineItem[] = activity.map((a) => ({
     id: a.id,
     actor: a.actorName,
@@ -235,7 +227,7 @@ export function DashboardView() {
           </div>
           <div className="flex flex-wrap items-end justify-between gap-3">
             <h1 className="text-2xl font-semibold tracking-tight">
-              {project.name}
+              {project ? project.name : '仪表盘'}
             </h1>
             <Button asChild size="sm" variant="secondary">
               <Link href="/kanban">
@@ -244,7 +236,7 @@ export function DashboardView() {
               </Link>
             </Button>
           </div>
-          {project.description && (
+          {project?.description && (
             <p className="max-w-2xl text-sm text-muted-foreground">{project.description}</p>
           )}
         </div>
@@ -282,9 +274,15 @@ export function DashboardView() {
 
           {!workbench?.member ? (
             <div className="px-5 py-8 text-center text-sm text-muted-foreground">
-              尚未在员工档案中匹配到你的账号（超星 UID：
-              <span className="font-mono">未识别</span>
-              ）。等业务推送一条你参与的工单后即可自动关联。
+              尚未在员工档案中匹配到你的账号
+              {workbench?.selfUid ? (
+                <>
+                  （超星 UID：<span className="font-mono">{workbench.selfUid}</span>）
+                </>
+              ) : (
+                '（未获取到超星 UID）'
+              )}
+              。等业务推送一条你参与的工单后即可自动关联；若你已有参与工单仍看不到，请联系管理员在「团队」里补全你的超星 UID。
             </div>
           ) : workbench.counts.total === 0 ? (
             <div className="px-5 py-8 text-center text-sm text-muted-foreground">
@@ -324,7 +322,7 @@ export function DashboardView() {
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <StatCard
             label="待办"
-            value={stats?.totals.todo ?? '—'}
+            value={stats?.totals.todo ?? (project ? '—' : '—')}
             icon={Circle}
             tone="text-zinc-500"
           />
@@ -345,81 +343,85 @@ export function DashboardView() {
             value={stats?.totals.done ?? '—'}
             icon={CheckCircle2}
             tone="text-emerald-500"
-            hint={`共 ${stats?.total ?? 0} 个任务`}
+            hint={stats ? `共 ${stats.total} 个任务` : undefined}
           />
         </div>
 
-        <div className="rounded-lg border border-border bg-card p-5">
-          <ProgressBar ratio={stats?.doneRatio ?? 0} />
-        </div>
+        {project && stats && (
+          <div className="rounded-lg border border-border bg-card p-5">
+            <ProgressBar ratio={stats.doneRatio} />
+          </div>
+        )}
 
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-          <div className="rounded-lg border border-border bg-card p-5 lg:col-span-2">
-            <h2 className="mb-4 flex items-center gap-2 text-sm font-semibold">
-              <KanbanSquare className="h-4 w-4 text-brand" />
-              即将到期 / 已逾期
-            </h2>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div>
-                <div className="mb-2 text-xs font-medium uppercase tracking-wider text-amber-500">
-                  已逾期
+        {project && (
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+            <div className="rounded-lg border border-border bg-card p-5 lg:col-span-2">
+              <h2 className="mb-4 flex items-center gap-2 text-sm font-semibold">
+                <KanbanSquare className="h-4 w-4 text-brand" />
+                即将到期 / 已逾期
+              </h2>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <div className="mb-2 text-xs font-medium uppercase tracking-wider text-amber-500">
+                    已逾期
+                  </div>
+                  <ul className="space-y-1.5">
+                    {(stats?.overdue ?? []).slice(0, 4).map((t) => {
+                      const Meta = STATUS_META[t.status];
+                      const Icon = Meta.icon;
+                      return (
+                        <li
+                          key={t.id}
+                          className="flex items-center gap-2 rounded-md border border-red-500/20 bg-red-500/5 px-2.5 py-1.5 text-xs"
+                        >
+                          <Icon className={cn('h-3.5 w-3.5 shrink-0', Meta.tone)} />
+                          <span className="flex-1 truncate">{t.title}</span>
+                          <span className="font-mono text-red-500">
+                            {t.dueDate ? new Date(t.dueDate).toLocaleDateString('zh-CN') : '—'}
+                          </span>
+                        </li>
+                      );
+                    })}
+                    {(stats?.overdue.length ?? 0) === 0 && (
+                      <li className="text-xs text-muted-foreground">无逾期任务</li>
+                    )}
+                  </ul>
                 </div>
-                <ul className="space-y-1.5">
-                  {(stats?.overdue ?? []).slice(0, 4).map((t) => {
-                    const Meta = STATUS_META[t.status];
-                    const Icon = Meta.icon;
-                    return (
-                      <li
-                        key={t.id}
-                        className="flex items-center gap-2 rounded-md border border-red-500/20 bg-red-500/5 px-2.5 py-1.5 text-xs"
-                      >
-                        <Icon className={cn('h-3.5 w-3.5 shrink-0', Meta.tone)} />
-                        <span className="flex-1 truncate">{t.title}</span>
-                        <span className="font-mono text-red-500">
-                          {new Date(t.dueDate!).toLocaleDateString('zh-CN')}
-                        </span>
-                      </li>
-                    );
-                  })}
-                  {(stats?.overdue.length ?? 0) === 0 && (
-                    <li className="text-xs text-muted-foreground">无逾期任务 🎉</li>
-                  )}
-                </ul>
-              </div>
-              <div>
-                <div className="mb-2 text-xs font-medium uppercase tracking-wider text-brand">
-                  7 天内到期
+                <div>
+                  <div className="mb-2 text-xs font-medium uppercase tracking-wider text-brand">
+                    7 天内到期
+                  </div>
+                  <ul className="space-y-1.5">
+                    {(stats?.upcoming ?? []).slice(0, 4).map((t) => {
+                      const Meta = STATUS_META[t.status];
+                      const Icon = Meta.icon;
+                      return (
+                        <li
+                          key={t.id}
+                          className="flex items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs"
+                        >
+                          <Icon className={cn('h-3.5 w-3.5 shrink-0', Meta.tone)} />
+                          <span className="flex-1 truncate">{t.title}</span>
+                          <span className="font-mono text-muted-foreground">
+                            {t.dueDate ? new Date(t.dueDate).toLocaleDateString('zh-CN') : '—'}
+                          </span>
+                        </li>
+                      );
+                    })}
+                    {(stats?.upcoming.length ?? 0) === 0 && (
+                      <li className="text-xs text-muted-foreground">暂无即将到期任务</li>
+                    )}
+                  </ul>
                 </div>
-                <ul className="space-y-1.5">
-                  {(stats?.upcoming ?? []).slice(0, 4).map((t) => {
-                    const Meta = STATUS_META[t.status];
-                    const Icon = Meta.icon;
-                    return (
-                      <li
-                        key={t.id}
-                        className="flex items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs"
-                      >
-                        <Icon className={cn('h-3.5 w-3.5 shrink-0', Meta.tone)} />
-                        <span className="flex-1 truncate">{t.title}</span>
-                        <span className="font-mono text-muted-foreground">
-                          {new Date(t.dueDate!).toLocaleDateString('zh-CN')}
-                        </span>
-                      </li>
-                    );
-                  })}
-                  {(stats?.upcoming.length ?? 0) === 0 && (
-                    <li className="text-xs text-muted-foreground">暂无即将到期任务</li>
-                  )}
-                </ul>
               </div>
             </div>
-          </div>
 
-          <div className="rounded-lg border border-border bg-card p-5">
-            <h2 className="mb-4 text-sm font-semibold">最近动态</h2>
-            <Timeline items={items} />
+            <div className="rounded-lg border border-border bg-card p-5">
+              <h2 className="mb-4 text-sm font-semibold">最近动态</h2>
+              <Timeline items={items} />
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </LlmLoadingMask>
   );

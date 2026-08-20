@@ -23,21 +23,30 @@ export class ProjectService {
   constructor(private readonly db: SupabaseClient) {}
 
   async listForUser(userId: string): Promise<Project[]> {
-    const { data, error } = await this.db
+    // 1) 从 project_members 中查出该用户参与的项目 id
+    const { data: memberRows, error: memberErr } = await this.db
+      .from('project_members')
+      .select('project_id')
+      .eq('user_id', userId);
+    if (memberErr) throw memberErr;
+    const memberProjectIds = (memberRows ?? []).map((r) => r.project_id as string);
+
+    // 2) 用 owner_id 或 project.id ∈ memberProjectIds 过滤
+    let query = this.db
       .from('projects')
-      .select('*, project_members!left(*)')
+      .select('*')
       .eq('status', 'active')
-      .or(`owner_id.eq.${userId},project_members.user_id.eq.${userId}`)
       .order('updated_at', { ascending: false });
+
+    if (memberProjectIds.length > 0) {
+      query = query.or(`owner_id.eq.${userId},id.in.(${memberProjectIds.join(',')})`);
+    } else {
+      query = query.eq('owner_id', userId);
+    }
+
+    const { data, error } = await query;
     if (error) throw error;
-    // 去重（join 后同 project 可能出现多行）
-    const seen = new Set<string>();
-    const rows = (data as ProjectRow[]).filter((r) => {
-      if (seen.has(r.id)) return false;
-      seen.add(r.id);
-      return true;
-    });
-    return rows.map(mapProject);
+    return (data as ProjectRow[]).map(mapProject);
   }
 
   async findFirstForUser(userId: string): Promise<Project | null> {
