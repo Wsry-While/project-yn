@@ -3,8 +3,10 @@
  *
  * 规则（由超星运维确认）：
  * - 下载地址：https://d0.cldisk.com/download/{objectId}
- * - 通过 UA 白名单防盗链，User-Agent 固定为 CHAOXING_FILE_UA
- * - Referer 必须为空（不能带任何来源）
+ * - 通过 UA + Referer 白名单防盗链
+ * - User-Agent 固定为 CHAOXING_FILE_UA
+ * - Referer 必须为本平台对外访问域名（由 CHAOXING_FILE_REFERER 指定，
+ *   缺省取 COZE_PROJECT_DOMAIN_DEFAULT），供超星 CDN 做来源白名单校验
  * - 不依赖 at_/ak_/ad_ 等临时签名参数
  */
 
@@ -13,6 +15,29 @@ const CHAOXING_HOST = 'd0.cldisk.com';
 const OBJECT_ID_RE = /^[a-f0-9]{32}$/i;
 const MAX_FILE_BYTES = 100 * 1024 * 1024; // 100MB
 const FETCH_TIMEOUT_MS = 30_000;
+
+/**
+ * 返回本次请求超星云盘需要携带的 Referer。
+ *
+ * 优先级：
+ *   1. 环境变量 CHAOXING_FILE_REFERER（可显式覆盖，用于生产/预发不同域名）
+ *   2. 环境变量 COZE_PROJECT_DOMAIN_DEFAULT（沙箱对外域名）
+ *
+ * 两者都未配置时返回空串（向后兼容）。生产/开发环境都应保证至少配置其一，
+ * 否则超星 CDN 会以 403 拒绝。
+ */
+export function getChaoxingReferer(): string {
+  const explicit = process.env.CHAOXING_FILE_REFERER?.trim();
+  if (explicit) {
+    return explicit.endsWith('/') ? explicit.slice(0, -1) : explicit;
+  }
+  const domain = process.env.COZE_PROJECT_DOMAIN_DEFAULT?.trim();
+  if (domain) {
+    const withProto = /^https?:\/\//i.test(domain) ? domain : `https://${domain}`;
+    return withProto.endsWith('/') ? withProto.slice(0, -1) : withProto;
+  }
+  return '';
+}
 
 export interface ChaoxingDownloadResult {
   stream: ReadableStream<Uint8Array>;
@@ -71,6 +96,13 @@ export async function downloadChaoxingFile(
   assertValidObjectId(objectId);
 
   const url = `https://${CHAOXING_HOST}/download/${objectId}`;
+  const referer = getChaoxingReferer();
+
+  const buildHeaders = (): Record<string, string> => ({
+    'User-Agent': CHAOXING_FILE_UA,
+    'Accept': '*/*',
+    ...(referer ? { 'Referer': referer } : {}),
+  });
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -81,11 +113,7 @@ export async function downloadChaoxingFile(
       method: 'GET',
       redirect: 'manual',
       signal: controller.signal,
-      headers: {
-        'User-Agent': CHAOXING_FILE_UA,
-        'Referer': '',
-        'Accept': '*/*',
-      },
+      headers: buildHeaders(),
     });
   } catch (err) {
     clearTimeout(timer);
@@ -96,7 +124,7 @@ export async function downloadChaoxingFile(
   }
 
   try {
-    // 手动跟随 3xx，确保每一跳 Referer 都为空
+    // 手动跟随 3xx，确保每一跳 Referer 一致
     let redirectCount = 0;
     while (response.status >= 300 && response.status < 400) {
       if (redirectCount >= 5) {
@@ -113,17 +141,17 @@ export async function downloadChaoxingFile(
         method: 'GET',
         redirect: 'manual',
         signal: controller.signal,
-        headers: {
-          'User-Agent': CHAOXING_FILE_UA,
-          'Referer': '',
-          'Accept': '*/*',
-        },
+        headers: buildHeaders(),
       });
       redirectCount++;
     }
 
     if (response.status === 403) {
-      throw new ChaoxingFileError('超星防盗链校验失败（UA 白名单未生效或 Referer 非空）', 'forbidden', 403);
+      throw new ChaoxingFileError(
+        `超星防盗链校验失败（UA 或 Referer 白名单未生效），Referer=${referer || '(空)'}`,
+        'forbidden',
+        403,
+      );
     }
     if (response.status === 404) {
       throw new ChaoxingFileError('超星文件不存在或已删除', 'not_found', 404);
