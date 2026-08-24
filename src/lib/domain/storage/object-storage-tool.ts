@@ -61,10 +61,24 @@ export async function uploadToStorage(input: StorageUploadInput): Promise<Storag
   return { bucket, key: input.key, path: `${bucket}/${input.key}` };
 }
 
-/** 生成短期签名下载 URL（默认 10 分钟）。 */
-export async function createSignedDownloadUrl(bucket: string, key: string, expiresInSec = 600): Promise<string> {
+/**
+ * 生成短期签名 URL（默认 10 分钟）。
+ *
+ * @param options.download
+ * - 不传或 true：返回的 URL 带 download 参数，浏览器以附件方式下载；
+ * - false：内联 URL，浏览器直接渲染（用于图片/PDF 等在线预览）；
+ * - string：以指定文件名触发下载。
+ */
+export async function createSignedDownloadUrl(
+  bucket: string,
+  key: string,
+  expiresInSec = 600,
+  options?: { download?: boolean | string },
+): Promise<string> {
   const db = getSupabaseAdminClient();
-  const { data, error } = await db.storage.from(bucket).createSignedUrl(key, expiresInSec);
+  const { data, error } = await db.storage.from(bucket).createSignedUrl(key, expiresInSec, {
+    download: options?.download,
+  });
   if (error || !data) {
     throw new Error(`生成签名 URL 失败: ${error?.message ?? 'unknown'}`);
   }

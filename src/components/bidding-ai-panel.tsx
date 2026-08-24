@@ -164,7 +164,7 @@ export function BiddingAiPanel({ record }: { record: BiddingScreenshot }) {
       </div>
 
       {!hasBiddingFile ? (
-        <p className="text-xs text-muted-foreground">该记录没有已转存的招标文件，请先在上方「项目招标文件」处预览/重新获取附件。</p>
+        <p className="text-xs text-muted-foreground">该记录的招标文件尚未转存到本系统，请先在上方「项目招标文件」处点击「获取」附件。</p>
       ) : null}
 
       {scoreText ? (

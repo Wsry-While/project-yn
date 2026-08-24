@@ -3,7 +3,7 @@
  * 复用招投标截图的转存工具链（external_file_assets 表 + chaoxing file-tool + storage-tool）。
  */
 import { getSupabaseAdminClient } from '@/lib/supabase-client';
-import { resolveAssetDownload, retryAssetTransfer, ensureAndTransferByObjectId } from './asset-access';
+import { resolveAssetDownload, retryAssetTransfer, ensureAndTransferByObjectId, getAssetMeta as getAssetMetaFromAccess } from './asset-access';
 import type { BiddingFileRef, BiddingFileStorageStatus, ProjectDemand } from './types';
 import {
   downloadChaoxingFile,
@@ -152,7 +152,11 @@ export async function processDemandAttachments(record: ProjectDemand): Promise<v
     }));
   }
   const db = getSupabaseAdminClient();
-  await db.from('project_demands').update(nextFiles).eq('id', record.id);
+  // 数据库列为蛇形，显式映射避免驼峰 key 导致列不存在。
+  await db
+    .from('project_demands')
+    .update({ provided_materials: nextFiles.providedMaterials, delivery_docs: nextFiles.deliveryDocs })
+    .eq('id', record.id);
 
   for (const { field, file } of attachments) {
     if (!file.objectId) continue;
@@ -203,7 +207,10 @@ export async function processDemandAttachments(record: ProjectDemand): Promise<v
     }
   }
 
-  await db.from('project_demands').update(nextFiles).eq('id', record.id);
+  await db
+    .from('project_demands')
+    .update({ provided_materials: nextFiles.providedMaterials, delivery_docs: nextFiles.deliveryDocs })
+    .eq('id', record.id);
 }
 
 export async function getDemandAssetSignedUrl(assetId: string): Promise<{ signedUrl: string; fileName: string } | null> {
@@ -239,6 +246,7 @@ export async function retransferDemandFile(
   if (!result.assetId) return { ok: false, error: result.error };
 
   const db = getSupabaseAdminClient();
+  const successMeta = result.ok ? await getAssetMetaFromAccess(result.assetId) : null;
   const next = (record[field] ?? []).map((f) => {
     if (f.objectId !== objectId) return f;
     const base = { ...f, assetId: result.assetId };
@@ -248,8 +256,16 @@ export async function retransferDemandFile(
     if (!result.ok) {
       return { ...base, storageStatus: 'failed' as BiddingFileStorageStatus, storageError: result.error ?? '转存失败' };
     }
-    return { ...base, bucket: f.bucket ?? null, storageKey: f.storageKey ?? null, storageStatus: 'stored' as BiddingFileStorageStatus, storedAt: new Date().toISOString(), storageError: null };
+    return {
+      ...base,
+      bucket: successMeta?.bucket ?? f.bucket ?? null,
+      storageKey: successMeta?.storageKey ?? f.storageKey ?? null,
+      storageStatus: 'stored' as BiddingFileStorageStatus,
+      storedAt: new Date().toISOString(),
+      storageError: null,
+    };
   });
-  await db.from('project_demands').update({ [field]: next }).eq('id', record.id);
+  const column = field === 'providedMaterials' ? 'provided_materials' : 'delivery_docs';
+  await db.from('project_demands').update({ [column]: next }).eq('id', record.id);
   return { ok: result.ok, status: result.status, assetId: result.assetId, error: result.error };
 }

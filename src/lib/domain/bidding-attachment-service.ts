@@ -234,7 +234,13 @@ async function persistBusinessRecord(
   >,
 ): Promise<void> {
   const db = getSupabaseAdminClient();
-  const { error } = await db.from('bidding_screenshots').update(patch).eq('id', record.id);
+  // 数据库列为蛇形，这里显式映射，避免把驼峰 key 直接传给 update 导致列不存在。
+  const dbPatch: Record<string, unknown> = {};
+  if (patch.projectBiddingFile !== undefined) dbPatch.project_bidding_file = patch.projectBiddingFile;
+  if (patch.deliveryDocument !== undefined) dbPatch.delivery_document = patch.deliveryDocument;
+  if (patch.attachments !== undefined) dbPatch.attachments = patch.attachments;
+  if (patch.rectifiedDocument !== undefined) dbPatch.rectified_document = patch.rectifiedDocument;
+  const { error } = await db.from('bidding_screenshots').update(dbPatch).eq('id', record.id);
   if (error) log('warn', 'persistBusinessRecord failed', { id: record.id, error: error.message });
 }
 

@@ -32,7 +32,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
       return fail('unsupported_media_type', 'Office 文档请下载后查看，或使用在线预览', 415);
     }
 
-    const resolved = await resolveAssetDownload(assetId);
+    const resolved = await resolveAssetDownload(assetId, { asPreview: true });
     if (!resolved) {
       return fail('not_ready', `附件当前状态为 ${meta.status}，请先重新获取`, 409);
     }

@@ -91,21 +91,9 @@ export function AttachmentLink({
   const [open, setOpen] = useState(false);
   const [acquiring, setAcquiring] = useState(false);
 
-  if (!file) return <span className="text-muted-foreground">—</span>;
-
-  const name = file.name || fallbackLabel;
-  const hasAsset = !!file.assetId;
-  const hasObjectId = !!file.objectId;
-  const failed = file.storageStatus === 'failed';
-  const pending = file.storageStatus === 'pending' || file.storageStatus === 'fetching';
-  // 可点开预览：已转存（有 assetId），或有外链/超星 objectId 可兜底。
-  const canPreview = hasAsset || !!file.url || hasObjectId;
-  // 可就地「获取/重试」：有 objectId 且知道业务线+记录+字段，能调 /api/files/transfer 回写。
-  const canAcquire =
-    hasObjectId && !!business && !!externalId && !!field && file.storageStatus !== 'stored' && file.storageStatus !== 'direct';
-
-  const handleAcquire = async () => {
-    if (!file.objectId || !business || !externalId || !field) return;
+  // 提前用 useCallback 固定引用，避免在 `if (!file) return` 之后调用 Hook。
+  const handleAcquire = useCallback(async () => {
+    if (!file?.objectId || !business || !externalId || !field) return;
     setAcquiring(true);
     try {
       const result = await apiFetch<{ ok: boolean; status?: string; error?: string }>('/api/files/transfer', {
@@ -113,7 +101,9 @@ export function AttachmentLink({
         body: JSON.stringify({ business, recordId: externalId, field, objectId: file.objectId }),
       });
       if (result.ok) {
-        showToast(result.status === 'direct' ? '文件较大，已切换为超星直链' : '附件已获取', { kind: 'success' });
+        showToast(result.status === 'direct' ? '文件较大，已切换为超星直链' : '附件已获取，正在刷新', {
+          kind: 'success',
+        });
         onRetried?.();
       } else {
         showToast(result.error || '获取附件失败，请稍后再试', { kind: 'error' });
@@ -123,6 +113,37 @@ export function AttachmentLink({
     } finally {
       setAcquiring(false);
     }
+  }, [file, business, externalId, field, onRetried]);
+
+  if (!file) return <span className="text-muted-foreground">—</span>;
+
+  const name = file.name || fallbackLabel;
+  const hasAsset = !!file.assetId;
+  const hasObjectId = !!file.objectId;
+  const failed = file.storageStatus === 'failed';
+  const pending = file.storageStatus === 'pending' || file.storageStatus === 'fetching';
+  // 是否已转存到本系统：stored/direct 都算可预览（direct 为超大文件降级）。
+  const stored = hasAsset && (file.storageStatus === 'stored' || file.storageStatus === 'direct');
+  // 可就地「获取/重试」：有 objectId 且知道业务线+记录+字段。
+  const canAcquire =
+    hasObjectId &&
+    !!business &&
+    !!externalId &&
+    !!field &&
+    file.storageStatus !== 'stored' &&
+    file.storageStatus !== 'direct' &&
+    !acquiring;
+  // 名称可点击：已转存（打开本系统预览），或可触发获取。
+  const clickable = stored || canAcquire || (!!file.url && !hasObjectId);
+
+  const handleNameClick = () => {
+    if (stored) {
+      setOpen(true);
+    } else if (canAcquire) {
+      void handleAcquire();
+    } else if (file.url && !hasObjectId) {
+      window.open(file.url, '_blank', 'noopener,noreferrer');
+    }
   };
 
   return (
@@ -130,27 +151,28 @@ export function AttachmentLink({
       <span className="inline-flex max-w-full items-center gap-1.5 text-sm">
         <button
           type="button"
-          disabled={!canPreview}
-          onClick={() => {
-            if (hasAsset) setOpen(true);
-            else if (file.url) window.open(file.url, '_blank', 'noopener,noreferrer');
-            else if (hasObjectId)
-              window.open(
-                `/api/files/chaoxing-direct?objectId=${encodeURIComponent(file.objectId!)}`,
-                '_blank',
-                'noopener,noreferrer',
-              );
-          }}
+          disabled={!clickable}
+          onClick={handleNameClick}
           className={cn(
             'inline-flex min-w-0 items-center gap-1.5 transition-colors',
-            canPreview
-              ? 'text-brand hover:underline'
+            clickable
+              ? stored
+                ? 'text-brand hover:underline'
+                : 'text-brand hover:underline'
               : failed
                 ? 'cursor-pointer text-red-500 hover:underline'
                 : 'text-muted-foreground',
-            !canPreview && 'cursor-not-allowed opacity-60',
+            !clickable && 'cursor-not-allowed opacity-60',
           )}
-          title={file.storageError ?? name}
+          title={
+            acquiring
+              ? '正在获取附件…'
+              : stored
+                ? name
+                : canAcquire
+                  ? '点击获取本系统可预览的附件'
+                  : file.storageError ?? name
+          }
         >
           {variant === 'doc' ? (
             <FileText className="h-3.5 w-3.5 shrink-0" />
@@ -158,10 +180,13 @@ export function AttachmentLink({
             <Paperclip className="h-3.5 w-3.5 shrink-0" />
           )}
           <span className="truncate">{name}</span>
-          {failed && !canAcquire && <span className="text-[10px] text-red-500">(点击重试)</span>}
           {pending && <Loader2 className="h-3 w-3 shrink-0 animate-spin text-muted-foreground" />}
+          {failed && <span className="text-[10px] text-red-500">(获取失败)</span>}
+          {!stored && canAcquire && !failed && !pending && (
+            <span className="shrink-0 text-[10px] text-brand/80">(未获取)</span>
+          )}
         </button>
-        {canAcquire && (
+        {canAcquire ? (
           <button
             type="button"
             onClick={handleAcquire}
@@ -169,8 +194,14 @@ export function AttachmentLink({
             className="inline-flex shrink-0 items-center gap-0.5 rounded border border-brand/30 px-1.5 py-0.5 text-[10px] font-medium text-brand hover:bg-brand/10 disabled:opacity-60"
           >
             {acquiring ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <RefreshCw className="h-2.5 w-2.5" />}
-            {failed ? '重试' : '获取'}
+            {failed ? '重试' : pending ? '获取中' : '获取'}
           </button>
+        ) : null}
+        {acquiring && (
+          <span className="inline-flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground">
+            <Loader2 className="h-2.5 w-2.5 animate-spin" />
+            正在从超星获取…
+          </span>
         )}
       </span>
 

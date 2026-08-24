@@ -4,7 +4,7 @@
  * 与项目建设申请/招投标截图共享同一套 bucket 和签名 URL 机制。
  */
 import { getSupabaseAdminClient } from '@/lib/supabase-client';
-import { resolveAssetDownload, retryAssetTransfer, ensureAndTransferByObjectId } from './asset-access';
+import { resolveAssetDownload, retryAssetTransfer, ensureAndTransferByObjectId, getAssetMeta as getAssetMetaFromAccess } from './asset-access';
 import type { BiddingFileRef, BiddingFileStorageStatus, QimingConstruction } from './types';
 import {
   downloadChaoxingFile,
@@ -224,6 +224,7 @@ export async function retransferQimingFile(
   if (!result.assetId) return { ok: false, error: result.error };
 
   const db = getSupabaseAdminClient();
+  const successMeta = result.ok ? await getAssetMetaFromAccess(result.assetId) : null;
   const next = (record.projectMaterials ?? []).map((f) => {
     if (f.objectId !== objectId) return f;
     const base = { ...f, assetId: result.assetId };
@@ -233,7 +234,14 @@ export async function retransferQimingFile(
     if (!result.ok) {
       return { ...base, storageStatus: 'failed' as BiddingFileStorageStatus, storageError: result.error ?? '转存失败' };
     }
-    return { ...base, bucket: f.bucket ?? null, storageKey: f.storageKey ?? null, storageStatus: 'stored' as BiddingFileStorageStatus, storedAt: new Date().toISOString(), storageError: null };
+    return {
+      ...base,
+      bucket: successMeta?.bucket ?? f.bucket ?? null,
+      storageKey: successMeta?.storageKey ?? f.storageKey ?? null,
+      storageStatus: 'stored' as BiddingFileStorageStatus,
+      storedAt: new Date().toISOString(),
+      storageError: null,
+    };
   });
   await db.from('qiming_construction').update({ project_materials: next }).eq('id', record.id);
   return { ok: result.ok, status: result.status, assetId: result.assetId, error: result.error };

@@ -198,8 +198,20 @@ interface BiddingFileRefRow {
   url?: string | null;
   objectId?: string | null;
   resid?: string | null;
-  size?: number | null;
+  size?: number | string | null;
+  byteSize?: number | string | null;
+  suffix?: string | null;
+  modifyDate?: number | null;
   type?: string | null;
+  enc?: string | null;
+  puid?: number | null;
+  // 转存回写字段
+  assetId?: string | null;
+  bucket?: string | null;
+  storageKey?: string | null;
+  storageStatus?: string | null;
+  storedAt?: string | null;
+  storageError?: string | null;
 }
 
 interface BiddingScreenshotRow {

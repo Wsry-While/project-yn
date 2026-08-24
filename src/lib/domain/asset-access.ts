@@ -215,12 +215,14 @@ export async function retryAssetTransfer(
 
 /**
  * 解析附件下载地址。
- * - stored：对象存储短期签名 URL
- * - direct：实时换取超星直链（带临时签名）
+ * - stored：对象存储短期签名 URL。`asPreview=true` 时传 download:false 走内联预览，
+ *   否则带文件名触发下载。
+ * - direct：实时换取超星直链（带临时签名），内联/下载由超星响应头决定。
  * 其余状态返回 null（前端应引导用户点「重新获取」）。
  */
 export async function resolveAssetDownload(
   assetId: string,
+  opts: { asPreview?: boolean; downloadName?: string } = {},
 ): Promise<{ signedUrl: string; fileName: string; status: AssetStatus } | null> {
   const meta = await getAssetMeta(assetId);
   if (!meta) return null;
@@ -233,7 +235,10 @@ export async function resolveAssetDownload(
     }
   }
   if (meta.status !== 'stored' || !meta.bucket || !meta.storageKey) return null;
-  const signedUrl = await createSignedDownloadUrl(meta.bucket, meta.storageKey, 10 * 60);
+  const download = opts.asPreview ? false : opts.downloadName ?? meta.fileName ?? true;
+  const signedUrl = await createSignedDownloadUrl(meta.bucket, meta.storageKey, 10 * 60, {
+    download,
+  });
   return { signedUrl, fileName: meta.fileName || meta.storageKey.split('/').pop() || 'download', status: 'stored' };
 }
 
