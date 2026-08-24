@@ -4,6 +4,7 @@
  * 与项目建设申请/招投标截图共享同一套 bucket 和签名 URL 机制。
  */
 import { getSupabaseAdminClient } from '@/lib/supabase-client';
+import { resolveAssetDownload, retryAssetTransfer } from './asset-access';
 import type { BiddingFileRef, BiddingFileStorageStatus, QimingConstruction } from './types';
 import {
   downloadChaoxingFile,
@@ -192,19 +193,13 @@ export async function processQimingAttachments(record: QimingConstruction): Prom
 }
 
 export async function getQimingAssetSignedUrl(assetId: string): Promise<{ signedUrl: string; fileName: string } | null> {
-  const db = getSupabaseAdminClient();
-  const { data, error } = await db.from('external_file_assets').select('*').eq('id', assetId).single();
-  if (error || !data) return null;
-  const asset = data as AssetRow;
-  if (asset.status === 'direct' && asset.object_id) {
-    try {
-      const direct = await getChaoxingDirectDownloadUrl(asset.object_id);
-      return { signedUrl: direct.url, fileName: direct.fileName || asset.file_name || 'download' };
-    } catch {
-      return null;
-    }
-  }
-  if (asset.status !== 'stored' || !asset.bucket || !asset.storage_key) return null;
-  const signedUrl = await createSignedDownloadUrl(asset.bucket, asset.storage_key, 10 * 60);
-  return { signedUrl, fileName: asset.file_name || asset.storage_key.split('/').pop() || 'download' };
+  const resolved = await resolveAssetDownload(assetId);
+  if (!resolved) return null;
+  return { signedUrl: resolved.signedUrl, fileName: resolved.fileName };
+}
+
+/** 重新转存一条启明星附件（失败/待处理时使用）。 */
+export async function retryQimingAsset(assetId: string): Promise<{ ok: boolean; error?: string }> {
+  const result = await retryAssetTransfer(assetId);
+  return { ok: result.ok, error: result.error };
 }

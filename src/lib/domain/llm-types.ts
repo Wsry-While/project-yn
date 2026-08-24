@@ -13,8 +13,14 @@ export interface ChatMessage {
 }
 
 export interface ChatRequest {
-  /** 业务场景：通用对话 / 生成建设方案 / 启明星课程数据 */
-  scenario: 'general' | 'build-plan' | 'qiming-course';
+  /** 业务场景：通用对话 / 生成建设方案 / 启明星课程数据 / 招投标评分项 / 截图建议 / 截图视觉理解 */
+  scenario:
+    | 'general'
+    | 'build-plan'
+    | 'qiming-course'
+    | 'bidding-score'
+    | 'bidding-advice'
+    | 'bidding-vision';
   /** 用户这一轮的输入 */
   prompt: string;
   /** 历史消息（不含本轮用户输入；后端会自动追加） */

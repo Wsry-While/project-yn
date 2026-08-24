@@ -10,6 +10,7 @@
  * 同一 objectId 在多条记录/多个字段里复用同一份 asset，只下载/上传一次。
  */
 import { getSupabaseAdminClient } from '@/lib/supabase-client';
+import { resolveAssetDownload, retryAssetTransfer } from './asset-access';
 import type { BiddingFileRef, BiddingFileStorageStatus, BiddingScreenshot } from './types';
 import {
   downloadChaoxingFile,
@@ -335,66 +336,18 @@ export async function processBiddingAttachments(record: BiddingScreenshot): Prom
 
 /** 供手动重试或定时任务用：对一个 asset 重新下载转存。 */
 export async function retryAsset(assetId: string): Promise<{ ok: boolean; error?: string }> {
-  const db = getSupabaseAdminClient();
-  const { data, error } = await db.from('external_file_assets').select('*').eq('id', assetId).single();
-  if (error || !data) return { ok: false, error: error?.message ?? 'asset not found' };
-  const asset = data as AssetRow;
-  await markAssetStatus(asset.id, { status: 'fetching', error_message: null });
-  try {
-    const { bucket, key } = await transferOne(asset, 'retry', 'retry');
-    await markAssetStatus(asset.id, {
-      status: 'stored',
-      bucket,
-      storage_key: key,
-      stored_url: `/${bucket}/${key}`,
-      fetched_at: new Date().toISOString(),
-      error_message: null,
-    });
-    return { ok: true };
-  } catch (err) {
-    const message = (err as Error).message;
-    if (isStorageFileTooLargeError(err) || (err instanceof ChaoxingFileError && err.code === 'too_large')) {
-      await markAssetStatus(asset.id, {
-        status: 'direct',
-        error_message: '超大文件，走超星直链下载',
-        fetched_at: new Date().toISOString(),
-      });
-      return { ok: true };
-    }
-    await markAssetStatus(asset.id, {
-      status: 'failed',
-      error_message: message,
-      retry_count: asset.retry_count + 1,
-    });
-    return { ok: false, error: message };
-  }
+  const result = await retryAssetTransfer(assetId);
+  return { ok: result.ok, error: result.error };
 }
 
 /**
- * 解析附件下载地址。
+ * 解析附件下载地址（委托给统一访问层）。
  * - stored：返回对象存储的短期签名 URL
  * - direct：实时换取超星直链（带临时签名），供 307 跳转
  * 其余状态返回 null。
  */
 export async function getAssetSignedUrl(assetId: string): Promise<{ signedUrl: string; fileName: string } | null> {
-  const db = getSupabaseAdminClient();
-  const { data, error } = await db.from('external_file_assets').select('*').eq('id', assetId).single();
-  if (error || !data) return null;
-  const asset = data as AssetRow;
-
-  if (asset.status === 'direct' && asset.object_id) {
-    try {
-      const direct = await getChaoxingDirectDownloadUrl(asset.object_id);
-      return {
-        signedUrl: direct.url,
-        fileName: direct.fileName || asset.file_name || 'download',
-      };
-    } catch {
-      return null;
-    }
-  }
-
-  if (asset.status !== 'stored' || !asset.bucket || !asset.storage_key) return null;
-  const signedUrl = await createSignedDownloadUrl(asset.bucket, asset.storage_key, 10 * 60);
-  return { signedUrl, fileName: asset.file_name || asset.storage_key.split('/').pop() || 'download' };
+  const resolved = await resolveAssetDownload(assetId);
+  if (!resolved) return null;
+  return { signedUrl: resolved.signedUrl, fileName: resolved.fileName };
 }

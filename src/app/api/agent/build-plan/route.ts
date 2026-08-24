@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import { LLMClient, Config, HeaderUtils } from 'coze-coding-dev-sdk';
 import { fail, withApi } from '@/lib/domain/http';
 import { requireUser } from '@/lib/domain/api-utils';
-import { buildMessages, LLM_CONFIG } from '@/lib/domain/llm-prompts';
+import { buildMessages, getModelForScenario } from '@/lib/domain/llm-prompts';
 import type { ChatRequest } from '@/lib/domain/llm-types';
 
 /**
@@ -39,7 +39,7 @@ export async function POST(request: NextRequest) {
       async start(controller) {
         try {
           for await (const part of client.stream(messages, {
-            model: LLM_CONFIG.model,
+            model: getModelForScenario('build-plan'),
             temperature: 0.5,
           })) {
             const text = part?.content?.toString?.() ?? '';

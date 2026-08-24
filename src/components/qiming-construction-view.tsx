@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Paperclip,
   Search,
   Calendar,
   Building2,
@@ -18,6 +17,7 @@ import { apiFetch } from '@/lib/web/api-client';
 import { exportCsv, datedName } from '@/lib/web/csv-export';
 import { Input } from '@/components/ui/input';
 import { Modal } from '@/components/modal';
+import { AttachmentList } from '@/components/attachment-viewer';
 import { PageHeader } from '@/components/page-header';
 import { Badge } from '@/components/ui/badge';
 import { Pagination } from '@/components/ui/pagination';
@@ -37,41 +37,6 @@ interface ListResponse {
 }
 
 const PAGE_SIZE = 20;
-
-function storageBadge(file: { storageStatus?: string | null }) {
-  switch (file.storageStatus) {
-    case 'pending':
-      return { label: '待转存', className: 'bg-zinc-500/10 text-zinc-500' };
-    case 'fetching':
-      return { label: '转存中', className: 'bg-brand/10 text-brand' };
-    case 'failed':
-      return { label: '转存失败', className: 'bg-red-500/10 text-red-500' };
-    default:
-      return null;
-  }
-}
-
-function FileItem({ file }: { file: QimingConstruction['projectMaterials'][number] }) {
-  const href = file.assetId ? `/api/files/qiming-attachments/${file.assetId}` : file.url;
-  const badge = storageBadge(file);
-  const downloadable = !!href && file.storageStatus !== 'failed';
-  const inner = (
-    <>
-      <Paperclip className="h-3.5 w-3.5 shrink-0" />
-      <span className="truncate">{file.name || '附件'}</span>
-      {badge ? <span className={`ml-1 shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${badge.className}`}>{badge.label}</span> : null}
-    </>
-  );
-  return downloadable ? (
-    <a href={href} target="_blank" rel="noreferrer" className="inline-flex max-w-full items-center gap-1 text-sm text-brand hover:underline">
-      {inner}
-    </a>
-  ) : (
-    <span className="inline-flex max-w-full items-center gap-1 text-sm text-muted-foreground" title={file.storageError ?? undefined}>
-      {inner}
-    </span>
-  );
-}
 
 function formatDateTime(v: string | null): string {
   if (!v) return '—';
@@ -393,11 +358,7 @@ export function QimingConstructionView() {
               ) : null}
               {detail.projectMaterials.length ? (
                 <Detail label="项目相关资料">
-                  <div className="flex flex-col gap-1">
-                    {detail.projectMaterials.map((f, i) => (
-                      <FileItem key={f.objectId ?? f.url ?? i} file={f} />
-                    ))}
-                  </div>
+                  <AttachmentList files={detail.projectMaterials} externalId={detail.id} field="projectMaterials" onRetried={refresh} />
                 </Detail>
               ) : null}
               {detail.projectStatusFeedback ? (

@@ -8,7 +8,7 @@
 - **UI 组件**: shadcn/ui (基于 Radix UI)
 - **Styling**: Tailwind CSS 4
 - **数据库 / 鉴权**: Supabase（PostgreSQL + Auth）
-- **大模型**: `coze-coding-dev-sdk` 中的 LLMClient，后端 SSE 流式输出
+- **大模型**: `coze-coding-dev-sdk` 中的 LLMClient，后端 SSE 流式输出；模型按场景选择（`getModelForScenario`），日常对话/周报/NL 解析走 Lite，建设方案/招投标评分项/截图建议/截图视觉理解走 Seed 2.0 Pro（多模态），可用 `LLM_MODEL_LITE`/`LLM_MODEL_PRO` 覆盖。
 
 ## 业务概览
 
@@ -188,6 +188,8 @@
   - `GET /api/analytics/dimension`：多维排名，参数 dimension（school/industry/sales/product/year）、metric（volume/ontime/score/trips）、limit。
   - `GET /api/analytics/school-health`：学校健康分（五维加权），参数 limit。
   - `POST /api/analytics/nl-query`：自然语言查询，body `{query}`，LLM 解析后返回 `{intent,source,count,rows[]}`，rows 带 url 跳转。
+  - 附件通用访问（登录即可）：`GET /api/files/meta/:assetId`（元数据+预览类型）、`GET /api/files/preview/:assetId`（307 到可内联的签名 URL，Office 返回 415）、`POST /api/files/:assetId/retry`（重新转存失败/待处理附件，超大文件降级 direct）。业务下载老路由 `/api/files/attachments|demand-attachments|qiming-attachments/:assetId` 保留，均委托给 `src/lib/domain/asset-access.ts`。
+  - 招投标 AI 截图闭环：`POST /api/agent/bidding-score-items`（读招标文件 PDF/docx，SSE 流式输出评分项 JSON，scenario=`bidding-score`，走 Pro 模型）、`GET /api/bidding-screenshots/examples?keywords=`（召回历史截图示例，>30 天标记 stale）、`POST /api/agent/bidding-screenshot-advice`（评分项+历史示例→SSE Markdown 截图作业指导，scenario=`bidding-advice`）、`POST /api/agent/bidding-learn`（对交付截图做多模态视觉理解，写入 `bidding_screenshot_examples`，scenario=`bidding-vision`）。文档解析在 `src/lib/domain/parse/document-parser.ts`（pdf-parse + mammoth，6 万字符截断，自动定位评分办法章节）。
 - 第三方推送 `POST /api/external/push` 通过 `x-push-token`、`Authorization: Bearer` 或 `?token=` 鉴权，token 读取 `EXTERNAL_PUSH_TOKEN`，开发兜底值 `dev-push-token-change-me`。
 - 第三方招投标截图推送 `POST /api/external/bidding-screenshots/push`：
   - 与超星项目外出推送保持一致，按无鉴权接入设计，不校验 `Authorization` / token，入口仅通过公网 HTTPS + `formId=254045` 白名单 + 业务幂等键控制。
