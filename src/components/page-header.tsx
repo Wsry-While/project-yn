@@ -1,4 +1,4 @@
-import { cn } from '@/lib/utils';
+import { cn, isComponentType } from '@/lib/utils';
 
 interface PageHeaderProps {
   title: string;
@@ -17,7 +17,9 @@ interface PageHeaderProps {
  * - 右侧 actions 区
  */
 export function PageHeader({ title, subtitle, icon, breadcrumb, actions, className, children }: PageHeaderProps) {
-  const IconNode = typeof icon === 'function' ? icon : null;
+  const isComp = isComponentType(icon);
+  const IconNode = isComp ? (icon as React.ComponentType<{ className?: string }>) : null;
+  const iconNode = isComp ? null : (icon as React.ReactNode);
   return (
     <div className={cn('border-b border-border bg-card px-6 py-4', className)}>
       {breadcrumb && breadcrumb.length > 0 && (
@@ -36,7 +38,7 @@ export function PageHeader({ title, subtitle, icon, breadcrumb, actions, classNa
         <div className="flex items-center gap-3">
           {icon && (
             <div className="flex h-10 w-10 items-center justify-center rounded-md bg-brand/10 text-brand">
-              {IconNode ? <IconNode className="h-5 w-5" /> : (icon as React.ReactNode)}
+              {IconNode ? <IconNode className="h-5 w-5" /> : iconNode}
             </div>
           )}
           <div>
