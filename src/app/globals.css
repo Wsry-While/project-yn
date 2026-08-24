@@ -301,3 +301,54 @@ body,
     border-color 0.25s var(--ease-spring),
     color 0.2s var(--ease-spring);
 }
+
+/* ===== 开源 Office 文档预览（docx-preview / SheetJS）===== */
+.office-preview-container {
+  color: #1f2937;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.office-preview-container .docx-wrapper {
+  background: transparent;
+  padding: 0;
+}
+.office-preview-container .docx-wrapper > section.docx {
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.08);
+  margin: 0 auto 16px;
+  background: #fff;
+}
+.office-preview-container .xlsx-book {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.office-preview-container .xlsx-sheet-name {
+  font-weight: 600;
+  color: #374151;
+  font-size: 13px;
+  border-left: 3px solid var(--brand);
+  padding-left: 8px;
+}
+.office-preview-container .xlsx-sheet {
+  overflow: auto;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+}
+.office-preview-container .xlsx-sheet table {
+  border-collapse: collapse;
+  font-size: 12px;
+  background: #fff;
+}
+.office-preview-container .xlsx-sheet td,
+.office-preview-container .xlsx-sheet th {
+  border: 1px solid #e5e7eb;
+  padding: 4px 8px;
+  white-space: nowrap;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.office-preview-container .xlsx-sheet tr:first-child td {
+  background: #f9fafb;
+  font-weight: 600;
+}

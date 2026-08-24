@@ -3,8 +3,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Download,
-  ExternalLink,
-  Eye,
   FileText,
   Loader2,
   Paperclip,
@@ -13,6 +11,7 @@ import {
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/modal';
+import { OfficePreview } from '@/components/office-preview';
 import { apiFetch, ApiError } from '@/lib/web/api-client';
 import { showToast } from '@/lib/web/toast-store';
 import type { BiddingFileRef } from '@/lib/domain/types';
@@ -60,13 +59,6 @@ function formatSize(bytes: number | null): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function officeViewerUrl(downloadUrl: string): string {
-  // Office Online 需要公网可达的 URL；这里传我们自己的下载跳转地址（会 307 到签名 URL）。
-  if (typeof window === 'undefined') return '';
-  const abs = new URL(downloadUrl, window.location.origin).toString();
-  return `https://view.officeapps.live.com/op/view.aspx?src=${encodeURIComponent(abs)}`;
 }
 
 export function AttachmentLink({
@@ -269,7 +261,6 @@ function PreviewModal({
   const [loading, setLoading] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [nonce, setNonce] = useState(0);
-  const [officeOpen, setOfficeOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -287,7 +278,6 @@ function PreviewModal({
     if (open) {
       void load();
       setNonce((n) => n + 1);
-      setOfficeOpen(false);
     }
   }, [open, load]);
 
@@ -388,26 +378,14 @@ function PreviewModal({
           </div>
         ) : null}
 
-        {meta && ready ? (
-          <PreviewBody meta={meta} nonce={nonce} officeOpen={officeOpen} onOffice={() => setOfficeOpen(true)} />
-        ) : null}
+        {meta && ready ? <PreviewBody meta={meta} nonce={nonce} /> : null}
       </div>
     </Modal>
   );
 }
 
-function PreviewBody({
-  meta,
-  nonce,
-  officeOpen,
-  onOffice,
-}: {
-  meta: AssetMeta;
-  nonce: number;
-  officeOpen: boolean;
-  onOffice: () => void;
-}) {
-  const { previewKind, previewUrl, downloadUrl } = meta;
+function PreviewBody({ meta, nonce }: { meta: AssetMeta; nonce: number }) {
+  const { previewKind, previewUrl, downloadUrl, fileName } = meta;
   // 加 nonce 绕过浏览器缓存，重试后能刷新。
   const src = `${previewUrl}${previewUrl.includes('?') ? '&' : '?'}_=${nonce}`;
 
@@ -415,12 +393,12 @@ function PreviewBody({
     return (
       <div className="flex max-h-[70vh] justify-center overflow-auto rounded-md bg-muted/30 p-2">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={src} alt={meta.fileName} className="max-h-[68vh] object-contain" />
+        <img src={src} alt={fileName} className="max-h-[68vh] object-contain" />
       </div>
     );
   }
   if (previewKind === 'pdf') {
-    return <iframe title={meta.fileName} src={src} className="h-[70vh] w-full rounded-md border bg-white" />;
+    return <iframe title={fileName} src={src} className="h-[70vh] w-full rounded-md border bg-white" />;
   }
   if (previewKind === 'video') {
     return <video src={src} controls className="max-h-[70vh] w-full rounded-md bg-black" />;
@@ -429,44 +407,8 @@ function PreviewBody({
     return <audio src={src} controls className="w-full" />;
   }
   if (previewKind === 'office') {
-    return (
-      <div className="space-y-3">
-        <div className="flex h-40 flex-col items-center justify-center gap-3 rounded-md border border-dashed text-center">
-          <FileText className="h-8 w-8 text-muted-foreground/60" />
-          <p className="text-sm text-muted-foreground">Office 文档无法在浏览器内直接渲染。</p>
-          <div className="flex gap-2">
-            <Button size="sm" variant="outline" onClick={onOffice}>
-              <Eye className="mr-1 h-3.5 w-3.5" />
-              使用 Office Online 预览
-            </Button>
-            <a href={downloadUrl} target="_blank" rel="noreferrer">
-              <Button size="sm">
-                <Download className="mr-1 h-3.5 w-3.5" />
-                下载原文件
-              </Button>
-            </a>
-          </div>
-        </div>
-        {officeOpen ? (
-          <div className="relative">
-            <a
-              href={officeViewerUrl(downloadUrl)}
-              target="_blank"
-              rel="noreferrer"
-              className="mb-2 inline-flex items-center gap-1 text-xs text-brand hover:underline"
-            >
-              <ExternalLink className="h-3 w-3" />
-              若下方未加载，点此在新窗口打开
-            </a>
-            <iframe
-              title="office-preview"
-              src={officeViewerUrl(downloadUrl)}
-              className="h-[60vh] w-full rounded-md border"
-            />
-          </div>
-        ) : null}
-      </div>
-    );
+    // 开源纯前端预览：docx → docx-preview，xls/xlsx/csv → SheetJS；其余格式下载兜底。
+    return <OfficePreview src={previewUrl} fileName={fileName} downloadUrl={downloadUrl} nonce={nonce} />;
   }
   return (
     <div className="flex h-40 flex-col items-center justify-center gap-3 text-center">
