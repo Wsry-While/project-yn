@@ -24,8 +24,15 @@ export const CHAOXING_FILE_UA =
 const STATUS_BASE = 'https://mooc1.chaoxing.com/ananas/status';
 const DOWNLOAD_REFERER = 'https://office.chaoxing.com/';
 const OBJECT_ID_RE = /^[a-f0-9]{32}$/i;
-const MAX_FILE_BYTES = 100 * 1024 * 1024; // 100MB
-const FETCH_TIMEOUT_MS = 30_000;
+/**
+ * 单个附件下载大小上限（字节）。默认 250MB，可由环境变量
+ * `CHAOXING_MAX_FILE_MB` 覆盖（已观测到 195MB 的源文件，100MB 旧上限会误拦）。
+ */
+export const MAX_FILE_BYTES = (Number(process.env.CHAOXING_MAX_FILE_MB) || 250) * 1024 * 1024;
+/** 状态接口（轻量 JSON）超时。 */
+const STATUS_TIMEOUT_MS = 30_000;
+/** 文件下载超时：大文件（百 MB 级）需要更长的总时长。 */
+const DOWNLOAD_TIMEOUT_MS = 120_000;
 
 export interface ChaoxingDownloadResult {
   stream: ReadableStream<Uint8Array>;
@@ -126,7 +133,7 @@ async function resolveSignedDownloadUrl(objectId: string): Promise<{ url: string
         'Referer': DOWNLOAD_REFERER,
       },
     },
-    FETCH_TIMEOUT_MS,
+    STATUS_TIMEOUT_MS,
   );
 
   if (response.status === 403) {
@@ -169,6 +176,26 @@ async function resolveSignedDownloadUrl(objectId: string): Promise<{ url: string
 }
 
 /**
+ * 为 objectId 实时换取超星直链（带 at_/ak_/ad_ 临时签名）。
+ *
+ * 用于无法转存到对象存储的超大文件降级：用户点击时由服务端现换现跳，
+ * 浏览器携带我方域名 Referer 直连超星 CDN 下载（我方域名已在对方白名单）。
+ * 签名短时有效，不可缓存，必须每次请求重新换取。
+ */
+export async function getChaoxingDirectDownloadUrl(
+  objectId: string,
+): Promise<{ url: string; fileName: string | null }> {
+  assertValidObjectId(objectId);
+  return resolveSignedDownloadUrl(objectId);
+}
+
+/** 判断一个错误是否为「对象存储单文件超过上限」。 */
+export function isStorageFileTooLargeError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return /maximum allowed single file size|file size.*exceed|payload too large|413/i.test(err.message);
+}
+
+/**
  * 从超星云盘下载文件，返回可读流。
  *
  * 流程：先换签名地址 → 再下载；使用 AbortController 控制总超时；
@@ -189,7 +216,7 @@ export async function downloadChaoxingFile(
   });
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
 
   let response: Response;
   try {
@@ -251,7 +278,11 @@ export async function downloadChaoxingFile(
     const contentLength = Number(response.headers.get('content-length') ?? 'NaN');
     if (Number.isFinite(contentLength) && contentLength > MAX_FILE_BYTES) {
       response.body.cancel().catch(() => {});
-      throw new ChaoxingFileError(`文件超过大小上限（${MAX_FILE_BYTES} 字节）`, 'too_large');
+      const limitMb = Math.round(MAX_FILE_BYTES / 1024 / 1024);
+      throw new ChaoxingFileError(
+        `文件超过大小上限（${limitMb}MB，源文件 ${contentLength} 字节）`,
+        'too_large',
+      );
     }
 
     const fileName =

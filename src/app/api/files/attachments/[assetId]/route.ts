@@ -24,7 +24,12 @@ export function GET(request: NextRequest, context: RouteContext) {
 
     return NextResponse.redirect(result.signedUrl, {
       status: 307,
-      headers: { 'Cache-Control': 'no-store' },
+      headers: {
+        'Cache-Control': 'no-store',
+        // 超星直链为 http://，从 https 跳转属协议降级；默认 strict-origin-when-cross-origin
+        // 会剥离 Referer 导致超星 CDN 防盗链 403。origin 策略在降级时仍发送我方 origin。
+        'Referrer-Policy': 'origin',
+      },
     });
   });
 }

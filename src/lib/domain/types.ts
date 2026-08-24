@@ -225,7 +225,7 @@ export interface TripOptionDict {
   updatedAt: string;
 }
 
-export type BiddingFileStorageStatus = 'pending' | 'fetching' | 'stored' | 'failed';
+export type BiddingFileStorageStatus = 'pending' | 'fetching' | 'stored' | 'failed' | 'direct';
 
 export interface BiddingFileRef {
   name: string | null;

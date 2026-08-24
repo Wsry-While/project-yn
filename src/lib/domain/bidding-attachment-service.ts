@@ -11,7 +11,13 @@
  */
 import { getSupabaseAdminClient } from '@/lib/supabase-client';
 import type { BiddingFileRef, BiddingFileStorageStatus, BiddingScreenshot } from './types';
-import { downloadChaoxingFile, ChaoxingFileError, assertValidObjectId } from './chaoxing/file-tool';
+import {
+  downloadChaoxingFile,
+  getChaoxingDirectDownloadUrl,
+  isStorageFileTooLargeError,
+  ChaoxingFileError,
+  assertValidObjectId,
+} from './chaoxing/file-tool';
 import {
   buildAttachmentKey,
   createSignedDownloadUrl,
@@ -39,7 +45,7 @@ type AssetRow = {
   bucket: string | null;
   storage_key: string | null;
   stored_url: string | null;
-  status: 'pending' | 'fetching' | 'stored' | 'failed';
+  status: 'pending' | 'fetching' | 'stored' | 'failed' | 'direct';
   error_message: string | null;
   retry_count: number;
   fetched_at: string | null;
@@ -186,6 +192,18 @@ function applyStorageFailure(file: BiddingFileRef, errorMessage: string): Biddin
   };
 }
 
+/**
+ * 超大文件无法转存对象存储时降级为「超星直链」：
+ * 记录已验证可下载，用户点击时由后端实时换取新鲜签名 URL 后 307 跳转。
+ */
+function applyDirectDownload(file: BiddingFileRef, note: string): BiddingFileRef {
+  return {
+    ...file,
+    storageStatus: 'direct' satisfies BiddingFileStorageStatus,
+    storageError: note,
+  };
+}
+
 function applyPending(file: BiddingFileRef, assetId: string): BiddingFileRef {
   return {
     ...file,
@@ -279,6 +297,18 @@ export async function processBiddingAttachments(record: BiddingScreenshot): Prom
       log('info', 'attachment transferred', { objectId: file.objectId, bucket, key });
     } catch (err) {
       const message = err instanceof ChaoxingFileError ? `${err.code}: ${err.message}` : (err as Error).message;
+      if (isStorageFileTooLargeError(err)) {
+        // 下载成功但对象存储拒绝超大文件：降级为超星直链
+        const directNote = '超大文件，走超星直链下载';
+        await markAssetStatus(asset.id, {
+          status: 'direct',
+          error_message: directNote,
+          fetched_at: new Date().toISOString(),
+        });
+        updateField(field, file.objectId, (f) => applyDirectDownload(f, directNote));
+        log('info', 'attachment too large, fallback to direct download', { objectId: file.objectId });
+        continue;
+      }
       await markAssetStatus(asset.id, {
         status: 'failed',
         error_message: message,
@@ -312,6 +342,14 @@ export async function retryAsset(assetId: string): Promise<{ ok: boolean; error?
     return { ok: true };
   } catch (err) {
     const message = (err as Error).message;
+    if (isStorageFileTooLargeError(err)) {
+      await markAssetStatus(asset.id, {
+        status: 'direct',
+        error_message: '超大文件，走超星直链下载',
+        fetched_at: new Date().toISOString(),
+      });
+      return { ok: true };
+    }
     await markAssetStatus(asset.id, {
       status: 'failed',
       error_message: message,
@@ -321,12 +359,30 @@ export async function retryAsset(assetId: string): Promise<{ ok: boolean; error?
   }
 }
 
-/** 查询某个 asset 的临时签名下载 URL。 */
+/**
+ * 解析附件下载地址。
+ * - stored：返回对象存储的短期签名 URL
+ * - direct：实时换取超星直链（带临时签名），供 307 跳转
+ * 其余状态返回 null。
+ */
 export async function getAssetSignedUrl(assetId: string): Promise<{ signedUrl: string; fileName: string } | null> {
   const db = getSupabaseAdminClient();
   const { data, error } = await db.from('external_file_assets').select('*').eq('id', assetId).single();
   if (error || !data) return null;
   const asset = data as AssetRow;
+
+  if (asset.status === 'direct' && asset.object_id) {
+    try {
+      const direct = await getChaoxingDirectDownloadUrl(asset.object_id);
+      return {
+        signedUrl: direct.url,
+        fileName: direct.fileName || asset.file_name || 'download',
+      };
+    } catch {
+      return null;
+    }
+  }
+
   if (asset.status !== 'stored' || !asset.bucket || !asset.storage_key) return null;
   const signedUrl = await createSignedDownloadUrl(asset.bucket, asset.storage_key, 10 * 60);
   return { signedUrl, fileName: asset.file_name || asset.storage_key.split('/').pop() || 'download' };

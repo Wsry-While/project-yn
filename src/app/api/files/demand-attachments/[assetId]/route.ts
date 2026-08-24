@@ -18,6 +18,9 @@ export function GET(request: NextRequest, context: Ctx) {
     }
     const result = await getDemandAssetSignedUrl(assetId);
     if (!result) return fail('not_found', '附件尚未转存完成或不存在', 404);
-    return NextResponse.redirect(result.signedUrl, { status: 307, headers: { 'Cache-Control': 'no-store' } });
+    return NextResponse.redirect(result.signedUrl, {
+      status: 307,
+      headers: { 'Cache-Control': 'no-store', 'Referrer-Policy': 'origin' },
+    });
   });
 }

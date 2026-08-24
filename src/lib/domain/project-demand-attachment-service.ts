@@ -4,7 +4,13 @@
  */
 import { getSupabaseAdminClient } from '@/lib/supabase-client';
 import type { BiddingFileRef, BiddingFileStorageStatus, ProjectDemand } from './types';
-import { downloadChaoxingFile, ChaoxingFileError, assertValidObjectId } from './chaoxing/file-tool';
+import {
+  downloadChaoxingFile,
+  getChaoxingDirectDownloadUrl,
+  isStorageFileTooLargeError,
+  ChaoxingFileError,
+  assertValidObjectId,
+} from './chaoxing/file-tool';
 import {
   buildAttachmentKey,
   createSignedDownloadUrl,
@@ -27,7 +33,7 @@ type AssetRow = {
   bucket: string | null;
   storage_key: string | null;
   stored_url: string | null;
-  status: 'pending' | 'fetching' | 'stored' | 'failed';
+  status: 'pending' | 'fetching' | 'stored' | 'failed' | 'direct';
   error_message: string | null;
   retry_count: number;
   fetched_at: string | null;
@@ -173,6 +179,12 @@ export async function processDemandAttachments(record: ProjectDemand): Promise<v
       }));
     } catch (err) {
       const message = err instanceof ChaoxingFileError ? `${err.code}: ${err.message}` : (err as Error).message;
+      if (isStorageFileTooLargeError(err)) {
+        const note = '超大文件，走超星直链下载';
+        await markAssetStatus(asset.id, { status: 'direct', error_message: note, fetched_at: new Date().toISOString() });
+        updateField(field, file.objectId, (f) => ({ ...f, storageStatus: 'direct', storageError: note }));
+        continue;
+      }
       await markAssetStatus(asset.id, { status: 'failed', error_message: message, retry_count: asset.retry_count + 1 });
       updateField(field, file.objectId, (f) => ({ ...f, storageStatus: 'failed', storageError: message }));
     }
@@ -186,6 +198,14 @@ export async function getDemandAssetSignedUrl(assetId: string): Promise<{ signed
   const { data, error } = await db.from('external_file_assets').select('*').eq('id', assetId).single();
   if (error || !data) return null;
   const asset = data as AssetRow;
+  if (asset.status === 'direct' && asset.object_id) {
+    try {
+      const direct = await getChaoxingDirectDownloadUrl(asset.object_id);
+      return { signedUrl: direct.url, fileName: direct.fileName || asset.file_name || 'download' };
+    } catch {
+      return null;
+    }
+  }
   if (asset.status !== 'stored' || !asset.bucket || !asset.storage_key) return null;
   const signedUrl = await createSignedDownloadUrl(asset.bucket, asset.storage_key, 10 * 60);
   return { signedUrl, fileName: asset.file_name || asset.storage_key.split('/').pop() || 'download' };
