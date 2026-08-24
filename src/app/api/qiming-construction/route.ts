@@ -16,7 +16,7 @@ export async function GET(request: NextRequest) {
     const year = sp.get('year')?.trim() || undefined;
     const salesManager = sp.get('salesManager')?.trim() || undefined;
     const school = sp.get('school')?.trim() || undefined;
-    const limit = Math.min(Number(sp.get('limit') ?? '100') || 100, 500);
+    const limit = Math.min(Number(sp.get('limit') ?? '100') || 100, 2000);
     const offset = Number(sp.get('offset') ?? '0') || 0;
 
     const db = getAdminSupabase();

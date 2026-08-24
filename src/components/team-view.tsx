@@ -141,7 +141,7 @@ export function TeamView() {
 
   return (
     <LlmLoadingMask loading={loading} label="加载团队…" className="min-h-[70vh]">
-      <div className="mx-auto w-full max-w-6xl p-4 sm:p-8">
+      <div className="w-full p-4 sm:p-6 lg:px-8">
         <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
           <div>
             <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">

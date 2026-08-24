@@ -56,7 +56,7 @@ export function SchoolsView() {
 
   return (
     <LlmLoadingMask loading={loading} label="加载学校档案…" className="min-h-[70vh]">
-      <div className="mx-auto grid w-full max-w-7xl grid-cols-1 gap-4 p-4 sm:p-6 lg:grid-cols-[360px_1fr]">
+      <div className="grid w-full grid-cols-1 gap-4 p-4 sm:p-6 lg:px-8 lg:grid-cols-[360px_1fr]">
         <aside className="flex h-[calc(100vh-7rem)] flex-col rounded-lg border border-border bg-card">
           <div className="border-b border-border p-3">
             <div className="relative">
