@@ -41,7 +41,10 @@ export function ProjectDemandsView() {
   const refresh = useCallback(() => {
     setLoading(true);
     apiFetch<ListResponse>('/api/project-demands?limit=200')
-      .then((res) => setRows(res.rows))
+      .then((res) => {
+        setRows(res.rows);
+        setDetail((d) => (d ? (res.rows.find((r) => r.id === d.id) ?? d) : d));
+      })
       .catch((err: unknown) => showToast(err instanceof Error ? err.message : '加载项目建设申请失败', { kind: 'error' }))
       .finally(() => setLoading(false));
   }, []);

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { withApi, fail } from '@/lib/domain/http';
 import { requireUser } from '@/lib/domain/api-utils';
-import { getQimingAssetSignedUrl } from '@/lib/domain/qiming-construction-attachment-service';
+import { streamAssetDownload } from '@/lib/domain/asset-access';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -16,11 +16,8 @@ export function GET(request: NextRequest, context: Ctx) {
     if (!assetId || !/^[0-9a-f-]{36}$/i.test(assetId)) {
       return fail('invalid_param', '附件 ID 非法', 400);
     }
-    const result = await getQimingAssetSignedUrl(assetId);
-    if (!result) return fail('not_found', '附件尚未转存完成或不存在', 404);
-    return NextResponse.redirect(result.signedUrl, {
-      status: 307,
-      headers: { 'Cache-Control': 'no-store', 'Referrer-Policy': 'origin' },
-    });
+    const streamed = await streamAssetDownload(assetId);
+    if (!streamed) return fail('not_found', '附件尚未转存完成或不存在', 404);
+    return streamed.response;
   });
 }

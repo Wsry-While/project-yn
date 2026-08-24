@@ -67,7 +67,11 @@ export function BiddingScreenshotsView() {
     setLoading(true);
     biddingScreenshotWebService
       .list({ limit: 200 })
-      .then((res) => setRows(res.rows))
+      .then((res) => {
+        setRows(res.rows);
+        // 同步更新已打开的详情弹窗，使附件转存后的 assetId/状态能即时反映。
+        setDetail((d) => (d ? (res.rows.find((r) => r.id === d.id) ?? d) : d));
+      })
       .catch((err: unknown) => showToast(err instanceof Error ? err.message : '加载招投标截图失败', { kind: 'error' }))
       .finally(() => setLoading(false));
   };

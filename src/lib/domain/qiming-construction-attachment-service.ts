@@ -181,11 +181,11 @@ export async function processQimingAttachments(record: QimingConstruction): Prom
       if (isStorageFileTooLargeError(err) || (err instanceof ChaoxingFileError && err.code === 'too_large')) {
         const note = '超大文件，走超星直链下载';
         await markAssetStatus(asset.id, { status: 'direct', error_message: note, fetched_at: new Date().toISOString() });
-        updateFile(file.objectId, (f) => ({ ...f, storageStatus: 'direct', storageError: note }));
+        updateFile(file.objectId, (f) => ({ ...f, assetId: asset.id, storageStatus: 'direct', storageError: note }));
         continue;
       }
       await markAssetStatus(asset.id, { status: 'failed', error_message: message, retry_count: asset.retry_count + 1 });
-      updateFile(file.objectId, (f) => ({ ...f, storageStatus: 'failed', storageError: message }));
+      updateFile(file.objectId, (f) => ({ ...f, assetId: asset.id, storageStatus: 'failed', storageError: message }));
     }
   }
 

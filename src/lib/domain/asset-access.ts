@@ -243,6 +243,80 @@ export async function resolveAssetDownload(
 }
 
 /**
+ * 生成安全的 Content-Disposition 头值，中文文件名使用 RFC 5987 编码
+ * （filename*=UTF-8''...），兼容所有现代浏览器，避免文件名乱码。
+ */
+function contentDisposition(kind: 'inline' | 'attachment', fileName: string): string {
+  const fallback = fileName.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_');
+  return `${kind}; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
+}
+
+/**
+ * 服务端流式代理下载附件，统一由我方设置 Content-Disposition，
+ * 彻底解决对象存储/超星直链返回中文文件名乱码的问题。
+ *
+ * - stored：拉取对象存储签名 URL 的响应体，边收边转发（不全量入堆，避免 OOM）。
+ * - direct：实时换取超星签名，同样流式转发。
+ * 未就绪返回 null，调用方返回 409 引导用户重新获取。
+ */
+export async function streamAssetDownload(
+  assetId: string,
+  opts: { inline?: boolean } = {},
+): Promise<{ response: Response; fileName: string } | null> {
+  const meta = await getAssetMeta(assetId);
+  if (!meta) return null;
+
+  let upstream: Response;
+  let upstreamName: string | null = meta.fileName;
+
+  if (meta.status === 'direct') {
+    let direct: { url: string; fileName: string | null };
+    try {
+      direct = await getChaoxingDirectDownloadUrl(meta.objectId);
+    } catch {
+      return null;
+    }
+    const r = await fetch(direct.url, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36',
+        Referer: 'https://office.chaoxing.com/',
+      },
+      redirect: 'follow',
+    });
+    if (!r.ok || !r.body) return null;
+    upstream = r;
+    upstreamName = direct.fileName || meta.fileName;
+  } else if (meta.status === 'stored' && meta.bucket && meta.storageKey) {
+    const signedUrl = await createSignedDownloadUrl(meta.bucket, meta.storageKey, 10 * 60, {
+      download: false,
+    });
+    const r = await fetch(signedUrl, { redirect: 'follow' });
+    if (!r.ok || !r.body) return null;
+    upstream = r;
+  } else {
+    return null;
+  }
+
+  const fileName = upstreamName || meta.fileName || 'download';
+  const headers = new Headers();
+  headers.set('Content-Type', meta.contentType || upstream.headers.get('content-type') || 'application/octet-stream');
+  headers.set('Content-Disposition', contentDisposition(opts.inline ? 'inline' : 'attachment', fileName));
+  headers.set('Cache-Control', 'no-store');
+  headers.set('Referrer-Policy', 'origin');
+  const cl = upstream.headers.get('content-length');
+  if (cl) headers.set('Content-Length', cl);
+
+  return {
+    fileName,
+    response: new Response(upstream.body, {
+      status: 200,
+      headers,
+    }),
+  };
+}
+
+/**
  * 直接按超星 objectId 实时换取临时签名直链（不经过 external_file_assets）。
  *
  * 用于历史数据里「只有 objectId、还没建 asset 行/没转存」的文件，让用户

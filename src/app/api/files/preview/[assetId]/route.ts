@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { withApi, fail } from '@/lib/domain/http';
 import { requireUser } from '@/lib/domain/api-utils';
-import { getAssetMeta, getPreviewKind, resolveAssetDownload } from '@/lib/domain/asset-access';
+import { getAssetMeta, getPreviewKind, streamAssetDownload } from '@/lib/domain/asset-access';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -9,10 +9,10 @@ export const dynamic = 'force-dynamic';
 type RouteContext = { params: Promise<{ assetId: string }> };
 
 /**
- * 在线预览：307 跳转到可内联展示的签名 URL。
- * - 图片/PDF：对象存储或超星直链本身支持 inline，浏览器可直接渲染
+ * 在线预览：服务端流式代理，以 inline 方式回传图片/PDF/音视频，
+ * 统一由我方设置 Content-Type/Content-Disposition，并避免 https→http 混合内容。
  * - Office：返回 415，由前端用 Office Online Viewer 兜底或提示下载
- * 未转存完成（pending/failed）返回 409，前端引导「重新获取」。
+ * - 未转存完成（pending/failed）返回 409，前端引导「重新获取」
  */
 export async function GET(request: NextRequest, context: RouteContext) {
   return withApi(async () => {
@@ -32,18 +32,13 @@ export async function GET(request: NextRequest, context: RouteContext) {
       return fail('unsupported_media_type', 'Office 文档请下载后查看，或使用在线预览', 415);
     }
 
-    const resolved = await resolveAssetDownload(assetId, { asPreview: true });
-    if (!resolved) {
+    if (meta.status !== 'stored' && meta.status !== 'direct') {
       return fail('not_ready', `附件当前状态为 ${meta.status}，请先重新获取`, 409);
     }
 
-    return NextResponse.redirect(resolved.signedUrl, {
-      status: 307,
-      headers: {
-        'Cache-Control': 'no-store',
-        // 超星直链为 http://，从 https 跳转会协议降级；origin 策略保证仍发送我方 origin。
-        'Referrer-Policy': 'origin',
-      },
-    });
+    // 服务端流式代理：对内联资源统一设置 inline，且保持我方 https 域名（避免直链 http 混合内容）。
+    const streamed = await streamAssetDownload(assetId, { inline: true });
+    if (!streamed) return fail('not_ready', '附件暂不可预览，请先重新获取', 409);
+    return streamed.response;
   });
 }

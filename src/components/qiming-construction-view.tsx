@@ -59,7 +59,10 @@ export function QimingConstructionView() {
   const refresh = useCallback(() => {
     setLoading(true);
     apiFetch<ListResponse>('/api/qiming-construction?limit=200')
-      .then((res) => setRows(res.rows))
+      .then((res) => {
+        setRows(res.rows);
+        setDetail((d) => (d ? (res.rows.find((r) => r.id === d.id) ?? d) : d));
+      })
       .catch((err: unknown) => showToast(err instanceof Error ? err.message : '加载启明星建设失败', { kind: 'error' }))
       .finally(() => setLoading(false));
   }, []);
