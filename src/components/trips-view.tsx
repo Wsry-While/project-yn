@@ -12,6 +12,7 @@ import {
   Search,
   RefreshCw,
   Download,
+  Undo2,
 } from 'lucide-react';
 import { tripWebService } from '@/lib/web/trip-web-service';
 import { showToast } from '@/lib/web/toast-store';
@@ -34,10 +35,11 @@ import { cn } from '@/lib/utils';
 
 const PAGE_SIZE = 20;
 
-const APPROVAL_TONE: Record<TripRequest['approvalStatus'], 'success' | 'danger' | 'warning'> = {
+const APPROVAL_TONE: Record<TripRequest['approvalStatus'], 'success' | 'danger' | 'warning' | 'neutral'> = {
   approved: 'success',
   rejected: 'danger',
   pending: 'warning',
+  revoked: 'neutral',
 };
 
 const APPROVAL_META: Record<
@@ -47,6 +49,7 @@ const APPROVAL_META: Record<
   approved: { label: '已通过', icon: CheckCircle2 },
   rejected: { label: '已拒绝', icon: XCircle },
   pending: { label: '待审批', icon: Clock },
+  revoked: { label: '已撤销', icon: Undo2 },
 };
 
 function weekdayLabel(n: number | null): string {

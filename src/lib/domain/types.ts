@@ -145,7 +145,7 @@ export interface Task {
   updatedAt: string;
 }
 
-export type TripApprovalStatus = 'pending' | 'approved' | 'rejected';
+export type TripApprovalStatus = 'pending' | 'approved' | 'rejected' | 'revoked';
 
 export interface TripContact {
   name: string | null;
