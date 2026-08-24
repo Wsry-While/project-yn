@@ -30,13 +30,13 @@ const OBJECT_ID_RE = /^[a-f0-9]{32}$/i;
  */
 export const MAX_FILE_BYTES = (Number(process.env.CHAOXING_MAX_FILE_MB) || 250) * 1024 * 1024;
 /**
- * 对象存储单文件实际上限（保守值）。Supabase 实例单文件上传约 50MB 上限，
- * 超过会返回 `maximum allowed single file size`。转存前用该值预检，
- * 命中则直接降级为超星直链，避免把大文件缓冲进 Node 堆导致 OOM。
- * 可由 `STORAGE_MAX_FILE_MB` 覆盖。
+ * 对象存储单文件转存上限（保守值）。超过该大小会在下载前预检命中后直接降级为
+ * 「超星直链」实时签名下载，避免把超大文件缓冲进 Node 堆导致 OOM。
+ * 切到扣子内置对象存储后单文件上限较高，默认 256MB；可由 `STORAGE_MAX_FILE_MB`
+ * 覆盖（设置更小会更早降级为直链，设置更大需同时确认平台实际上传限额）。
  */
 export const STORAGE_MAX_FILE_BYTES =
-  (Number(process.env.STORAGE_MAX_FILE_MB) || 45) * 1024 * 1024;
+  (Number(process.env.STORAGE_MAX_FILE_MB) || 256) * 1024 * 1024;
 /** 状态接口（轻量 JSON）超时。 */
 const STATUS_TIMEOUT_MS = 30_000;
 /** 文件下载超时：大文件（百 MB 级）需要更长的总时长。 */

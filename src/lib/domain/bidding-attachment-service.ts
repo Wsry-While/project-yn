@@ -23,7 +23,6 @@ import {
 } from './chaoxing/file-tool';
 import {
   buildAttachmentKey,
-  createSignedDownloadUrl,
   streamToUint8Array,
   uploadToStorage,
 } from './storage/object-storage-tool';
