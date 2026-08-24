@@ -3,7 +3,7 @@
  * 复用招投标截图的转存工具链（external_file_assets 表 + chaoxing file-tool + storage-tool）。
  */
 import { getSupabaseAdminClient } from '@/lib/supabase-client';
-import { resolveAssetDownload, retryAssetTransfer } from './asset-access';
+import { resolveAssetDownload, retryAssetTransfer, ensureAndTransferByObjectId } from './asset-access';
 import type { BiddingFileRef, BiddingFileStorageStatus, ProjectDemand } from './types';
 import {
   downloadChaoxingFile,
@@ -216,4 +216,40 @@ export async function getDemandAssetSignedUrl(assetId: string): Promise<{ signed
 export async function retryDemandAsset(assetId: string): Promise<{ ok: boolean; error?: string }> {
   const result = await retryAssetTransfer(assetId);
   return { ok: result.ok, error: result.error };
+}
+
+/**
+ * 对某条建设申请记录里指定字段、指定 objectId 的单个附件执行转存并回写业务表。
+ * 用于历史数据「只有 objectId、没建 asset/没回写」时的手动获取。
+ */
+export async function retransferDemandFile(
+  record: ProjectDemand,
+  field: AttachmentField,
+  objectId: string,
+): Promise<{ ok: boolean; status?: string; assetId?: string; error?: string }> {
+  const current = (record[field] ?? []).find((f) => f.objectId === objectId) ?? null;
+  const result = await ensureAndTransferByObjectId(objectId, {
+    externalId: record.externalId || record.id,
+    field: `demand-${field}`,
+    fileName: current?.name,
+    suffix: current?.suffix,
+    contentType: current?.type,
+    byteSize: current?.byteSize,
+  });
+  if (!result.assetId) return { ok: false, error: result.error };
+
+  const db = getSupabaseAdminClient();
+  const next = (record[field] ?? []).map((f) => {
+    if (f.objectId !== objectId) return f;
+    const base = { ...f, assetId: result.assetId };
+    if (result.status === 'direct') {
+      return { ...base, storageStatus: 'direct' as BiddingFileStorageStatus, storageError: result.error ?? '超大文件，走超星直链下载' };
+    }
+    if (!result.ok) {
+      return { ...base, storageStatus: 'failed' as BiddingFileStorageStatus, storageError: result.error ?? '转存失败' };
+    }
+    return { ...base, bucket: f.bucket ?? null, storageKey: f.storageKey ?? null, storageStatus: 'stored' as BiddingFileStorageStatus, storedAt: new Date().toISOString(), storageError: null };
+  });
+  await db.from('project_demands').update({ [field]: next }).eq('id', record.id);
+  return { ok: result.ok, status: result.status, assetId: result.assetId, error: result.error };
 }

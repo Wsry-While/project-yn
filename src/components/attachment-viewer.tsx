@@ -75,47 +75,104 @@ export function AttachmentLink({
   variant = 'clip',
   externalId,
   field,
+  business,
   onRetried,
 }: {
   file: BiddingFileRef | null | undefined;
   fallbackLabel?: string;
   variant?: 'clip' | 'doc';
+  /** 业务记录 ID，用于 objectId 兜底转存回写（招投标=记录 id）。 */
   externalId?: string;
   field?: string;
+  /** 业务线，缺省按 externalId+field 推断；objectId 兜底转存时需要。 */
+  business?: 'bidding' | 'demand' | 'qiming';
   onRetried?: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [acquiring, setAcquiring] = useState(false);
 
   if (!file) return <span className="text-muted-foreground">—</span>;
 
   const name = file.name || fallbackLabel;
   const hasAsset = !!file.assetId;
+  const hasObjectId = !!file.objectId;
   const failed = file.storageStatus === 'failed';
   const pending = file.storageStatus === 'pending' || file.storageStatus === 'fetching';
-  const canOpen = hasAsset && file.storageStatus !== 'failed';
+  // 可点开预览：已转存（有 assetId），或有外链/超星 objectId 可兜底。
+  const canPreview = hasAsset || !!file.url || hasObjectId;
+  // 可就地「获取/重试」：有 objectId 且知道业务线+记录+字段，能调 /api/files/transfer 回写。
+  const canAcquire =
+    hasObjectId && !!business && !!externalId && !!field && file.storageStatus !== 'stored' && file.storageStatus !== 'direct';
+
+  const handleAcquire = async () => {
+    if (!file.objectId || !business || !externalId || !field) return;
+    setAcquiring(true);
+    try {
+      const result = await apiFetch<{ ok: boolean; status?: string; error?: string }>('/api/files/transfer', {
+        method: 'POST',
+        body: JSON.stringify({ business, recordId: externalId, field, objectId: file.objectId }),
+      });
+      if (result.ok) {
+        showToast(result.status === 'direct' ? '文件较大，已切换为超星直链' : '附件已获取', { kind: 'success' });
+        onRetried?.();
+      } else {
+        showToast(result.error || '获取附件失败，请稍后再试', { kind: 'error' });
+      }
+    } catch (err) {
+      showToast(err instanceof ApiError ? err.message : '获取附件失败', { kind: 'error' });
+    } finally {
+      setAcquiring(false);
+    }
+  };
 
   return (
     <>
-      <button
-        type="button"
-        disabled={!hasAsset && !file.url}
-        onClick={() => hasAsset && setOpen(true)}
-        className={cn(
-          'inline-flex max-w-full items-center gap-1.5 text-sm transition-colors',
-          canOpen
-            ? 'text-brand hover:underline'
-            : failed
-              ? 'cursor-pointer text-red-500 hover:underline'
-              : 'text-muted-foreground',
-          !hasAsset && !file.url && 'cursor-not-allowed opacity-60',
+      <span className="inline-flex max-w-full items-center gap-1.5 text-sm">
+        <button
+          type="button"
+          disabled={!canPreview}
+          onClick={() => {
+            if (hasAsset) setOpen(true);
+            else if (file.url) window.open(file.url, '_blank', 'noopener,noreferrer');
+            else if (hasObjectId)
+              window.open(
+                `/api/files/chaoxing-direct?objectId=${encodeURIComponent(file.objectId!)}`,
+                '_blank',
+                'noopener,noreferrer',
+              );
+          }}
+          className={cn(
+            'inline-flex min-w-0 items-center gap-1.5 transition-colors',
+            canPreview
+              ? 'text-brand hover:underline'
+              : failed
+                ? 'cursor-pointer text-red-500 hover:underline'
+                : 'text-muted-foreground',
+            !canPreview && 'cursor-not-allowed opacity-60',
+          )}
+          title={file.storageError ?? name}
+        >
+          {variant === 'doc' ? (
+            <FileText className="h-3.5 w-3.5 shrink-0" />
+          ) : (
+            <Paperclip className="h-3.5 w-3.5 shrink-0" />
+          )}
+          <span className="truncate">{name}</span>
+          {failed && !canAcquire && <span className="text-[10px] text-red-500">(点击重试)</span>}
+          {pending && <Loader2 className="h-3 w-3 shrink-0 animate-spin text-muted-foreground" />}
+        </button>
+        {canAcquire && (
+          <button
+            type="button"
+            onClick={handleAcquire}
+            disabled={acquiring}
+            className="inline-flex shrink-0 items-center gap-0.5 rounded border border-brand/30 px-1.5 py-0.5 text-[10px] font-medium text-brand hover:bg-brand/10 disabled:opacity-60"
+          >
+            {acquiring ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <RefreshCw className="h-2.5 w-2.5" />}
+            {failed ? '重试' : '获取'}
+          </button>
         )}
-        title={file.storageError ?? name}
-      >
-        {variant === 'doc' ? <FileText className="h-3.5 w-3.5 shrink-0" /> : <Paperclip className="h-3.5 w-3.5 shrink-0" />}
-        <span className="truncate">{name}</span>
-        {failed && <span className="text-[10px] text-red-500">(点击重试)</span>}
-        {pending && <Loader2 className="h-3 w-3 shrink-0 animate-spin text-muted-foreground" />}
-      </button>
+      </span>
 
       {hasAsset && (
         <PreviewModal
@@ -127,11 +184,6 @@ export function AttachmentLink({
           onRetried={onRetried}
         />
       )}
-      {!hasAsset && file.url && (
-        <a href={file.url} target="_blank" rel="noreferrer" className="sr-only" aria-hidden>
-          {name}
-        </a>
-      )}
     </>
   );
 }
@@ -140,11 +192,13 @@ export function AttachmentList({
   files,
   externalId,
   field,
+  business,
   onRetried,
 }: {
   files: BiddingFileRef[] | null | undefined;
   externalId?: string;
   field?: string;
+  business?: 'bidding' | 'demand' | 'qiming';
   onRetried?: () => void;
 }) {
   if (!files || files.length === 0) return <span className="text-muted-foreground">—</span>;
@@ -157,6 +211,7 @@ export function AttachmentList({
           fallbackLabel={`附件 ${i + 1}`}
           externalId={externalId}
           field={field}
+          business={business}
           onRetried={onRetried}
         />
       ))}

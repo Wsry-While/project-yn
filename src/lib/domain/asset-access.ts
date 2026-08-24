@@ -16,6 +16,7 @@ import {
   uploadToStorage,
 } from './storage/object-storage-tool';
 import {
+  assertValidObjectId,
   ChaoxingFileError,
   downloadChaoxingFile,
   getChaoxingDirectDownloadUrl,
@@ -131,7 +132,40 @@ async function transferAsset(asset: AssetMeta, externalId: string, field: string
 export interface RetryResult {
   ok: boolean;
   status?: AssetStatus;
+  assetId?: string;
   error?: string;
+}
+
+/**
+ * 对一个 objectId 幂等建 asset 行（如尚未建）并执行一次转存。
+ *
+ * 用于历史附件「只有 objectId、没有 assetId」时的手动获取/重试：建完行后直接
+ * 走 retryAssetTransfer 的下载/上传/降级流程。返回最终状态与 assetId，供调用方
+ * 回写业务表 JSONB。
+ */
+export async function ensureAndTransferByObjectId(
+  objectId: string,
+  ctx: {
+    externalId?: string;
+    field?: string;
+    fileName?: string | null;
+    suffix?: string | null;
+    contentType?: string | null;
+    byteSize?: number | null;
+  } = {},
+): Promise<RetryResult> {
+  const meta = await ensureAssetByObjectId(objectId, {
+    fileName: ctx.fileName,
+    suffix: ctx.suffix,
+    contentType: ctx.contentType,
+    byteSize: ctx.byteSize,
+  });
+  if (!meta) return { ok: false, error: '非法的 objectId 或建 asset 失败' };
+  const result = await retryAssetTransfer(meta.id, {
+    externalId: ctx.externalId,
+    field: ctx.field,
+  });
+  return { ...result, assetId: meta.id };
 }
 
 /**
@@ -201,4 +235,79 @@ export async function resolveAssetDownload(
   if (meta.status !== 'stored' || !meta.bucket || !meta.storageKey) return null;
   const signedUrl = await createSignedDownloadUrl(meta.bucket, meta.storageKey, 10 * 60);
   return { signedUrl, fileName: meta.fileName || meta.storageKey.split('/').pop() || 'download', status: 'stored' };
+}
+
+/**
+ * 直接按超星 objectId 实时换取临时签名直链（不经过 external_file_assets）。
+ *
+ * 用于历史数据里「只有 objectId、还没建 asset 行/没转存」的文件，让用户
+ * 当下就能预览/下载，而不必先等待转存。签名现换现下、不可缓存。
+ */
+export async function resolveChaoxingDirectByObjectId(
+  objectId: string,
+): Promise<{ signedUrl: string; fileName: string | null }> {
+  assertValidObjectId(objectId);
+  const direct = await getChaoxingDirectDownloadUrl(objectId);
+  return { signedUrl: direct.url, fileName: direct.fileName };
+}
+
+/**
+ * 按 (source, objectId) 幂等查找或创建 asset 行。
+ *
+ * 历史附件可能尚未在 external_file_assets 建过记录，手动「获取/重试」时用它
+ * 补齐 asset 行，再交给 retryAssetTransfer 走下载转存流程。
+ */
+export async function ensureAssetByObjectId(
+  objectId: string,
+  seed?: { fileName?: string | null; suffix?: string | null; contentType?: string | null; byteSize?: number | null },
+): Promise<AssetMeta | null> {
+  try {
+    assertValidObjectId(objectId);
+  } catch {
+    return null;
+  }
+  const db = getSupabaseAdminClient();
+  const { data: existing, error: selectError } = await db
+    .from('external_file_assets')
+    .select('*')
+    .eq('source', 'chaoxing')
+    .eq('object_id', objectId)
+    .maybeSingle();
+  if (selectError) {
+    console.warn('[asset-access] ensureAssetByObjectId query failed', { objectId, error: selectError.message });
+    return null;
+  }
+  if (existing) return mapAsset(existing as AssetRow);
+
+  const now = new Date().toISOString();
+  const { data, error } = await db
+    .from('external_file_assets')
+    .insert({
+      source: 'chaoxing',
+      object_id: objectId,
+      source_url: `https://d0.cldisk.com/download/${objectId}`,
+      file_name: seed?.fileName ?? null,
+      suffix: seed?.suffix ?? null,
+      content_type: seed?.contentType ?? null,
+      byte_size: seed?.byteSize ?? null,
+      status: 'pending',
+      created_at: now,
+      updated_at: now,
+    })
+    .select('*')
+    .single();
+  if (error) {
+    if (/duplicate|unique/i.test(error.message)) {
+      const { data: raced } = await db
+        .from('external_file_assets')
+        .select('*')
+        .eq('source', 'chaoxing')
+        .eq('object_id', objectId)
+        .maybeSingle();
+      return raced ? mapAsset(raced as AssetRow) : null;
+    }
+    console.warn('[asset-access] ensureAssetByObjectId insert failed', { objectId, error: error.message });
+    return null;
+  }
+  return mapAsset(data as AssetRow);
 }

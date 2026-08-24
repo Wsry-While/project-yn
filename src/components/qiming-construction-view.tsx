@@ -358,7 +358,7 @@ export function QimingConstructionView() {
               ) : null}
               {detail.projectMaterials.length ? (
                 <Detail label="项目相关资料">
-                  <AttachmentList files={detail.projectMaterials} externalId={detail.id} field="projectMaterials" onRetried={refresh} />
+                  <AttachmentList files={detail.projectMaterials} business="qiming" externalId={detail.id} field="projectMaterials" onRetried={refresh} />
                 </Detail>
               ) : null}
               {detail.projectStatusFeedback ? (

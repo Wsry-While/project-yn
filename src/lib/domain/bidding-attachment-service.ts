@@ -10,7 +10,7 @@
  * 同一 objectId 在多条记录/多个字段里复用同一份 asset，只下载/上传一次。
  */
 import { getSupabaseAdminClient } from '@/lib/supabase-client';
-import { resolveAssetDownload, retryAssetTransfer } from './asset-access';
+import { resolveAssetDownload, retryAssetTransfer, ensureAndTransferByObjectId, getAssetMeta } from './asset-access';
 import type { BiddingFileRef, BiddingFileStorageStatus, BiddingScreenshot } from './types';
 import {
   downloadChaoxingFile,
@@ -338,6 +338,64 @@ export async function processBiddingAttachments(record: BiddingScreenshot): Prom
 export async function retryAsset(assetId: string): Promise<{ ok: boolean; error?: string }> {
   const result = await retryAssetTransfer(assetId);
   return { ok: result.ok, error: result.error };
+}
+
+/**
+ * 对某条招投标记录里指定字段、指定 objectId 的单个附件执行转存并回写业务表。
+ *
+ * 用于历史数据「只有 objectId、没建 asset/没回写」时，用户在前端点「获取」即可
+ * 就地补齐：ensureAndTransferByObjectId 幂等建 asset + 下载转存（超大文件降级 direct），
+ * 这里把最终 assetId/status 回写到 bidding_screenshots 对应 JSONB 字段。
+ */
+export async function retransferBiddingFile(
+  record: BiddingScreenshot,
+  field: AttachmentField,
+  objectId: string,
+): Promise<{ ok: boolean; status?: string; assetId?: string; error?: string }> {
+  const current =
+    field === 'attachments'
+      ? (record.attachments ?? []).find((f) => f.objectId === objectId) ?? null
+      : (record[field] as BiddingFileRef | null)?.objectId === objectId
+        ? (record[field] as BiddingFileRef | null)
+        : null;
+  const result = await ensureAndTransferByObjectId(objectId, {
+    externalId: record.externalId || record.id,
+    field,
+    fileName: current?.name,
+    suffix: current?.suffix,
+    contentType: current?.type,
+    byteSize: current?.byteSize,
+  });
+  if (!result.assetId) return { ok: false, error: result.error };
+
+  const patch: Partial<Pick<BiddingScreenshot, (typeof ATTACHMENT_FIELDS)[number]>> = {};
+  const applyTo = async (f: BiddingFileRef): Promise<BiddingFileRef> => {
+    if (result.status === 'direct') {
+      return applyDirectDownload({ ...f, assetId: result.assetId }, result.error ?? '超大文件，走超星直链下载');
+    }
+    if (!result.ok) {
+      return applyStorageFailure({ ...f, assetId: result.assetId }, result.error ?? '转存失败');
+    }
+    // 成功转存：从 asset 行读取 bucket/key 回写，保证与对象存储一致。
+    const meta = result.assetId ? await getAssetMeta(result.assetId) : null;
+    return applyStorageResult(
+      { ...f, assetId: result.assetId },
+      result.assetId!,
+      meta?.bucket ?? '',
+      meta?.storageKey ?? '',
+    );
+  };
+
+  if (field === 'attachments') {
+    patch.attachments = await Promise.all(
+      (record.attachments ?? []).map((f) => (f.objectId === objectId ? applyTo(f) : Promise.resolve(f))),
+    );
+  } else {
+    const scalar = record[field] as BiddingFileRef | null;
+    if (scalar) patch[field] = (await applyTo(scalar)) as BiddingScreenshot[typeof field];
+  }
+  await persistBusinessRecord(record, patch);
+  return { ok: result.ok, status: result.status, assetId: result.assetId, error: result.error };
 }
 
 /**

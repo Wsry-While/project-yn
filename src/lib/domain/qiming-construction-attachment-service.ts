@@ -4,7 +4,7 @@
  * 与项目建设申请/招投标截图共享同一套 bucket 和签名 URL 机制。
  */
 import { getSupabaseAdminClient } from '@/lib/supabase-client';
-import { resolveAssetDownload, retryAssetTransfer } from './asset-access';
+import { resolveAssetDownload, retryAssetTransfer, ensureAndTransferByObjectId } from './asset-access';
 import type { BiddingFileRef, BiddingFileStorageStatus, QimingConstruction } from './types';
 import {
   downloadChaoxingFile,
@@ -202,4 +202,39 @@ export async function getQimingAssetSignedUrl(assetId: string): Promise<{ signed
 export async function retryQimingAsset(assetId: string): Promise<{ ok: boolean; error?: string }> {
   const result = await retryAssetTransfer(assetId);
   return { ok: result.ok, error: result.error };
+}
+
+/**
+ * 对某条启明星记录里指定 objectId 的单个附件执行转存并回写 project_materials。
+ * 用于历史数据「只有 objectId、没建 asset/没回写」时的手动获取。
+ */
+export async function retransferQimingFile(
+  record: QimingConstruction,
+  objectId: string,
+): Promise<{ ok: boolean; status?: string; assetId?: string; error?: string }> {
+  const current = (record.projectMaterials ?? []).find((f) => f.objectId === objectId) ?? null;
+  const result = await ensureAndTransferByObjectId(objectId, {
+    externalId: record.externalId || record.id,
+    field: 'qiming-projectMaterials',
+    fileName: current?.name,
+    suffix: current?.suffix,
+    contentType: current?.type,
+    byteSize: current?.byteSize,
+  });
+  if (!result.assetId) return { ok: false, error: result.error };
+
+  const db = getSupabaseAdminClient();
+  const next = (record.projectMaterials ?? []).map((f) => {
+    if (f.objectId !== objectId) return f;
+    const base = { ...f, assetId: result.assetId };
+    if (result.status === 'direct') {
+      return { ...base, storageStatus: 'direct' as BiddingFileStorageStatus, storageError: result.error ?? '超大文件，走超星直链下载' };
+    }
+    if (!result.ok) {
+      return { ...base, storageStatus: 'failed' as BiddingFileStorageStatus, storageError: result.error ?? '转存失败' };
+    }
+    return { ...base, bucket: f.bucket ?? null, storageKey: f.storageKey ?? null, storageStatus: 'stored' as BiddingFileStorageStatus, storedAt: new Date().toISOString(), storageError: null };
+  });
+  await db.from('qiming_construction').update({ project_materials: next }).eq('id', record.id);
+  return { ok: result.ok, status: result.status, assetId: result.assetId, error: result.error };
 }

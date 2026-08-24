@@ -324,7 +324,7 @@ export function ProjectDemandsView() {
               ) : null}
               {detail.providedMaterials.length ? (
                 <Detail label="所提供材料">
-                  <AttachmentList files={detail.providedMaterials} externalId={detail.id} field="providedMaterials" onRetried={refresh} />
+                  <AttachmentList files={detail.providedMaterials} business="demand" externalId={detail.id} field="providedMaterials" onRetried={refresh} />
                 </Detail>
               ) : null}
               <Detail label="交付内容">
@@ -344,7 +344,7 @@ export function ProjectDemandsView() {
               ) : null}
               {detail.deliveryDocs.length ? (
                 <Detail label="交付文档">
-                  <AttachmentList files={detail.deliveryDocs} externalId={detail.id} field="deliveryDocs" onRetried={refresh} />
+                  <AttachmentList files={detail.deliveryDocs} business="demand" externalId={detail.id} field="deliveryDocs" onRetried={refresh} />
                 </Detail>
               ) : null}
               {detail.deliveryRemark ? (

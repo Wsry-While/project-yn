@@ -313,10 +313,10 @@ export function BiddingScreenshotsView() {
               <p className="whitespace-pre-wrap text-sm text-muted-foreground">{detail.screenshotRequirement || '—'}</p>
             </Detail>
             <div className="grid gap-3 sm:grid-cols-2">
-              <Detail label="项目招标文件"><AttachmentLink file={detail.projectBiddingFile} fallbackLabel="项目招标文件" variant="doc" externalId={detail.id} field="projectBiddingFile" onRetried={refresh} /></Detail>
-              <Detail label="交付文档上传"><AttachmentLink file={detail.deliveryDocument} fallbackLabel="交付文档" variant="doc" externalId={detail.id} field="deliveryDocument" onRetried={refresh} /></Detail>
-              <Detail label="整改后文档"><AttachmentLink file={detail.rectifiedDocument} fallbackLabel="整改后文档" variant="doc" externalId={detail.id} field="rectifiedDocument" onRetried={refresh} /></Detail>
-              <Detail label="附件材料"><AttachmentList files={detail.attachments} externalId={detail.id} field="attachments" onRetried={refresh} /></Detail>
+              <Detail label="项目招标文件"><AttachmentLink file={detail.projectBiddingFile} fallbackLabel="项目招标文件" variant="doc" business="bidding" externalId={detail.id} field="projectBiddingFile" onRetried={refresh} /></Detail>
+              <Detail label="交付文档上传"><AttachmentLink file={detail.deliveryDocument} fallbackLabel="交付文档" variant="doc" business="bidding" externalId={detail.id} field="deliveryDocument" onRetried={refresh} /></Detail>
+              <Detail label="整改后文档"><AttachmentLink file={detail.rectifiedDocument} fallbackLabel="整改后文档" variant="doc" business="bidding" externalId={detail.id} field="rectifiedDocument" onRetried={refresh} /></Detail>
+              <Detail label="附件材料"><AttachmentList files={detail.attachments} business="bidding" externalId={detail.id} field="attachments" onRetried={refresh} /></Detail>
             </div>
             <BiddingAiPanel record={detail} />
             <Detail label="交付信息备注">
