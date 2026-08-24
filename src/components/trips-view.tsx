@@ -11,9 +11,11 @@ import {
   ExternalLink,
   Search,
   RefreshCw,
+  Download,
 } from 'lucide-react';
 import { tripWebService } from '@/lib/web/trip-web-service';
 import { showToast } from '@/lib/web/toast-store';
+import { exportCsv, datedName } from '@/lib/web/csv-export';
 import { LlmLoadingMask } from '@/components/llm-loading-mask';
 import { Input } from '@/components/ui/input';
 import { Modal } from '@/components/modal';
@@ -135,6 +137,33 @@ export function TripsView() {
     if (safePage !== page) setPage(safePage);
   }, [safePage, page]);
 
+  const handleExport = () => {
+    if (filtered.length === 0) {
+      showToast('当前筛选结果为空，无法导出', { kind: 'info' });
+      return;
+    }
+    exportCsv(datedName('项目外出'), [
+      { header: '学校', get: (r) => r.schoolName },
+      { header: '行业', get: (r) => r.industry },
+      { header: '年度', get: (r) => r.year },
+      { header: '支持类型', get: (r) => r.supportType },
+      { header: '其他类型', get: (r) => r.supportTypeOther },
+      { header: '产品', get: (r) => r.products.join('、') },
+      { header: '外出日期', get: (r) => r.tripDate?.slice(0, 10) },
+      { header: '开始时间', get: (r) => (r.startAt ? formatDateTime(r.startAt) : '') },
+      { header: '结束时间', get: (r) => (r.endAt ? formatDateTime(r.endAt) : '') },
+      { header: '销售经理', get: (r) => r.salesManager?.name },
+      { header: '项目经理', get: (r) => r.projectManager?.name },
+      { header: '是否完成', get: (r) => (r.isCompleted ? '是' : '否') },
+      { header: '综合评分', get: (r) => r.overallScore },
+      { header: '销售评分', get: (r) => r.salesScore },
+      { header: '整体评价', get: (r) => r.overallFeedback?.text },
+      { header: '服务内容', get: (r) => r.serviceSummary?.text },
+      { header: '事宜', get: (r) => r.detail?.text },
+    ], filtered);
+    showToast(`已导出 ${filtered.length} 条项目外出记录`, { kind: 'success' });
+  };
+
   return (
     <LlmLoadingMask loading={loading} label="同步项目外出记录…" className="min-h-[70vh]">
       <div className="mx-auto w-full max-w-[1400px] p-4 sm:p-6">
@@ -189,6 +218,15 @@ export function TripsView() {
                 ))}
               </SelectContent>
             </Select>
+            <button
+              type="button"
+              onClick={handleExport}
+              disabled={filtered.length === 0}
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-card px-3 text-xs text-muted-foreground transition hover:text-foreground disabled:opacity-50"
+            >
+              <Download className="h-3.5 w-3.5" />
+              导出 CSV
+            </button>
             <div className="ml-auto font-mono text-[11px] text-muted-foreground">
               筛选结果 <span className="text-foreground">{total}</span>
             </div>

@@ -69,14 +69,18 @@
 - **表格**：11px 大写表头 + 12–13px 行内文本；行 hover `bg-muted/30`；focus 行 `bg-brand/5 ring-1 ring-brand/40`。
 - **Modal**：使用统一 `<Modal>` 组件，禁止自定义遮罩。
 - **图表**：Recharts，tooltip 用卡片色 + 1px 边框，轴线 / 网格使用 `var(--border)`，颜色引用 chart token。
+- **Command Palette（全局搜索 ⌘K）**：顶栏搜索触发器 hover 边框转 `--brand/40`；弹层 `shadow-[0_24px_60px_rgba(0,0,0,0.32)]`、`max-h-[52vh]`；激活项 `bg-brand-muted text-brand` + 右侧 ↵ 提示；支持 ↑↓/↵/esc，底部用 `Kbd` 展示快捷键；中文输入自动走业务数据语义搜索。
+- **Kbd**：所有键盘提示统一用 `<Kbd>`（`h-5`、`font-mono text-[10px]`、内嵌高光阴影），禁止手写裸 `<kbd>`。
+- **CSV 导出**：列表筛选栏右侧「导出 CSV」按钮，图标 + 文字，禁用态 `opacity-50`，按当前筛选导出。
 
 ## 交互与状态
 
 - 列表筛选：搜索框 + Select 下拉，不再使用 chip 按钮组。
 - 所有列表读取 `?focus=:id` 参数，命中行高亮并可后续自动打开。
 - 分页：客户端分页，PAGE_SIZE = 20。
-- 快捷键：`⌘1–9 / ⌘0` 切换侧边栏导航，`⌘N` 新建任务，`Esc` 关闭弹窗。
+- 快捷键：`⌘1–9 / ⌘0` 切换侧边栏导航，`⌘K` 唤起全局搜索，`⌘N` 新建任务，`Esc` 关闭弹窗。
 - Toast：右下角堆叠，3s 自动消失。
+- 可访问性：交互元素具备 `focus-visible:ring` 焦点环；图标按钮配 `aria-label`；弹窗使用 `role="dialog" aria-modal="true"`。
 
 ## 设计禁忌
 

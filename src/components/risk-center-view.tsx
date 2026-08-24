@@ -61,18 +61,21 @@ export function RiskCenterView() {
   const [severity, setSeverity] = useState<'all' | RiskSeverity>('all');
   const [source, setSource] = useState<'all' | RiskItem['source']>('all');
   const [search, setSearch] = useState('');
+  const [mine, setMine] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await apiFetch<RiskSummary>('/api/risks');
+      const qs = new URLSearchParams();
+      if (mine) qs.set('mine', '1');
+      const data = await apiFetch<RiskSummary>(`/api/risks${qs.size ? `?${qs.toString()}` : ''}`);
       setSummary(data);
     } catch (err) {
       showToast(err instanceof Error ? err.message : '加载风险预警失败', { kind: 'error' });
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [mine]);
 
   useEffect(() => {
     void load();
@@ -178,6 +181,15 @@ export function RiskCenterView() {
               <SelectItem value="cross">跨源</SelectItem>
             </SelectContent>
           </Select>
+          <Button
+            variant={mine ? 'default' : 'outline'}
+            size="sm"
+            className="h-8"
+            onClick={() => setMine((v) => !v)}
+          >
+            <User className="h-3.5 w-3.5" />
+            我的风险
+          </Button>
           <div className="ml-auto flex items-center gap-2 text-[11px] text-muted-foreground">
             {countsBySource && (
               <>

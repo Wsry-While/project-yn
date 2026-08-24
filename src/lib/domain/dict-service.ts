@@ -180,4 +180,88 @@ export class DictService {
     if (!opt) return;
     await this.db.from('dict_options').update({ active }).eq('id', opt.id);
   }
+
+  /** 管理台：按分类列出（含停用），返回值按 sort_order/value 排序。 */
+  async adminList(category?: string): Promise<DictOption[]> {
+    let q = this.db.from('dict_options').select('*');
+    if (category) q = q.eq('category', category);
+    const { data, error } = await q.order('category').order('sort_order', { ascending: true }).order('value');
+    if (error) throw new Error(`查询字典失败: ${error.message}`);
+    return (data as DictOptionRow[]).map(mapDictOption);
+  }
+
+  /** 管理台：按 id 更新 value / aliases / sort_order / active。 */
+  async updateById(
+    id: string,
+    patch: { value?: string; aliases?: string[]; sortOrder?: number; active?: boolean },
+  ): Promise<DictOption> {
+    const row: Record<string, unknown> = {};
+    if (patch.value !== undefined) {
+      const v = normalizeValue(patch.value);
+      if (!v) throw Object.assign(new Error('字典值不能为空'), { status: 400, code: 'invalid_param' });
+      row.value = v;
+    }
+    if (patch.aliases !== undefined) {
+      row.aliases = Array.from(
+        new Set(
+          patch.aliases
+            .map((a) => normalizeValue(a))
+            .filter((a): a is string => !!a),
+        ),
+      );
+    }
+    if (patch.sortOrder !== undefined) row.sort_order = patch.sortOrder;
+    if (patch.active !== undefined) row.active = patch.active;
+
+    const { data, error } = await this.db
+      .from('dict_options')
+      .update(row)
+      .eq('id', id)
+      .select()
+      .single<DictOptionRow>();
+    if (error) {
+      if (/duplicate|unique/i.test(error.message)) {
+        throw Object.assign(new Error('同分类下已存在相同的字典值'), { status: 409, code: 'duplicate' });
+      }
+      throw new Error(`更新字典失败: ${error.message}`);
+    }
+    return mapDictOption(data);
+  }
+
+  /** 管理台：新增一条字典值。 */
+  async create(input: {
+    category: string;
+    value: string;
+    aliases?: string[];
+    sortOrder?: number;
+    source?: string;
+  }): Promise<DictOption> {
+    const category = normalizeValue(input.category);
+    const value = normalizeValue(input.value);
+    if (!category || !value) {
+      throw Object.assign(new Error('分类和字典值不能为空'), { status: 400, code: 'invalid_param' });
+    }
+    const aliases = Array.from(
+      new Set((input.aliases ?? []).map((a) => normalizeValue(a)).filter((a): a is string => !!a)),
+    );
+    const { data, error } = await this.db
+      .from('dict_options')
+      .insert({
+        category,
+        value,
+        aliases,
+        sort_order: input.sortOrder ?? 0,
+        active: true,
+        source: input.source ?? 'manual',
+      })
+      .select()
+      .single<DictOptionRow>();
+    if (error) {
+      if (/duplicate|unique/i.test(error.message)) {
+        throw Object.assign(new Error('同分类下已存在相同的字典值'), { status: 409, code: 'duplicate' });
+      }
+      throw new Error(`新增字典失败: ${error.message}`);
+    }
+    return mapDictOption(data);
+  }
 }

@@ -9,9 +9,11 @@ import {
   RefreshCw,
   Search,
   UserRound,
+  Download,
 } from 'lucide-react';
 import { biddingScreenshotWebService } from '@/lib/web/bidding-screenshot-web-service';
 import { showToast } from '@/lib/web/toast-store';
+import { exportCsv, datedName } from '@/lib/web/csv-export';
 import { LlmLoadingMask } from '@/components/llm-loading-mask';
 import { Input } from '@/components/ui/input';
 import { Modal } from '@/components/modal';
@@ -201,6 +203,33 @@ export function BiddingScreenshotsView() {
     if (safePage !== page) setPage(safePage);
   }, [safePage, page]);
 
+  const handleExport = () => {
+    if (filtered.length === 0) {
+      showToast('当前筛选结果为空，无法导出', { kind: 'info' });
+      return;
+    }
+    exportCsv(datedName('招投标截图'), [
+      { header: '项目名称', get: (r) => r.projectName },
+      { header: '学校', get: (r) => r.projectSchool },
+      { header: '二级单位', get: (r) => r.projectSecondaryUnit },
+      { header: '销售经理', get: (r) => r.salesManager },
+      { header: '项目经理', get: (r) => r.assignedProjectManager },
+      { header: '类别', get: (r) => r.projectCategory.join('、') },
+      { header: '是否公司参数', get: (r) => (r.isCompanyParameter ? '是' : '否') },
+      { header: '提交日期', get: (r) => r.submissionDate },
+      { header: '需交付日期', get: (r) => r.dueDeliveryDate },
+      { header: '预留天数', get: (r) => r.reservedDays },
+      { header: '完成状态', get: (r) => r.completionStatus },
+      { header: '是否满足截图需求', get: (r) =>
+        r.isMeetScreenshotRequirement === null ? '' : r.isMeetScreenshotRequirement ? '是' : '否' },
+      { header: '交付备注', get: (r) => r.deliveryRemark },
+      { header: '销售反馈', get: (r) => r.salesFeedback },
+      { header: '整改反馈', get: (r) => r.rectificationFeedback },
+      { header: '附件数', get: (r) => r.attachments.length },
+    ], filtered);
+    showToast(`已导出 ${filtered.length} 条招投标记录`, { kind: 'success' });
+  };
+
   return (
     <LlmLoadingMask loading={loading} label="加载招投标截图…" className="min-h-[70vh]">
       <div className="mx-auto w-full max-w-[1400px] p-4 sm:p-6">
@@ -268,6 +297,15 @@ export function BiddingScreenshotsView() {
               )}
             >
               仅逾期
+            </button>
+            <button
+              type="button"
+              onClick={handleExport}
+              disabled={filtered.length === 0}
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-card px-3 text-xs text-muted-foreground transition hover:text-foreground disabled:opacity-50"
+            >
+              <Download className="h-3.5 w-3.5" />
+              导出 CSV
             </button>
             <div className="ml-auto font-mono text-[11px] text-muted-foreground">
               筛选结果 <span className="text-foreground">{total}</span>

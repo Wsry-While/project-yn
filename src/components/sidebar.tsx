@@ -21,6 +21,7 @@ import {
   FileText,
   GitMerge,
   BarChart3,
+  BookMarked,
 } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
@@ -124,6 +125,12 @@ const NAV: NavItem[] = [
     label: '数据对齐',
     icon: GitMerge,
     match: (p) => p.startsWith('/data-align'),
+  },
+  {
+    href: '/dict',
+    label: '字典管理',
+    icon: BookMarked,
+    match: (p) => p.startsWith('/dict'),
   },
   {
     href: '/settings',

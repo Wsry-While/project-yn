@@ -1,10 +1,11 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { FileText, Paperclip, Search, Calendar, Building2, User, RefreshCw } from 'lucide-react';
+import { FileText, Paperclip, Search, Calendar, Building2, User, RefreshCw, Download } from 'lucide-react';
 import { LlmLoadingMask } from '@/components/llm-loading-mask';
 import { showToast } from '@/lib/web/toast-store';
 import { apiFetch } from '@/lib/web/api-client';
+import { exportCsv, datedName } from '@/lib/web/csv-export';
 import { Input } from '@/components/ui/input';
 import { Modal } from '@/components/modal';
 import { PageHeader } from '@/components/page-header';
@@ -123,6 +124,33 @@ export function ProjectDemandsView() {
     return r.requiredFinishDate < new Date().toISOString().slice(0, 10);
   };
 
+  const handleExport = () => {
+    if (filtered.length === 0) {
+      showToast('当前筛选结果为空，无法导出', { kind: 'info' });
+      return;
+    }
+    exportCsv(datedName('项目建设申请'), [
+      { header: '年度', get: (r) => r.projectYear },
+      { header: '所属单位', get: (r) => r.company },
+      { header: '行业类别', get: (r) => r.industryCategory },
+      { header: '需求类型', get: (r) => r.demandType },
+      { header: '所属产品', get: (r) => r.product.join('、') },
+      { header: '销售经理', get: (r) => r.salesManager },
+      { header: '项目负责人', get: (r) => r.projectManager },
+      { header: '要求完成时间', get: (r) => r.requiredFinishDate },
+      { header: '完成情况', get: (r) => r.completionStatus },
+      { header: '预计完成时间', get: (r) => r.estimatedFinishDate },
+      { header: '交付内容', get: (r) => r.deliveryContent },
+      { header: '交付内容（其他）', get: (r) => r.otherDeliveryContent },
+      { header: '交付文档类型', get: (r) => r.deliveryDocType.join('、') },
+      { header: '交付备注', get: (r) => r.deliveryRemark },
+      { header: '需求说明', get: (r) => r.demandDescText },
+      { header: '材料数', get: (r) => r.providedMaterials.length },
+      { header: '交付文档数', get: (r) => r.deliveryDocs.length },
+    ], filtered);
+    showToast(`已导出 ${filtered.length} 条建设申请`, { kind: 'success' });
+  };
+
   return (
     <LlmLoadingMask loading={loading} label="加载项目建设申请…" className="min-h-[70vh]">
       <div className="mx-auto w-full max-w-[1400px] p-4 sm:p-6">
@@ -176,6 +204,15 @@ export function ProjectDemandsView() {
                 ))}
               </SelectContent>
             </Select>
+            <button
+              type="button"
+              onClick={handleExport}
+              disabled={filtered.length === 0}
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-card px-3 text-xs text-muted-foreground transition hover:text-foreground disabled:opacity-50"
+            >
+              <Download className="h-3.5 w-3.5" />
+              导出 CSV
+            </button>
             <div className="ml-auto font-mono text-[11px] text-muted-foreground">
               筛选结果 <span className="text-foreground">{total}</span>
             </div>

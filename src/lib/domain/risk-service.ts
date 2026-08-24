@@ -29,6 +29,8 @@ export interface RiskItem {
   title: string;
   detail: string;
   owner: string | null;
+  /** 责任人对应的 team_members.id（销售/项目经理），用于 ownerId 过滤 */
+  ownerIds: string[];
   school: string | null;
   date: string | null;
   url: string;
@@ -74,6 +76,18 @@ function diffDaysFromToday(ymd: string | null | undefined): number | null {
 
 const NEGATIVE_PATTERNS = [/差/g, /不满/g, /投诉/g, /问题/g, /未解决/g, /待整改/g, /延迟/g, /拖延/g, /差$/];
 
+/** 收集非空的责任人 team_members.id，去重后返回 */
+function collectOwnerIds(...ids: Array<string | null | undefined>): string[] {
+  const set = new Set<string>();
+  for (const id of ids) {
+    if (id && typeof id === 'string') {
+      const v = id.trim();
+      if (v) set.add(v);
+    }
+  }
+  return Array.from(set);
+}
+
 function hasNegativeFeedback(text: string | null | undefined): boolean {
   if (!text) return false;
   const t = text.trim();
@@ -92,25 +106,25 @@ export class RiskService {
       this.db
         .from('bidding_screenshots')
         .select(
-          'id, project_name, project_school, sales_manager, assigned_project_manager, submission_date, due_delivery_date, reserved_days, completion_status, is_meet_screenshot_requirement',
+          'id, project_name, project_school, sales_manager, assigned_project_manager, sales_manager_id, assigned_pm_id, submission_date, due_delivery_date, reserved_days, completion_status, is_meet_screenshot_requirement',
         )
         .is('deleted_at', null),
       this.db
         .from('project_demands')
         .select(
-          'id, company, demand_type, product, sales_manager, project_manager, required_finish_date, completion_status',
+          'id, company, demand_type, product, sales_manager, project_manager, sales_manager_id, project_manager_id, required_finish_date, completion_status',
         )
         .is('deleted_at', null),
       this.db
         .from('qiming_construction')
         .select(
-          'id, project_name, school, sales_manager, project_manager, project_delivery_time, is_sign_contract, project_status_feedback, project_year',
+          'id, project_name, school, sales_manager, project_manager, sales_manager_id, project_manager_id, project_delivery_time, is_sign_contract, project_status_feedback, project_year',
         )
         .is('deleted_at', null),
       this.db
         .from('trip_requests')
         .select(
-          'id, school_name, support_type, sales_manager_name, project_manager_name, trip_date, is_completed, overall_score, sales_score, overall_feedback_text, service_summary_text',
+          'id, school_name, support_type, sales_manager_name, project_manager_name, sales_manager_id, project_manager_id, trip_date, is_completed, overall_score, sales_score, overall_feedback_text, service_summary_text',
         )
         .is('deleted_at', null),
     ]);
@@ -144,6 +158,7 @@ export class RiskService {
           title: '招投标截图已逾期未交付',
           detail: `${String(r.project_name ?? '')} 应于 ${due} 交付，当前状态：${status ?? '未填'}`,
           owner: (r.assigned_project_manager as string) || (r.sales_manager as string) || null,
+          ownerIds: collectOwnerIds(r.assigned_pm_id as string, r.sales_manager_id as string),
           school: (r.project_school as string) || null,
           date: due,
           url: `/bidding-screenshots?focus=${id}`,
@@ -157,6 +172,7 @@ export class RiskService {
           title: '招投标预留天数不足',
           detail: `${String(r.project_name ?? '')} 仅剩 ${reserved} 天预留期，截止 ${due ?? '—'}`,
           owner: (r.assigned_project_manager as string) || (r.sales_manager as string) || null,
+          ownerIds: collectOwnerIds(r.assigned_pm_id as string, r.sales_manager_id as string),
           school: (r.project_school as string) || null,
           date: due,
           url: `/bidding-screenshots?focus=${id}`,
@@ -172,6 +188,7 @@ export class RiskService {
           title: '招投标截图未按需求完成',
           detail: `${String(r.project_name ?? '')} 销售反馈未满足截图需求`,
           owner: (r.sales_manager as string) || null,
+          ownerIds: collectOwnerIds(r.sales_manager_id as string),
           school: (r.project_school as string) || null,
           date: (r.submission_date as string) || null,
           url: `/bidding-screenshots?focus=${id}`,
@@ -196,6 +213,7 @@ export class RiskService {
           title: '项目建设申请已逾期',
           detail: `${String(r.company ?? '')} · ${String(r.demand_type ?? '')} 应于 ${due} 完成`,
           owner: (r.project_manager as string) || (r.sales_manager as string) || null,
+          ownerIds: collectOwnerIds(r.project_manager_id as string, r.sales_manager_id as string),
           school: (r.company as string) || null,
           date: due,
           url: `/project-demands?focus=${id}`,
@@ -209,6 +227,7 @@ export class RiskService {
           title: '项目建设申请 7 天内到期',
           detail: `${String(r.company ?? '')} · ${String(r.demand_type ?? '')} 还剩 ${dDay} 天`,
           owner: (r.project_manager as string) || (r.sales_manager as string) || null,
+          ownerIds: collectOwnerIds(r.project_manager_id as string, r.sales_manager_id as string),
           school: (r.company as string) || null,
           date: due,
           url: `/project-demands?focus=${id}`,
@@ -236,6 +255,7 @@ export class RiskService {
           title: '启明星建设已过交付期',
           detail: `${String(r.project_name ?? '')} 应于 ${deliveryDate} 交付`,
           owner: (r.project_manager as string) || (r.sales_manager as string) || null,
+          ownerIds: collectOwnerIds(r.project_manager_id as string, r.sales_manager_id as string),
           school: (r.school as string) || null,
           date: deliveryDate,
           url: `/qiming-construction?focus=${id}`,
@@ -249,6 +269,7 @@ export class RiskService {
           title: '启明星临近交付但未签合同',
           detail: `${String(r.project_name ?? '')} ${dDay} 天后交付，合同状态：未签`,
           owner: (r.sales_manager as string) || null,
+          ownerIds: collectOwnerIds(r.sales_manager_id as string),
           school: (r.school as string) || null,
           date: deliveryDate,
           url: `/qiming-construction?focus=${id}`,
@@ -271,6 +292,7 @@ export class RiskService {
           title: '外出服务评分偏低',
           detail: `${String(r.school_name ?? '')} · ${String(r.support_type ?? '')} 综合评分 ${overall}${salesScore ? ` / 销售评分 ${salesScore}` : ''}`,
           owner: (r.project_manager_name as string) || (r.sales_manager_name as string) || null,
+          ownerIds: collectOwnerIds(r.project_manager_id as string, r.sales_manager_id as string),
           school: (r.school_name as string) || null,
           date: (r.trip_date as string) || null,
           url: `/trips?focus=${id}`,
@@ -284,6 +306,7 @@ export class RiskService {
           title: '外出反馈包含负面关键词',
           detail: `${String(r.school_name ?? '')}：${(feedback ?? '').slice(0, 60)}`,
           owner: (r.project_manager_name as string) || (r.sales_manager_name as string) || null,
+          ownerIds: collectOwnerIds(r.project_manager_id as string, r.sales_manager_id as string),
           school: (r.school_name as string) || null,
           date: (r.trip_date as string) || null,
           url: `/trips?focus=${id}`,
@@ -323,6 +346,7 @@ export class RiskService {
           title: '高频上门但未落地项目',
           detail: `${school} 近 30 天内外出 ${count} 次，但暂无招投标 / 建设 / 启明星记录`,
           owner: null,
+          ownerIds: [],
           school,
           date: null,
           url: `/trips?search=${encodeURIComponent(school)}`,
@@ -332,10 +356,9 @@ export class RiskService {
 
     const filtered = items.filter((it) => {
       if (opt?.severity && it.severity !== opt.severity) return false;
-      // ownerId 过滤需要通过 sales/manager 关联，这里基于姓名字面量做最朴素过滤
+      // 按责任人（team_members.id）过滤：销售经理或项目经理命中即视为"我的风险"
       if (opt?.ownerId) {
-        // 未实现 ownerId → name 的反查；仅返回与 ownerId 字面匹配的（通常 owner 是名字字符串）
-        return it.owner === opt.ownerId;
+        return it.ownerIds.includes(opt.ownerId);
       }
       return true;
     });

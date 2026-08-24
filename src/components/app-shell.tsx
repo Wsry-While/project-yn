@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
-import { ChevronRight, Search, Bell } from 'lucide-react';
+import { ChevronRight, Bell } from 'lucide-react';
 import { Sidebar } from '@/components/sidebar';
 import { ToastViewport } from '@/components/toast-viewport';
 import { AiAssistant } from '@/components/ai-assistant';
@@ -13,7 +13,7 @@ import { projectWebService } from '@/lib/web/project-web-service';
 import type { SessionUser } from '@/lib/supabase-auth';
 import { showToast } from '@/lib/web/toast-store';
 import { NewTaskDrawer } from '@/components/new-task-drawer';
-import { Input } from '@/components/ui/input';
+import { GlobalSearch } from '@/components/global-search';
 
 const ROUTE_LABELS: Record<string, string> = {
   dashboard: '仪表盘',
@@ -134,17 +134,7 @@ export function AppShell({
             )}
           </nav>
           <div className="flex items-center gap-3">
-            <div className="relative hidden h-8 w-56 items-center md:flex">
-              <Search className="pointer-events-none absolute left-2.5 h-3.5 w-3.5 text-muted-foreground" />
-              <Input
-                placeholder="全局搜索 (⌘K)"
-                className="h-8 pl-8 text-xs"
-                onFocus={(e) => {
-                  e.currentTarget.blur();
-                  showToast('全局搜索即将上线', { kind: 'info' });
-                }}
-              />
-            </div>
+            <GlobalSearch />
             <button
               type="button"
               aria-label="通知"
