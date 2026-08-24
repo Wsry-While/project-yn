@@ -1,3 +1,4 @@
+import { isValidElement } from 'react';
 import { cn } from '@/lib/utils';
 import { TrendingUp, TrendingDown } from 'lucide-react';
 
@@ -38,7 +39,17 @@ export function KpiCard({
   compact = false,
 }: KpiCardProps) {
   const t = TONE_MAP[tone];
-  const IconNode = typeof icon === 'function' ? icon : null;
+  // lucide 图标是 forwardRef 对象（含 $$typeof），不是普通函数；
+  // 既不能用 typeof === 'function' 判断，也不能把组件对象直接当子节点渲染。
+  const isComponent =
+    typeof icon === 'function' ||
+    (typeof icon === 'object' &&
+      icon !== null &&
+      !Array.isArray(icon) &&
+      !isValidElement(icon) &&
+      '$$typeof' in icon);
+  const IconNode = isComponent ? (icon as React.ComponentType<{ className?: string }>) : null;
+  const iconNode = isComponent ? null : (icon as React.ReactNode);
   return (
     <div
       className={cn(
@@ -70,7 +81,7 @@ export function KpiCard({
               t.text,
             )}
           >
-            {IconNode ? <IconNode className={compact ? 'h-4 w-4' : 'h-5 w-5'} /> : (icon as React.ReactNode)}
+            {IconNode ? <IconNode className={compact ? 'h-4 w-4' : 'h-5 w-5'} /> : iconNode}
           </div>
         )}
       </div>
