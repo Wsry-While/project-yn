@@ -29,6 +29,14 @@ const OBJECT_ID_RE = /^[a-f0-9]{32}$/i;
  * `CHAOXING_MAX_FILE_MB` 覆盖（已观测到 195MB 的源文件，100MB 旧上限会误拦）。
  */
 export const MAX_FILE_BYTES = (Number(process.env.CHAOXING_MAX_FILE_MB) || 250) * 1024 * 1024;
+/**
+ * 对象存储单文件实际上限（保守值）。Supabase 实例单文件上传约 50MB 上限，
+ * 超过会返回 `maximum allowed single file size`。转存前用该值预检，
+ * 命中则直接降级为超星直链，避免把大文件缓冲进 Node 堆导致 OOM。
+ * 可由 `STORAGE_MAX_FILE_MB` 覆盖。
+ */
+export const STORAGE_MAX_FILE_BYTES =
+  (Number(process.env.STORAGE_MAX_FILE_MB) || 45) * 1024 * 1024;
 /** 状态接口（轻量 JSON）超时。 */
 const STATUS_TIMEOUT_MS = 30_000;
 /** 文件下载超时：大文件（百 MB 级）需要更长的总时长。 */
@@ -193,6 +201,76 @@ export async function getChaoxingDirectDownloadUrl(
 export function isStorageFileTooLargeError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   return /maximum allowed single file size|file size.*exceed|payload too large|413/i.test(err.message);
+}
+
+/**
+ * 对超星文件做一次 HEAD 式预检（实际用 GET 拿到响应头后立即取消 body），
+ * 返回 Content-Length。用于在下载缓冲前判断文件是否超过对象存储上限，
+ * 命中则直接降级直链，避免把大文件读进 Node 堆导致 OOM。
+ *
+ * 失败时返回 null（不阻断流程，交由下载阶段的 content-length 二次校验）。
+ */
+export async function probeChaoxingFileSize(objectId: string): Promise<number | null> {
+  assertValidObjectId(objectId);
+  let signedUrl: string;
+  try {
+    signedUrl = (await resolveSignedDownloadUrl(objectId)).url;
+  } catch {
+    return null;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), STATUS_TIMEOUT_MS);
+  try {
+    const response = await fetch(signedUrl, {
+      method: 'GET',
+      redirect: 'manual',
+      signal: controller.signal,
+      headers: {
+        'User-Agent': CHAOXING_FILE_UA,
+        'Accept': '*/*',
+        'Referer': DOWNLOAD_REFERER,
+        Range: 'bytes=0-0',
+      },
+    });
+    // 手动跟随 3xx
+    let redirectCount = 0;
+    let resp = response;
+    while (resp.status >= 300 && resp.status < 400) {
+      if (redirectCount >= 5) return null;
+      const location = resp.headers.get('location');
+      resp.body?.cancel().catch(() => {});
+      if (!location) return null;
+      const nextUrl = new URL(location, signedUrl);
+      if (nextUrl.protocol !== 'https:' && nextUrl.protocol !== 'http:') return null;
+      signedUrl = nextUrl.toString();
+      resp = await fetch(signedUrl, {
+        method: 'GET',
+        redirect: 'manual',
+        signal: controller.signal,
+        headers: {
+          'User-Agent': CHAOXING_FILE_UA,
+          'Accept': '*/*',
+          'Referer': DOWNLOAD_REFERER,
+          Range: 'bytes=0-0',
+        },
+      });
+      redirectCount++;
+    }
+    const len = Number(resp.headers.get('content-length') ?? 'NaN');
+    const range = resp.headers.get('content-range');
+    resp.body?.cancel().catch(() => {});
+    if (Number.isFinite(len) && len > 1) return len;
+    // 分片响应：content-range: bytes 0-0/12345
+    if (range) {
+      const total = Number(range.split('/').pop() ?? 'NaN');
+      if (Number.isFinite(total)) return total;
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**

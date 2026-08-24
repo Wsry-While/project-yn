@@ -11,6 +11,8 @@ import {
   isStorageFileTooLargeError,
   ChaoxingFileError,
   assertValidObjectId,
+  probeChaoxingFileSize,
+  STORAGE_MAX_FILE_BYTES,
 } from './chaoxing/file-tool';
 import {
   buildAttachmentKey,
@@ -90,7 +92,17 @@ async function markAssetStatus(id: string, patch: Partial<AssetRow>): Promise<vo
 }
 
 async function transferOne(asset: AssetRow, externalId: string, field: string): Promise<{ bucket: string; key: string }> {
-  const result = await downloadChaoxingFile(asset.object_id, { fallbackName: asset.file_name ?? undefined });
+  const objectId = asset.object_id;
+  // 下载前预检，超大文件直接降级直链，避免缓冲进 Node 堆导致 OOM。
+  const knownSize =
+    typeof asset.byte_size === 'number' && asset.byte_size > 0 ? asset.byte_size : await probeChaoxingFileSize(objectId);
+  if (knownSize && knownSize > STORAGE_MAX_FILE_BYTES) {
+    throw new ChaoxingFileError(
+      `文件超过对象存储单文件上限（约 ${Math.round(STORAGE_MAX_FILE_BYTES / 1024 / 1024)}MB，源文件 ${knownSize} 字节）`,
+      'too_large',
+    );
+  }
+  const result = await downloadChaoxingFile(objectId, { fallbackName: asset.file_name ?? undefined });
   const bytes = await streamToUint8Array(result.stream);
   const contentType = result.contentType || asset.content_type || 'application/octet-stream';
   const fileName = result.fileName || asset.file_name || asset.object_id;
@@ -165,7 +177,7 @@ export async function processQimingAttachments(record: QimingConstruction): Prom
       }));
     } catch (err) {
       const message = err instanceof ChaoxingFileError ? `${err.code}: ${err.message}` : (err as Error).message;
-      if (isStorageFileTooLargeError(err)) {
+      if (isStorageFileTooLargeError(err) || (err instanceof ChaoxingFileError && err.code === 'too_large')) {
         const note = '超大文件，走超星直链下载';
         await markAssetStatus(asset.id, { status: 'direct', error_message: note, fetched_at: new Date().toISOString() });
         updateFile(file.objectId, (f) => ({ ...f, storageStatus: 'direct', storageError: note }));
