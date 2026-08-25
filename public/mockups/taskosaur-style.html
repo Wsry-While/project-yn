@@ -1,0 +1,694 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>项目中心 · Taskosaur 风格设计稿</title>
+<style>
+:root{
+  --background:oklch(0.99 0 0);--surface:oklch(1 0 0);--card:oklch(1 0 0);
+  --foreground:oklch(0.18 0.01 255);--muted:oklch(0.97 0 0);--muted-2:oklch(0.95 0 0);
+  --muted-fg:oklch(0.50 0.01 255);--muted-fg-2:oklch(0.62 0.01 255);
+  --border:oklch(0.92 0 0);--border-strong:oklch(0.86 0 0);
+  --accent:oklch(0.97 0 0);--accent-hover:oklch(0.94 0 0);
+  --primary:oklch(0.25 0.02 255);--primary-fg:oklch(0.99 0 0);--primary-soft:oklch(0.25 0.02 255/.06);
+  --brand:oklch(0.55 0.19 258);--brand-strong:oklch(0.50 0.20 258);--brand-soft:oklch(0.55 0.19 258/.10);
+  --ink:oklch(0.18 0.01 255);--ink-hover:oklch(0.24 0.015 255);--ink-active:oklch(0.55 0.19 258);
+  --ink-fg:oklch(0.85 0.01 255);--ink-fg-dim:oklch(0.62 0.01 255);
+  --success:oklch(0.62 0.16 152);--success-soft:oklch(0.62 0.16 152/.12);
+  --warning:oklch(0.75 0.15 75);--warning-soft:oklch(0.75 0.15 75/.14);
+  --danger:oklch(0.60 0.20 25);--danger-soft:oklch(0.60 0.20 25/.12);
+  --info:oklch(0.62 0.14 230);--info-soft:oklch(0.62 0.14 230/.12);
+  --purple:oklch(0.60 0.18 295);--purple-soft:oklch(0.60 0.18 295/.12);
+  --chart-1:oklch(0.55 0.19 258);--chart-2:oklch(0.62 0.14 200);--chart-3:oklch(0.65 0.16 152);
+  --chart-4:oklch(0.75 0.15 75);--chart-5:oklch(0.60 0.18 295);
+  --r-xs:4px;--r-sm:6px;--r-md:8px;--r-lg:10px;--r-xl:14px;
+  --shadow-xs:0 1px 2px 0 oklch(0.20 0.02 255/.04);
+  --shadow-sm:0 1px 3px 0 oklch(0.20 0.02 255/.06),0 1px 2px -1px oklch(0.20 0.02 255/.05);
+  --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",Roboto,sans-serif;
+  --font-mono:"JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}html,body{height:100%;margin:0;padding:0}
+body{font-family:var(--font-sans);background:var(--background);color:var(--foreground);font-size:14px;line-height:1.55;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility}
+a{color:inherit;text-decoration:none}button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+input,select{font-family:inherit}::selection{background:var(--brand-soft)}
+.app{display:grid;grid-template-columns:64px 248px 1fr;height:100vh;overflow:hidden}
+.mini{background:var(--ink);color:var(--ink-fg);display:flex;flex-direction:column;padding:12px 0;border-right:1px solid oklch(0 0 0/.2)}
+.mini-logo{width:40px;height:40px;margin:4px auto 18px;border-radius:var(--r-md);background:linear-gradient(135deg,var(--brand) 0%,oklch(0.45 0.18 270) 100%);display:grid;place-items:center;color:#fff;font-weight:700;font-size:15px;box-shadow:0 4px 12px -2px oklch(0.55 0.19 258/.55)}
+.mini-group-label{font-size:10px;letter-spacing:.08em;color:var(--ink-fg-dim);text-align:center;margin:10px 0 6px}
+.mini-item{position:relative;width:44px;height:44px;margin:2px auto;border-radius:var(--r-md);display:grid;place-items:center;color:var(--ink-fg-dim);transition:background .15s,color .15s}
+.mini-item:hover{background:var(--ink-hover);color:var(--ink-fg)}
+.mini-item.active{background:var(--ink-active);color:#fff}
+.mini-item.active::before{content:"";position:absolute;left:-10px;top:50%;transform:translateY(-50%);width:3px;height:22px;border-radius:0 2px 2px 0;background:#fff}
+.mini-item svg{width:20px;height:20px}
+.mini-spacer{flex:1}
+.mini-avatar{width:32px;height:32px;margin:8px auto 4px;border-radius:50%;background:linear-gradient(135deg,oklch(.7 .15 230),oklch(.55 .18 280));display:grid;place-items:center;color:#fff;font-size:12px;font-weight:600}
+.side{background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
+.side-head{padding:14px 16px 10px;display:flex;align-items:center;justify-content:space-between}
+.side-title{font-size:11px;font-weight:600;color:var(--muted-fg);letter-spacing:.06em}
+.side-search{padding:0 12px 10px}
+.side-search input{width:100%;height:30px;border:1px solid var(--border);background:var(--muted);border-radius:var(--r-sm);padding:0 10px 0 28px;font-size:13px;color:var(--foreground);outline:none;transition:border-color .15s,background .15s}
+.side-search input:focus{border-color:var(--brand);background:var(--card);box-shadow:0 0 0 3px var(--brand-soft)}
+.side-search-wrap{position:relative}
+.side-search-wrap svg{position:absolute;left:8px;top:50%;transform:translateY(-50%);width:14px;height:14px;color:var(--muted-fg)}
+.side-nav{padding:4px 8px 12px;overflow-y:auto;flex:1}
+.side-nav-section{margin-top:12px}
+.side-nav-section:first-child{margin-top:0}
+.side-nav-label{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-fg);font-weight:600;padding:6px 10px}
+.side-item{display:flex;align-items:center;gap:10px;height:32px;padding:0 10px;border-radius:var(--r-sm);color:var(--foreground);font-size:13px;position:relative;margin:1px 0;transition:background .12s}
+.side-item:hover{background:var(--accent)}
+.side-item.active{background:var(--brand-soft);color:var(--brand-strong);font-weight:500}
+.side-item.active::before{content:"";position:absolute;left:-8px;top:50%;transform:translateY(-50%);width:2px;height:16px;border-radius:1px;background:var(--brand)}
+.side-item svg{width:15px;height:15px;color:var(--muted-fg);flex-shrink:0}
+.side-item.active svg{color:var(--brand)}
+.side-item .count{margin-left:auto;font-size:11px;color:var(--muted-fg);font-variant-numeric:tabular-nums}
+.side-item.active .count{color:var(--brand-strong)}
+.side-foot{border-top:1px solid var(--border);padding:10px 14px;font-size:12px;color:var(--muted-fg);display:flex;align-items:center;gap:8px}
+.side-foot .dot{width:6px;height:6px;border-radius:50%;background:var(--success);box-shadow:0 0 0 3px var(--success-soft)}
+.main{display:flex;flex-direction:column;overflow:hidden;background:var(--background)}
+.topbar{height:48px;border-bottom:1px solid var(--border);background:oklch(1 0 0/.85);backdrop-filter:saturate(180%) blur(8px);display:flex;align-items:center;padding:0 20px;gap:16px;position:relative;z-index:5}
+.crumb{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted-fg)}
+.crumb .sep{color:var(--border-strong)}.crumb .cur{color:var(--foreground);font-weight:500}
+.topbar-search{margin-left:16px;position:relative;width:280px}
+.topbar-search input{width:100%;height:30px;border:1px solid var(--border);background:var(--muted);border-radius:var(--r-sm);padding:0 10px 0 30px;font-size:13px;outline:none;transition:all .15s}
+.topbar-search input:focus{background:var(--card);border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-soft);width:360px}
+.topbar-search svg{position:absolute;left:9px;top:50%;transform:translateY(-50%);width:14px;height:14px;color:var(--muted-fg)}
+.topbar-search .kbd{position:absolute;right:8px;top:50%;transform:translateY(-50%);font-size:11px;color:var(--muted-fg);background:var(--card);border:1px solid var(--border);padding:1px 5px;border-radius:3px;font-family:var(--font-mono)}
+.topbar-spacer{flex:1}
+.iconbtn{width:32px;height:32px;border-radius:var(--r-sm);display:grid;place-items:center;color:var(--muted-fg);transition:background .12s,color .12s;position:relative}
+.iconbtn:hover{background:var(--accent);color:var(--foreground)}
+.iconbtn svg{width:17px;height:17px}
+.iconbtn .ndot{position:absolute;top:6px;right:7px;width:6px;height:6px;border-radius:50%;background:var(--danger);box-shadow:0 0 0 2px var(--card)}
+.topbar-user{display:flex;align-items:center;gap:8px;padding:4px 8px 4px 4px;border-radius:var(--r-sm);cursor:pointer}
+.topbar-user:hover{background:var(--accent)}
+.av{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,oklch(.7 .15 230),oklch(.55 .18 280));color:#fff;display:grid;place-items:center;font-size:12px;font-weight:600}
+.scroll{flex:1;overflow-y:auto;padding:22px 28px 48px}
+.page-head{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:18px}
+.page-head h1{font-size:20px;font-weight:600;margin:0 0 4px;letter-spacing:-.01em}
+.page-head p{margin:0;font-size:13px;color:var(--muted-fg)}
+.page-head-actions{display:flex;gap:8px}
+.btn{height:32px;padding:0 14px;border-radius:var(--r-sm);font-size:13px;font-weight:500;display:inline-flex;align-items:center;gap:6px;transition:all .15s;white-space:nowrap}
+.btn svg{width:15px;height:15px}
+.btn-primary{background:var(--primary);color:var(--primary-fg)}.btn-primary:hover{background:oklch(.20 .02 255)}
+.btn-secondary{background:var(--primary-soft);color:var(--primary)}.btn-secondary:hover{background:oklch(.25 .02 255/.10)}
+.btn-outline{background:var(--card);color:var(--foreground);border:1px solid var(--border-strong)}.btn-outline:hover{background:var(--accent)}
+.btn-ghost{color:var(--muted-fg)}.btn-ghost:hover{background:var(--accent);color:var(--foreground)}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:var(--shadow-xs)}
+.card-head{padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.card-title{font-size:14px;font-weight:600}.card-sub{font-size:12px;color:var(--muted-fg);margin-top:2px}
+.card-body{padding:16px 18px}
+.kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px}
+.kpi{background:var(--card);border:1px solid var(--border);border-radius:var(--r-lg);padding:14px 16px;position:relative;overflow:hidden;transition:border-color .15s,box-shadow .15s;min-height:86px;display:flex;flex-direction:column;justify-content:space-between}
+.kpi:hover{border-color:var(--border-strong);box-shadow:var(--shadow-sm)}
+.kpi::before{content:"";position:absolute;left:0;top:14px;bottom:14px;width:3px;border-radius:0 2px 2px 0;background:var(--primary)}
+.kpi.tone-brand::before{background:var(--brand)}.kpi.tone-success::before{background:var(--success)}
+.kpi.tone-warning::before{background:var(--warning)}.kpi.tone-danger::before{background:var(--danger)}
+.kpi.tone-info::before{background:var(--info)}.kpi.tone-purple::before{background:var(--purple)}
+.kpi-top{display:flex;align-items:center;justify-content:space-between;padding-left:6px}
+.kpi-label{font-size:11px;font-weight:600;color:var(--muted-fg);letter-spacing:.04em;text-transform:uppercase}
+.kpi-icon{width:24px;height:24px;border-radius:var(--r-xs);background:var(--muted);color:var(--muted-fg);display:grid;place-items:center}
+.kpi-icon svg{width:14px;height:14px}
+.kpi.tone-brand .kpi-icon{background:var(--brand-soft);color:var(--brand)}
+.kpi.tone-success .kpi-icon{background:var(--success-soft);color:var(--success)}
+.kpi.tone-warning .kpi-icon{background:var(--warning-soft);color:oklch(.50 .14 60)}
+.kpi.tone-danger .kpi-icon{background:var(--danger-soft);color:var(--danger)}
+.kpi.tone-info .kpi-icon{background:var(--info-soft);color:var(--info)}
+.kpi.tone-purple .kpi-icon{background:var(--purple-soft);color:var(--purple)}
+.kpi-bottom{padding-left:6px}
+.kpi-value{font-size:24px;font-weight:700;line-height:1.2;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.kpi-meta{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted-fg);margin-top:4px}
+.kpi-delta{display:inline-flex;align-items:center;gap:2px;font-weight:500;font-variant-numeric:tabular-nums}
+.kpi-delta.up{color:var(--success)}.kpi-delta.down{color:var(--danger)}
+.kpi-delta svg{width:11px;height:11px}
+.chart-grid{display:grid;grid-template-columns:2fr 1fr;gap:14px;margin-bottom:18px}
+.table-wrap{background:var(--card);border:1px solid var(--border);border-radius:var(--r-lg);overflow:hidden;box-shadow:var(--shadow-xs)}
+table.data{width:100%;border-collapse:collapse;font-size:13px}
+table.data thead th{background:var(--muted);text-align:left;font-weight:600;font-size:11px;letter-spacing:.04em;color:var(--muted-fg);padding:10px 16px;border-bottom:1px solid var(--border);text-transform:uppercase}
+table.data tbody td{padding:11px 16px;border:none;border-bottom:1px solid oklch(.92 0 0/.6);color:var(--foreground);vertical-align:middle}
+table.data tbody tr:nth-child(odd) td{background:oklch(.98 0 0)}
+table.data tbody tr:hover td{background:var(--accent)}
+table.data tbody tr:last-child td{border-bottom:none}
+.cell-title{font-weight:500;color:var(--foreground);display:flex;align-items:center;gap:8px}
+.cell-sub{font-size:12px;color:var(--muted-fg);margin-top:2px}
+.cell-person{display:inline-flex;align-items:center;gap:6px}
+.av-sm{width:22px;height:22px;border-radius:50%;background:linear-gradient(135deg,oklch(.72 .13 220),oklch(.58 .16 260));color:#fff;display:inline-grid;place-items:center;font-size:10px;font-weight:600;flex-shrink:0}
+.av-sm.c2{background:linear-gradient(135deg,oklch(.72 .15 155),oklch(.55 .15 175))}
+.av-sm.c3{background:linear-gradient(135deg,oklch(.78 .14 70),oklch(.68 .18 35))}
+.av-sm.c4{background:linear-gradient(135deg,oklch(.72 .16 320),oklch(.58 .18 295))}
+.badge{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 9px;border-radius:999px;font-size:12px;font-weight:500;line-height:1;white-space:nowrap}
+.badge .bdt{width:6px;height:6px;border-radius:50%;background:currentColor}
+.badge.solid{color:#fff}
+.badge.solid.todo{background:oklch(.45 .01 255)}.badge.solid.progress{background:var(--info)}
+.badge.solid.review{background:var(--purple)}.badge.solid.done{background:var(--success)}
+.badge.solid.cancelled{background:var(--danger)}.badge.solid.warning{background:var(--warning);color:oklch(.30 .05 60)}
+.badge.soft{background:var(--muted);color:var(--foreground)}
+.badge.soft.todo{background:oklch(.93 0 0);color:oklch(.35 .01 255)}
+.badge.soft.progress{background:var(--info-soft);color:var(--info)}
+.badge.soft.review{background:var(--purple-soft);color:var(--purple)}
+.badge.soft.done{background:var(--success-soft);color:var(--success)}
+.badge.soft.cancelled{background:var(--danger-soft);color:var(--danger)}
+.badge.soft.warning{background:var(--warning-soft);color:oklch(.45 .13 60)}
+.badge.soft.brand{background:var(--brand-soft);color:var(--brand-strong)}
+.toolbar{display:flex;align-items:center;gap:8px;padding:12px 14px;background:var(--card);border:1px solid var(--border);border-radius:var(--r-lg);margin-bottom:14px;flex-wrap:wrap}
+.toolbar .search{position:relative;width:260px}
+.toolbar .search input{width:100%;height:32px;border:1px solid var(--border);background:var(--muted);border-radius:var(--r-sm);padding:0 10px 0 30px;font-size:13px;outline:none;transition:all .15s}
+.toolbar .search input:focus{background:var(--card);border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-soft)}
+.toolbar .search svg{position:absolute;left:9px;top:50%;transform:translateY(-50%);width:14px;height:14px;color:var(--muted-fg)}
+.select{height:32px;border:1px solid var(--border);background:var(--card);border-radius:var(--r-sm);padding:0 26px 0 10px;font-size:13px;color:var(--foreground);appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23666' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");background-repeat:no-repeat;background-position:right 8px center;cursor:pointer;outline:none}
+.select:focus{border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-soft)}
+.toolbar .spacer{flex:1}
+.tabs{display:flex;gap:2px;background:var(--muted);padding:3px;border-radius:var(--r-sm)}
+.tab{height:28px;padding:0 12px;border-radius:calc(var(--r-sm) - 1px);font-size:12.5px;color:var(--muted-fg);display:inline-flex;align-items:center;gap:6px;transition:all .12s;font-weight:500}
+.tab:hover{color:var(--foreground)}
+.tab.active{background:var(--card);color:var(--foreground);box-shadow:var(--shadow-xs)}
+.tab .n{font-size:11px;color:var(--muted-fg);background:oklch(.92 0 0);padding:1px 6px;border-radius:999px;font-variant-numeric:tabular-nums}
+.tab.active .n{background:var(--brand-soft);color:var(--brand-strong)}
+.pager{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;font-size:12.5px;color:var(--muted-fg);border-top:1px solid var(--border);background:var(--card)}
+.pager-controls{display:flex;align-items:center;gap:4px}
+.pager-btn{min-width:28px;height:28px;padding:0 6px;border-radius:var(--r-xs);font-size:12.5px;color:var(--foreground);display:inline-grid;place-items:center;transition:background .12s}
+.pager-btn:hover:not(:disabled){background:var(--accent)}
+.pager-btn.active{background:var(--primary);color:#fff}
+.pager-btn:disabled{opacity:.4;cursor:not-allowed}
+.legend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--muted-fg)}
+.legend-item{display:inline-flex;align-items:center;gap:6px}
+.legend-swatch{width:8px;height:8px;border-radius:2px}
+.muted{color:var(--muted-fg)}.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+.view{display:none}.view.active{display:block}
+@media(max-width:1100px){.kpi-grid{grid-template-columns:repeat(2,1fr)}.chart-grid{grid-template-columns:1fr}.side{display:none}.app{grid-template-columns:64px 1fr}}
+</style>
+</head>
+<body>
+<div class="app">
+<aside class="mini">
+  <div class="mini-logo">教</div>
+  <div class="mini-group-label">主导航</div>
+  <button class="mini-item active" data-view="dashboard" title="仪表盘">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
+  </button>
+  <button class="mini-item" data-view="workbench" title="我的工作台">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+  </button>
+  <button class="mini-item" title="任务看板">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/><path d="M15 3v18"/></svg>
+  </button>
+  <button class="mini-item" data-view="dashboard" title="学校档案">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>
+  </button>
+  <div class="mini-group-label">业务</div>
+  <button class="mini-item" data-view="bidding" title="招投标截图">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
+  </button>
+  <button class="mini-item" title="项目外出">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 16H9m10 0h3v-3.15a1 1 0 0 0-.84-.99L16 11l-2.7-3.6a1 1 0 0 0-.8-.4H5.24a2 2 0 0 0-1.8 1.1l-.8 1.63A6 6 0 0 0 2 12.42V16h2"/><circle cx="6.5" cy="16.5" r="2.5"/><circle cx="16.5" cy="16.5" r="2.5"/></svg>
+  </button>
+  <button class="mini-item" title="建设申请">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>
+  </button>
+  <button class="mini-item" title="启明星建设">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+  </button>
+  <div class="mini-spacer"></div>
+  <button class="mini-item" title="团队">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+  </button>
+  <button class="mini-item" title="设置">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+  </button>
+  <div class="mini-avatar">张</div>
+</aside>
+
+<aside class="side">
+  <div class="side-head">
+    <span class="side-title" id="sideTitle">教育信息化</span>
+    <button class="iconbtn" title="新建">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    </button>
+  </div>
+  <div class="side-search">
+    <div class="side-search-wrap">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input placeholder="搜索学校、项目..." />
+    </div>
+  </div>
+  <nav class="side-nav" id="sideNav"></nav>
+  <div class="side-foot"><span class="dot"></span><span>超星同步正常 · 14:22</span></div>
+</aside>
+
+<main class="main">
+  <header class="topbar">
+    <nav class="crumb" id="crumb"><span>项目中心</span><span class="sep">/</span><span class="cur">仪表盘</span></nav>
+    <div class="topbar-search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input placeholder="搜索项目、学校、任务、人员..." />
+      <span class="kbd">⌘K</span>
+    </div>
+    <div class="topbar-spacer"></div>
+    <button class="iconbtn" title="新建任务"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+    <button class="iconbtn" title="通知"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><span class="ndot"></span></button>
+    <button class="iconbtn" title="帮助"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></button>
+    <div class="topbar-user"><div class="av">张</div><span class="name">张明</span></div>
+  </header>
+
+  <div class="scroll">
+
+    <!-- ========== DASHBOARD ========== -->
+    <section class="view active" id="view-dashboard">
+      <div class="page-head">
+        <div><h1>仪表盘</h1><p>跨招投标 · 建设申请 · 启明星 · 项目外出 的整体视图</p></div>
+        <div class="page-head-actions">
+          <button class="btn btn-outline">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            近 30 天
+          </button>
+          <button class="btn btn-primary">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            导出周报
+          </button>
+        </div>
+      </div>
+
+      <div class="kpi-grid">
+        <div class="kpi tone-brand">
+          <div class="kpi-top"><span class="kpi-label">在办项目</span>
+            <span class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span>
+          </div>
+          <div class="kpi-bottom"><div class="kpi-value">128</div>
+            <div class="kpi-meta"><span class="kpi-delta up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="18 15 12 9 6 15"/></svg>12</span><span>较上月</span></div>
+          </div>
+        </div>
+        <div class="kpi tone-warning">
+          <div class="kpi-top"><span class="kpi-label">待交付（7 日内）</span>
+            <span class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>
+          </div>
+          <div class="kpi-bottom"><div class="kpi-value">23</div>
+            <div class="kpi-meta"><span class="kpi-delta down"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>4</span><span>含 5 单已逾期</span></div>
+          </div>
+        </div>
+        <div class="kpi tone-success">
+          <div class="kpi-top"><span class="kpi-label">本月已交付</span>
+            <span class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></span>
+          </div>
+          <div class="kpi-bottom"><div class="kpi-value">47</div>
+            <div class="kpi-meta"><span class="kpi-delta up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="18 15 12 9 6 15"/></svg>18%</span><span>准时率 91%</span></div>
+          </div>
+        </div>
+        <div class="kpi tone-info">
+          <div class="kpi-top"><span class="kpi-label">本月外出服务</span>
+            <span class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 16H9m10 0h3v-3.15a1 1 0 0 0-.84-.99L16 11l-2.7-3.6a1 1 0 0 0-.8-.4H5.24a2 2 0 0 0-1.8 1.1l-.8 1.63A6 6 0 0 0 2 12.42V16h2"/><circle cx="6.5" cy="16.5" r="2.5"/><circle cx="16.5" cy="16.5" r="2.5"/></svg></span>
+          </div>
+          <div class="kpi-bottom"><div class="kpi-value">86</div>
+            <div class="kpi-meta"><span>客户均分</span><span class="mono" style="color:var(--foreground);font-weight:600">4.7</span><span class="muted">/ 5</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="chart-grid">
+        <div class="card">
+          <div class="card-head">
+            <div><div class="card-title">30 天任务趋势</div><div class="card-sub">新建 vs 完成，按日聚合</div></div>
+            <div class="legend">
+              <span class="legend-item"><span class="legend-swatch" style="background:var(--chart-1)"></span>新建</span>
+              <span class="legend-item"><span class="legend-swatch" style="background:var(--chart-3)"></span>完成</span>
+            </div>
+          </div>
+          <div class="card-body" style="padding:14px 18px 18px">
+            <svg viewBox="0 0 600 220" width="100%" height="220" preserveAspectRatio="none">
+              <defs>
+                <linearGradient id="g1" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="oklch(0.55 0.19 258)" stop-opacity=".22"/><stop offset="100%" stop-color="oklch(0.55 0.19 258)" stop-opacity="0"/></linearGradient>
+                <linearGradient id="g2" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="oklch(0.65 0.16 152)" stop-opacity=".18"/><stop offset="100%" stop-color="oklch(0.65 0.16 152)" stop-opacity="0"/></linearGradient>
+              </defs>
+              <g stroke="oklch(0.92 0 0)" stroke-width="1"><line x1="0" x2="600" y1="40" y2="40"/><line x1="0" x2="600" y1="100" y2="100"/><line x1="0" x2="600" y1="160" y2="160"/></g>
+              <path d="M0,150 L40,140 L80,155 L120,120 L160,130 L200,105 L240,115 L280,90 L320,100 L360,75 L400,85 L440,60 L480,75 L520,50 L560,65 L600,45 L600,220 L0,220 Z" fill="url(#g1)"/>
+              <path d="M0,150 L40,140 L80,155 L120,120 L160,130 L200,105 L240,115 L280,90 L320,100 L360,75 L400,85 L440,60 L480,75 L520,50 L560,65 L600,45" fill="none" stroke="oklch(0.55 0.19 258)" stroke-width="2"/>
+              <path d="M0,180 L40,175 L80,170 L120,160 L160,165 L200,150 L240,155 L280,140 L320,148 L360,130 L400,138 L440,120 L480,128 L520,110 L560,118 L600,100 L600,220 L0,220 Z" fill="url(#g2)"/>
+              <path d="M0,180 L40,175 L80,170 L120,160 L160,165 L200,150 L240,155 L280,140 L320,148 L360,130 L400,138 L440,120 L480,128 L520,110 L560,118 L600,100" fill="none" stroke="oklch(0.65 0.16 152)" stroke-width="2"/>
+              <g fill="oklch(0.55 0.01 255)" font-size="10" font-family="var(--font-mono)"><text x="0" y="215">07-26</text><text x="200" y="215">08-05</text><text x="400" y="215">08-15</text><text x="560" y="215">08-25</text></g>
+            </svg>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><div><div class="card-title">业务分布</div><div class="card-sub">按来源统计在办</div></div></div>
+          <div class="card-body">
+            <div style="display:flex;align-items:center;gap:16px">
+              <svg viewBox="0 0 140 140" width="130" height="130">
+                <g transform="translate(70,70)">
+                  <circle r="48" fill="none" stroke="oklch(0.55 0.19 258)" stroke-width="20" stroke-dasharray="105.6 301.6" stroke-dashoffset="0" transform="rotate(-90)"/>
+                  <circle r="48" fill="none" stroke="oklch(0.62 0.14 200)" stroke-width="20" stroke-dasharray="75.4 301.6" stroke-dashoffset="-105.6" transform="rotate(-90)"/>
+                  <circle r="48" fill="none" stroke="oklch(0.65 0.16 152)" stroke-width="20" stroke-dasharray="60.3 301.6" stroke-dashoffset="-181" transform="rotate(-90)"/>
+                  <circle r="48" fill="none" stroke="oklch(0.75 0.15 75)" stroke-width="20" stroke-dasharray="39.2 301.6" stroke-dashoffset="-241.3" transform="rotate(-90)"/>
+                  <circle r="48" fill="none" stroke="oklch(0.94 0 0)" stroke-width="20" stroke-dasharray="21.1 301.6" stroke-dashoffset="-280.5" transform="rotate(-90)"/>
+                  <text text-anchor="middle" dy="-2" font-size="22" font-weight="700" fill="var(--foreground)">128</text>
+                  <text text-anchor="middle" dy="16" font-size="10" fill="var(--muted-fg)">在办总数</text>
+                </g>
+              </svg>
+              <div style="flex:1;display:flex;flex-direction:column;gap:9px;font-size:12.5px">
+                <div style="display:flex;align-items:center;gap:8px"><span class="legend-swatch" style="background:oklch(0.55 0.19 258)"></span><span style="flex:1">招投标</span><span class="mono" style="color:var(--foreground);font-weight:600">42</span></div>
+                <div style="display:flex;align-items:center;gap:8px"><span class="legend-swatch" style="background:oklch(0.62 0.14 200)"></span><span style="flex:1">建设申请</span><span class="mono" style="color:var(--foreground);font-weight:600">30</span></div>
+                <div style="display:flex;align-items:center;gap:8px"><span class="legend-swatch" style="background:oklch(0.65 0.16 152)"></span><span style="flex:1">启明星</span><span class="mono" style="color:var(--foreground);font-weight:600">24</span></div>
+                <div style="display:flex;align-items:center;gap:8px"><span class="legend-swatch" style="background:oklch(0.75 0.15 75)"></span><span style="flex:1">项目外出</span><span class="mono" style="color:var(--foreground);font-weight:600">16</span></div>
+                <div style="display:flex;align-items:center;gap:8px"><span class="legend-swatch" style="background:oklch(0.94 0 0);border:1px solid var(--border)"></span><span style="flex:1">其他</span><span class="mono" style="color:var(--foreground);font-weight:600">16</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="chart-grid" style="grid-template-columns:1fr 1fr">
+        <div class="card">
+          <div class="card-head"><div><div class="card-title">待办事项</div><div class="card-sub">未来 7 天需要处理的任务</div></div>
+            <a class="btn btn-ghost" style="height:26px;font-size:12px" data-view="workbench">查看全部 →</a>
+          </div>
+          <table class="data">
+            <thead><tr><th>事项</th><th>来源</th><th>负责人</th><th class="num">截止</th></tr></thead>
+            <tbody>
+              <tr><td><div class="cell-title">XX 大学智慧教室二期 - 交付截图</div></td>
+                <td><span class="badge soft progress">招投标</span></td>
+                <td><span class="cell-person"><span class="av-sm">李</span>李晓彤</span></td>
+                <td class="num" style="color:var(--danger);font-weight:600">今日</td></tr>
+              <tr><td><div class="cell-title">XX 职业技术学院 - 启明星部署</div></td>
+                <td><span class="badge soft review">启明星</span></td>
+                <td><span class="cell-person"><span class="av-sm c2">王</span>王浩</span></td>
+                <td class="num" style="color:var(--warning);font-weight:600">明日</td></tr>
+              <tr><td><div class="cell-title">XX 理工大学 - 现场培训</div></td>
+                <td><span class="badge soft brand">项目外出</span></td>
+                <td><span class="cell-person"><span class="av-sm c3">赵</span>赵磊</span></td>
+                <td class="num">08-28</td></tr>
+              <tr><td><div class="cell-title">XX 师范学院 - 建设方案评审</div></td>
+                <td><span class="badge soft warning">建设申请</span></td>
+                <td><span class="cell-person"><span class="av-sm c4">陈</span>陈思雨</span></td>
+                <td class="num">08-29</td></tr>
+              <tr><td><div class="cell-title">XX 医学院 - 合同签订跟进</div></td>
+                <td><span class="badge soft progress">招投标</span></td>
+                <td><span class="cell-person"><span class="av-sm">李</span>李晓彤</span></td>
+                <td class="num">08-30</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><div><div class="card-title">风险预警</div><div class="card-sub">跨四源规则引擎</div></div>
+            <span class="badge solid warning">3 项待处理</span>
+          </div>
+          <div class="card-body" style="padding:8px 18px 14px">
+            <div style="display:flex;gap:10px;padding:10px 4px;border-bottom:1px solid var(--border)">
+              <span class="badge solid danger" style="height:20px;font-size:11px">高</span>
+              <div style="flex:1"><div style="font-size:13px;font-weight:500">招投标预留天数不足</div>
+                <div class="cell-sub">XX 大学智慧教室二期 · 预留 2 天，已逾期 1 天</div></div>
+            </div>
+            <div style="display:flex;gap:10px;padding:10px 4px;border-bottom:1px solid var(--border)">
+              <span class="badge solid danger" style="height:20px;font-size:11px">高</span>
+              <div style="flex:1"><div style="font-size:13px;font-weight:500">启明星未签合同先交付</div>
+                <div class="cell-sub">XX 职业技术学院 · 交付日 09-05，合同状态：未签</div></div>
+            </div>
+            <div style="display:flex;gap:10px;padding:10px 4px">
+              <span class="badge solid warning" style="height:20px;font-size:11px">中</span>
+              <div style="flex:1"><div style="font-size:13px;font-weight:500">客户评分连续走低</div>
+                <div class="cell-sub">XX 理工大学 · 近 3 次评分 3/5、3/5、2/5</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== WORKBENCH ========== -->
+    <section class="view" id="view-workbench">
+      <div class="page-head">
+        <div><h1>我的工作台</h1><p>跨招投标、建设申请、启明星、项目外出四源聚合的个人待办</p></div>
+        <div class="page-head-actions">
+          <button class="btn btn-outline">筛选</button>
+          <button class="btn btn-primary">批量处理</button>
+        </div>
+      </div>
+      <div class="toolbar" style="padding:10px 12px;margin-bottom:14px">
+        <div class="tabs">
+          <button class="tab active">全部 <span class="n">28</span></button>
+          <button class="tab">已逾期 <span class="n">5</span></button>
+          <button class="tab">今日 <span class="n">3</span></button>
+          <button class="tab">7 天内 <span class="n">12</span></button>
+          <button class="tab">以后 <span class="n">8</span></button>
+        </div>
+        <div class="spacer"></div>
+        <select class="select"><option>全部来源</option><option>招投标</option><option>建设申请</option><option>启明星</option><option>项目外出</option></select>
+        <select class="select"><option>全部优先级</option><option>高</option><option>中</option><option>低</option></select>
+      </div>
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr><th>事项 / 项目</th><th>学校</th><th>来源</th><th>负责人</th><th>状态</th><th class="num">截止日期</th></tr></thead>
+          <tbody>
+            <tr><td><div class="cell-title">交付截图整理与上传</div><div class="cell-sub">智慧教室二期招标项目</div></td><td>XX 大学</td><td><span class="badge soft progress">招投标</span></td><td><span class="cell-person"><span class="av-sm">李</span>李晓彤</span></td><td><span class="badge solid progress">进行中</span></td><td class="num" style="color:var(--danger);font-weight:600">08-25</td></tr>
+            <tr><td><div class="cell-title">现场环境确认与设备清点</div><div class="cell-sub">启明星 2026 年度建设</div></td><td>XX 职业技术学院</td><td><span class="badge soft review">启明星</span></td><td><span class="cell-person"><span class="av-sm c2">王</span>王浩</span></td><td><span class="badge solid todo">待开始</span></td><td class="num" style="color:var(--warning)">08-26</td></tr>
+            <tr><td><div class="cell-title">建设方案评审会议</div><div class="cell-sub">师范学院信息化提升项目</div></td><td>XX 师范学院</td><td><span class="badge soft warning">建设申请</span></td><td><span class="cell-person"><span class="av-sm c4">陈</span>陈思雨</span></td><td><span class="badge solid review">待评审</span></td><td class="num">08-29</td></tr>
+            <tr><td><div class="cell-title">培训回访与满意度调研</div><div class="cell-sub">教务系统部署</div></td><td>XX 理工大学</td><td><span class="badge soft brand">项目外出</span></td><td><span class="cell-person"><span class="av-sm c3">赵</span>赵磊</span></td><td><span class="badge solid todo">待开始</span></td><td class="num">09-02</td></tr>
+            <tr><td><div class="cell-title">合同盖章回传</div><div class="cell-sub">图书馆智慧化改造</div></td><td>XX 医学院</td><td><span class="badge soft progress">招投标</span></td><td><span class="cell-person"><span class="av-sm">李</span>李晓彤</span></td><td><span class="badge solid progress">进行中</span></td><td class="num">09-05</td></tr>
+            <tr><td><div class="cell-title">启明星课程数据导入</div><div class="cell-sub">2026 秋季学期</div></td><td>XX 财经大学</td><td><span class="badge soft review">启明星</span></td><td><span class="cell-person"><span class="av-sm c2">王</span>王浩</span></td><td><span class="badge solid done">已完成</span></td><td class="num muted">08-20</td></tr>
+          </tbody>
+        </table>
+        <div class="pager">
+          <span>共 28 条 · 第 1 页 / 共 5 页</span>
+          <div class="pager-controls">
+            <button class="pager-btn" disabled>‹</button>
+            <button class="pager-btn active">1</button>
+            <button class="pager-btn">2</button>
+            <button class="pager-btn">3</button>
+            <button class="pager-btn">4</button>
+            <button class="pager-btn">5</button>
+            <button class="pager-btn">›</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== BIDDING LIST ========== -->
+    <section class="view" id="view-bidding">
+      <div class="page-head">
+        <div><h1>招投标截图</h1><p>第三方推送的截图交付跟踪数据，按学校、销售、交付状态筛选</p></div>
+        <div class="page-head-actions">
+          <button class="btn btn-outline">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            导出
+          </button>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <div class="search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input placeholder="搜索项目名称、学校..." />
+        </div>
+        <select class="select"><option>全部状态</option><option>已完成</option><option>进行中</option><option>未开始</option><option>已逾期</option></select>
+        <select class="select"><option>全部销售经理</option><option>李晓彤</option><option>王浩</option><option>赵磊</option></select>
+        <select class="select"><option>全部年度</option><option selected>2026</option><option>2025</option></select>
+        <button class="btn btn-outline" style="height:32px">重置</button>
+        <div class="spacer"></div>
+        <button class="btn btn-secondary">查询</button>
+      </div>
+
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr>
+            <th>项目名称 / 编号</th><th>学校</th><th>销售经理</th>
+            <th class="num">提交日期</th><th class="num">需交付</th><th class="num">预留</th>
+            <th>状态</th><th>反馈</th>
+          </tr></thead>
+          <tbody>
+            <tr>
+              <td><div class="cell-title">智慧教室二期截图交付</div><div class="cell-sub mono">104261705</div></td>
+              <td>XX 大学</td>
+              <td><span class="cell-person"><span class="av-sm">李</span>李晓彤</span></td>
+              <td class="num">08-20</td>
+              <td class="num" style="color:var(--danger);font-weight:600">08-25</td>
+              <td class="num" style="color:var(--danger);font-weight:600">-1</td>
+              <td><span class="badge solid progress">进行中</span></td>
+              <td><span class="badge soft warning">待补充</span></td>
+            </tr>
+            <tr>
+              <td><div class="cell-title">图书馆智慧化改造</div><div class="cell-sub mono">103194602</div></td>
+              <td>XX 师范学院</td>
+              <td><span class="cell-person"><span class="av-sm c4">陈</span>陈思雨</span></td>
+              <td class="num">08-18</td>
+              <td class="num">09-01</td>
+              <td class="num" style="color:var(--warning);font-weight:600">7</td>
+              <td><span class="badge solid review">待审核</span></td>
+              <td><span class="badge soft done">已满足</span></td>
+            </tr>
+            <tr>
+              <td><div class="cell-title">实训中心设备采购</div><div class="cell-sub mono">104261712</div></td>
+              <td>XX 职业技术学院</td>
+              <td><span class="cell-person"><span class="av-sm c2">王</span>王浩</span></td>
+              <td class="num">08-22</td>
+              <td class="num">09-10</td>
+              <td class="num" style="color:var(--success);font-weight:600">16</td>
+              <td><span class="badge solid done">已完成</span></td>
+              <td><span class="badge soft done">已满足</span></td>
+            </tr>
+            <tr>
+              <td><div class="cell-title">校园网络升级项目</div><div class="cell-sub mono">103794533</div></td>
+              <td>XX 理工大学</td>
+              <td><span class="cell-person"><span class="av-sm c3">赵</span>赵磊</span></td>
+              <td class="num">08-15</td>
+              <td class="num" style="color:var(--danger);font-weight:600">08-22</td>
+              <td class="num" style="color:var(--danger);font-weight:600">-3</td>
+              <td><span class="badge solid cancelled">已逾期</span></td>
+              <td><span class="badge soft cancelled">需整改</span></td>
+            </tr>
+            <tr>
+              <td><div class="cell-title">多媒体教室改造（一期）</div><div class="cell-sub mono">104436165</div></td>
+              <td>XX 财经大学</td>
+              <td><span class="cell-person"><span class="av-sm">李</span>李晓彤</span></td>
+              <td class="num">08-23</td>
+              <td class="num">09-05</td>
+              <td class="num" style="color:var(--success);font-weight:600">11</td>
+              <td><span class="badge solid todo">未开始</span></td>
+              <td><span class="badge soft todo">—</span></td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="pager">
+          <span>共 86 条 · 第 1 页 / 共 18 页</span>
+          <div class="pager-controls">
+            <button class="pager-btn" disabled>‹</button>
+            <button class="pager-btn active">1</button>
+            <button class="pager-btn">2</button>
+            <button class="pager-btn">3</button>
+            <span style="padding:0 4px;color:var(--muted-fg)">…</span>
+            <button class="pager-btn">18</button>
+            <button class="pager-btn">›</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</main>
+</div>
+<script>
+// View registry: each view drives sidebar + crumb
+const VIEWS = {
+  dashboard: {
+    title: '仪表盘',
+    sideTitle: '快捷入口',
+    sections: [
+      { label: '概览', items: [
+        { key:'dashboard', name:'仪表盘', icon:'grid', active:true },
+        { key:'workbench', name:'我的工作台', icon:'inbox', count:28 },
+      ]},
+      { label: '业务', items: [
+        { key:'bidding', name:'招投标截图', icon:'image', count:86 },
+        { key:'', name:'项目外出', icon:'car', count:124 },
+        { key:'', name:'建设申请', icon:'doc', count:42 },
+        { key:'', name:'启明星建设', icon:'star', count:30 },
+      ]},
+      { label: '分析', items: [
+        { key:'', name:'风险预警', icon:'alert', count:3 },
+        { key:'', name:'多维分析', icon:'chart' },
+        { key:'', name:'AI 周报', icon:'sparkle' },
+      ]},
+    ]
+  },
+  workbench: {
+    title: '我的工作台',
+    sideTitle: '我的视图',
+    sections: [
+      { label: '筛选', items: [
+        { key:'workbench', name:'全部待办', icon:'inbox', count:28, active:true },
+        { key:'', name:'已逾期', icon:'alert', count:5 },
+        { key:'', name:'今日到期', icon:'clock', count:3 },
+        { key:'', name:'本周', icon:'calendar', count:12 },
+      ]},
+      { label: '按来源', items: [
+        { key:'bidding', name:'招投标', icon:'image', count:14 },
+        { key:'', name:'建设申请', icon:'doc', count:6 },
+        { key:'', name:'启明星', icon:'star', count:4 },
+        { key:'', name:'项目外出', icon:'car', count:4 },
+      ]},
+    ]
+  },
+  bidding: {
+    title: '招投标截图',
+    sideTitle: '业务导航',
+    sections: [
+      { label: '业务', items: [
+        { key:'bidding', name:'招投标截图', icon:'image', count:86, active:true },
+        { key:'', name:'项目外出', icon:'car', count:124 },
+        { key:'', name:'建设申请', icon:'doc', count:42 },
+        { key:'', name:'启明星建设', icon:'star', count:30 },
+      ]},
+      { label: '快捷筛选', items: [
+        { key:'', name:'我负责的', icon:'user', count:18 },
+        { key:'', name:'本周到期', icon:'clock', count:7 },
+        { key:'', name:'已逾期', icon:'alert', count:5 },
+        { key:'', name:'已完成', icon:'check', count:64 },
+      ]},
+    ]
+  }
+};
+
+const ICONS = {
+  grid:'<rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/>',
+  inbox:'<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  image:'<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>',
+  car:'<path d="M14 16H9m10 0h3v-3.15a1 1 0 0 0-.84-.99L16 11l-2.7-3.6a1 1 0 0 0-.8-.4H5.24a2 2 0 0 0-1.8 1.1l-.8 1.63A6 6 0 0 0 2 12.42V16h2"/><circle cx="6.5" cy="16.5" r="2.5"/><circle cx="16.5" cy="16.5" r="2.5"/>',
+  doc:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/>',
+  star:'<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
+  alert:'<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+  chart:'<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>',
+  sparkle:'<path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z"/>',
+  clock:'<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  calendar:'<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
+  user:'<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  check:'<polyline points="20 6 9 17 4 12"/>'
+};
+
+function svg(name){return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+(ICONS[name]||'')+'</svg>';}
+
+function renderSidebar(viewKey){
+  const v = VIEWS[viewKey];
+  document.getElementById('sideTitle').textContent = v.sideTitle;
+  const nav = document.getElementById('sideNav');
+  nav.innerHTML = v.sections.map(sec => `
+    <div class="side-nav-section">
+      <div class="side-nav-label">${sec.label}</div>
+      ${sec.items.map(it => `
+        <a class="side-item ${it.active?'active':''}" ${it.key?`data-view="${it.key}"`:''}>
+          ${svg(it.icon)}
+          <span>${it.name}</span>
+          ${it.count!=null?`<span class="count">${it.count}</span>`:''}
+        </a>`).join('')}
+    </div>`).join('');
+  nav.querySelectorAll('[data-view]').forEach(el=>{
+    el.addEventListener('click',()=>switchView(el.dataset.view));
+  });
+}
+
+function renderCrumb(viewKey){
+  const t = VIEWS[viewKey].title;
+  document.getElementById('crumb').innerHTML =
+    `<span>项目中心</span><span class="sep">/</span><span class="cur">${t}</span>`;
+}
+
+function switchView(viewKey){
+  if(!VIEWS[viewKey]) return;
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+  document.getElementById('view-'+viewKey).classList.add('active');
+  document.querySelectorAll('.mini-item[data-view]').forEach(b=>{
+    b.classList.toggle('active', b.dataset.view===viewKey);
+  });
+  renderSidebar(viewKey);
+  renderCrumb(viewKey);
+}
+
+document.querySelectorAll('.mini-item[data-view]').forEach(b=>{
+  b.addEventListener('click',()=>switchView(b.dataset.view));
+});
+document.querySelectorAll('[data-view]').forEach(b=>{
+  if(b.classList.contains('side-item')||b.classList.contains('mini-item')) return;
+  b.addEventListener('click',()=>switchView(b.dataset.view));
+});
+
+// init
+renderSidebar('dashboard');
+
+</script>
+</body>
+</html>
