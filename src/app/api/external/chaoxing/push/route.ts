@@ -7,49 +7,15 @@ import { TeamMemberService } from '@/lib/domain/team-member-service';
 import { DictService } from '@/lib/domain/dict-service';
 import { parseChaoxingFormData, isValidOp, toIsoFromEpoch } from '@/lib/domain/chaoxing/parser';
 import { mapTripFields, MapFieldError } from '@/lib/domain/chaoxing/mapping';
+import { queueSyncLog, logPushReceived, logPushAck } from '@/lib/domain/external-sync-log';
 
 const SOURCE = 'chaoxing';
+const SYNC_SOURCE = 'trip-request';
 const TRIP_FORM_ID = '253633';
 
-async function writeSyncLog(input: {
-  db: ReturnType<typeof getAdminSupabase>;
-  formId: string;
-  indexId: string;
-  op: string;
-  operator: string | null;
-  ip: string | null;
-  durationMs: number;
-  status: 'success' | 'failed' | 'skipped';
-  entityType: string;
-  entityId?: string | null;
-  externalId?: string;
-  message?: string | null;
-  payload?: unknown;
-  error?: string | null;
-}): Promise<void> {
-  const { db, ...row } = input;
-  await db.from('external_sync_logs').insert({
-    source: SOURCE,
-    direction: 'inbound',
-    form_id: row.formId,
-    index_id: row.indexId,
-    external_id: row.externalId ?? row.indexId,
-    entity_type: row.entityType,
-    entity_id: row.entityId ?? null,
-    op: row.op,
-    operator: row.operator,
-    ip: row.ip,
-    duration_ms: row.durationMs,
-    status: row.status,
-    message: row.message ?? null,
-    error: row.error ?? null,
-    payload: (row.payload ?? null) as Record<string, unknown> | null,
-  });
-}
-
 export async function POST(request: NextRequest) {
+  const startedAt = Date.now();
   return withApi(async () => {
-    const startedAt = Date.now();
     const form = await request.formData().catch(() => null);
     if (!form) return fail('invalid_param', '请求体必须是 form-data / urlencoded', 400);
 
@@ -59,6 +25,13 @@ export async function POST(request: NextRequest) {
 
     const db = getAdminSupabase();
     const ip = request.headers.get('x-forwarded-for') ?? request.headers.get('x-real-ip') ?? null;
+    logPushReceived('chaoxing-trip', {
+      op: payload.op,
+      formId: payload.formId,
+      indexId: payload.indexId,
+      uid: payload.uid,
+      auditStatus: payload.auditStatus,
+    });
     const auditPayload = {
       op: payload.op,
       formId: payload.formId,
@@ -79,8 +52,8 @@ export async function POST(request: NextRequest) {
     };
 
     if (payload.formId !== TRIP_FORM_ID) {
-      await writeSyncLog({
-        db,
+      queueSyncLog({
+        source: SYNC_SOURCE,
         formId: payload.formId,
         indexId: payload.indexId || '0',
         op: payload.op,
@@ -93,6 +66,7 @@ export async function POST(request: NextRequest) {
         message: `formId 不匹配，仅处理 ${TRIP_FORM_ID}`,
         payload: auditPayload,
       });
+      logPushAck('chaoxing-trip', { result: 'skipped', reason: 'form_id_mismatch' }, startedAt);
       return ok({
         received: 1,
         results: [{ indexId: payload.indexId || '0', result: 'skipped', reason: 'form_id_mismatch' }],
@@ -100,8 +74,8 @@ export async function POST(request: NextRequest) {
     }
 
     if (payload.op === 'form_update') {
-      await writeSyncLog({
-        db,
+      queueSyncLog({
+        source: SYNC_SOURCE,
         formId: payload.formId,
         indexId: payload.indexId || '0',
         op: payload.op,
@@ -114,6 +88,7 @@ export async function POST(request: NextRequest) {
         message: '表单结构变化通知，已 ack',
         payload: auditPayload,
       });
+      logPushAck('chaoxing-trip', { result: 'ack' }, startedAt);
       return ok({ received: 1, results: [{ indexId: '0', result: 'ack' }] });
     }
 
@@ -125,8 +100,8 @@ export async function POST(request: NextRequest) {
         payload.op === 'data_remove'
           ? await service.softDeleteByExternal(SOURCE, payload.indexId)
           : await service.recoverByExternal(SOURCE, payload.indexId);
-      await writeSyncLog({
-        db,
+      queueSyncLog({
+        source: SYNC_SOURCE,
         formId: payload.formId,
         indexId: payload.indexId,
         op: payload.op,
@@ -140,6 +115,14 @@ export async function POST(request: NextRequest) {
         message: row ? undefined : '本地不存在该记录',
         payload: auditPayload,
       });
+      logPushAck(
+        'chaoxing-trip',
+        {
+          result: row ? (payload.op === 'data_remove' ? 'deleted' : 'recovered') : 'skipped',
+          indexId: payload.indexId,
+        },
+        startedAt,
+      );
       return ok({
         received: 1,
         results: [
@@ -212,8 +195,8 @@ export async function POST(request: NextRequest) {
         schoolId,
       );
 
-      await writeSyncLog({
-        db,
+      queueSyncLog({
+        source: SYNC_SOURCE,
         formId: payload.formId,
         indexId: payload.indexId,
         op: payload.op,
@@ -228,6 +211,12 @@ export async function POST(request: NextRequest) {
         payload: auditPayload,
       });
 
+      logPushAck(
+        'chaoxing-trip',
+        { result: created ? 'created' : 'updated', indexId: payload.indexId, localId: row.id },
+        startedAt,
+      );
+
       return ok({
         received: 1,
         results: [
@@ -241,9 +230,9 @@ export async function POST(request: NextRequest) {
       });
     } catch (err) {
       const message = err instanceof MapFieldError ? err.message : err instanceof Error ? err.message : '数据映射失败';
-      console.error('[chaoxing] failed:', err);
-      await writeSyncLog({
-        db,
+      console.error('[chaoxing-trip] failed:', err);
+      queueSyncLog({
+        source: SYNC_SOURCE,
         formId: payload.formId,
         indexId: payload.indexId,
         op: payload.op,
@@ -256,6 +245,7 @@ export async function POST(request: NextRequest) {
         error: message,
         payload: { ...auditPayload, dataPreview: payload.data.slice(0, 50) },
       });
+      logPushAck('chaoxing-trip', { result: 'failed', error: message }, startedAt);
       return fail('mapping_failed', message, 422);
     }
   });

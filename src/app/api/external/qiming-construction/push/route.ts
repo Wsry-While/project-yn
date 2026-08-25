@@ -7,49 +7,15 @@ import { processQimingAttachments } from '@/lib/domain/qiming-construction-attac
 import { TeamMemberService } from '@/lib/domain/team-member-service';
 import { DictService } from '@/lib/domain/dict-service';
 import { ReferenceResolver } from '@/lib/domain/reference-resolver';
+import { queueSyncLog, logPushReceived, logPushAck } from '@/lib/domain/external-sync-log';
 
 const SOURCE = 'chaoxing';
+const SYNC_SOURCE = 'qiming-construction';
 // 启明星建设表单 formId，由 CHAOXING_QIMING_FORM_ID 指定；未配置时不做白名单过滤（联调期）。
 const QIMING_FORM_ID = (process.env.CHAOXING_QIMING_FORM_ID || '').trim();
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-async function writeSyncLog(input: {
-  db: ReturnType<typeof getAdminSupabase>;
-  formId: string;
-  indexId: string;
-  op: string;
-  operator: string | null;
-  ip: string | null;
-  durationMs: number;
-  status: 'success' | 'failed' | 'skipped';
-  entityType: string;
-  entityId?: string | null;
-  externalId?: string;
-  message?: string | null;
-  payload?: unknown;
-  error?: string | null;
-}): Promise<void> {
-  const { db, ...row } = input;
-  await db.from('external_sync_logs').insert({
-    source: 'qiming-construction',
-    direction: 'inbound',
-    form_id: row.formId,
-    index_id: row.indexId,
-    external_id: row.externalId ?? row.indexId,
-    entity_type: row.entityType,
-    entity_id: row.entityId ?? null,
-    op: row.op,
-    operator: row.operator,
-    ip: row.ip,
-    duration_ms: row.durationMs,
-    status: row.status,
-    message: row.message ?? null,
-    error: row.error ?? null,
-    payload: (row.payload ?? null) as Record<string, unknown> | null,
-  });
-}
 
 function asString(v: unknown): string | null {
   if (v === null || v === undefined) return null;
@@ -219,6 +185,13 @@ export async function POST(request: NextRequest) {
 
     const db = getAdminSupabase();
     const ip = request.headers.get('x-forwarded-for') ?? request.headers.get('x-real-ip') ?? null;
+    logPushReceived('qiming-construction', {
+      op: payload.op,
+      formId: payload.formId,
+      indexId: payload.indexId,
+      uid: payload.uid,
+      auditStatus: payload.auditStatus,
+    });
     const auditPayload = {
       op: payload.op,
       formId: payload.formId,
@@ -235,8 +208,8 @@ export async function POST(request: NextRequest) {
     };
 
     if (QIMING_FORM_ID && payload.formId !== QIMING_FORM_ID) {
-      await writeSyncLog({
-        db,
+      queueSyncLog({
+        source: SYNC_SOURCE,
         formId: payload.formId,
         indexId: payload.indexId || '0',
         op: payload.op,
@@ -249,6 +222,7 @@ export async function POST(request: NextRequest) {
         message: `formId 不匹配，仅处理 ${QIMING_FORM_ID}`,
         payload: auditPayload,
       });
+      logPushAck('qiming-construction', { result: 'skipped', reason: 'form_id_mismatch' }, startedAt);
       return ok({
         received: 1,
         results: [{ indexId: payload.indexId || '0', result: 'skipped', reason: 'form_id_mismatch' }],
@@ -256,8 +230,8 @@ export async function POST(request: NextRequest) {
     }
 
     if (payload.op === 'form_update') {
-      await writeSyncLog({
-        db,
+      queueSyncLog({
+        source: SYNC_SOURCE,
         formId: payload.formId,
         indexId: payload.indexId || '0',
         op: payload.op,
@@ -270,6 +244,7 @@ export async function POST(request: NextRequest) {
         message: '表单结构变化通知，已 ack',
         payload: auditPayload,
       });
+      logPushAck('qiming-construction', { result: 'ack' }, startedAt);
       return ok({ received: 1, results: [{ indexId: '0', result: 'ack' }] });
     }
 
@@ -281,8 +256,8 @@ export async function POST(request: NextRequest) {
         payload.op === 'data_remove'
           ? await service.softDeleteByExternal(SOURCE, payload.indexId)
           : await service.recoverByExternal(SOURCE, payload.indexId);
-      await writeSyncLog({
-        db,
+      queueSyncLog({
+        source: SYNC_SOURCE,
         formId: payload.formId,
         indexId: payload.indexId,
         op: payload.op,
@@ -296,6 +271,11 @@ export async function POST(request: NextRequest) {
         message: row ? undefined : '本地不存在该记录',
         payload: auditPayload,
       });
+      logPushAck(
+        'qiming-construction',
+        { result: row ? (payload.op === 'data_remove' ? 'deleted' : 'recovered') : 'skipped', indexId: payload.indexId },
+        startedAt,
+      );
       return ok({
         received: 1,
         results: [
@@ -397,8 +377,8 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      await writeSyncLog({
-        db,
+      queueSyncLog({
+        source: SYNC_SOURCE,
         formId: payload.formId,
         indexId: payload.indexId,
         op: payload.op,
@@ -412,6 +392,12 @@ export async function POST(request: NextRequest) {
         message: `已${created ? '创建' : '更新'}启明星建设记录`,
         payload: auditPayload,
       });
+
+      logPushAck(
+        'qiming-construction',
+        { result: created ? 'created' : 'updated', indexId: payload.indexId, localId: row.id },
+        startedAt,
+      );
 
       after(async () => {
         try {
@@ -427,9 +413,9 @@ export async function POST(request: NextRequest) {
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : '数据映射失败';
-      console.error('[qiming-construction push] failed:', err);
-      await writeSyncLog({
-        db,
+      console.error('[qiming-construction] failed:', err);
+      queueSyncLog({
+        source: SYNC_SOURCE,
         formId: payload.formId,
         indexId: payload.indexId,
         op: payload.op,
@@ -442,6 +428,7 @@ export async function POST(request: NextRequest) {
         error: message,
         payload: { ...auditPayload, dataPreview: payload.data.slice(0, 50) },
       });
+      logPushAck('qiming-construction', { result: 'failed', error: message }, startedAt);
       return fail('invalid_param', message, 422);
     }
   });

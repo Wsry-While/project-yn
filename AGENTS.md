@@ -191,6 +191,8 @@
   - 附件通用访问（登录即可）：`GET /api/files/meta/:assetId`（元数据+预览类型）、`GET /api/files/preview/:assetId`（307 到可内联的签名 URL，Office 返回 415）、`POST /api/files/:assetId/retry`（重新转存失败/待处理附件，超大文件降级 direct）。业务下载老路由 `/api/files/attachments|demand-attachments|qiming-attachments/:assetId` 保留，均委托给 `src/lib/domain/asset-access.ts`。
   - 招投标 AI 截图闭环：`POST /api/agent/bidding-score-items`（读招标文件 PDF/docx，SSE 流式输出评分项 JSON，scenario=`bidding-score`，走 Pro 模型）、`GET /api/bidding-screenshots/examples?keywords=`（召回历史截图示例，>30 天标记 stale）、`POST /api/agent/bidding-screenshot-advice`（评分项+历史示例→SSE Markdown 截图作业指导，scenario=`bidding-advice`）、`POST /api/agent/bidding-learn`（对交付截图做多模态视觉理解，写入 `bidding_screenshot_examples`，scenario=`bidding-vision`）。文档解析在 `src/lib/domain/parse/document-parser.ts`（pdf-parse + mammoth，6 万字符截断，自动定位评分办法章节）。
 - 第三方推送 `POST /api/external/push` 通过 `x-push-token`、`Authorization: Bearer` 或 `?token=` 鉴权，token 读取 `EXTERNAL_PUSH_TOKEN`，开发兜底值 `dev-push-token-change-me`。
+- 健康检查 `GET /api/health`（无 DB，给保活探针/负载均衡用），`GET /api/health?deep=1` 同时探测 Supabase，返回 `{status,uptime,db,ts,durationMs}`，异常时 HTTP 503。
+- 生产保活：`src/instrumentation.ts` 在 Node.js runtime 启动后每 4 分钟自请求 `/api/health`，降低 FaaS 空闲回收导致的冷启动概率。可通过 `KEEPALIVE_INTERVAL_MS` 调整间隔，`DISABLE_KEEPALIVE=1` 关闭。
 - 第三方招投标截图推送 `POST /api/external/bidding-screenshots/push`：
   - 与超星项目外出推送保持一致，按无鉴权接入设计，不校验 `Authorization` / token，入口仅通过公网 HTTPS + `formId=254045` 白名单 + 业务幂等键控制。
   - 接受 JSON 对象/数组、`multipart/form-data`、`application/x-www-form-urlencoded`、`text/plain`(JSON 字符串)。

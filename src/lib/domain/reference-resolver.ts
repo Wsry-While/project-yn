@@ -14,6 +14,52 @@ function looseEqual(a: string | null | undefined, b: string | null | undefined):
 }
 
 /**
+ * 进程级 LRU-ish 解析缓存：把"名字 → 解析到的 uuid"按类型缓存 10 分钟，
+ * 用于减少推送接口高峰期对 schools / school_aliases 等表的全表扫描。
+ * - 仅缓存"命中已有记录"的结果；自动创建新学校不缓存（避免短时间内重复并发创建）；
+ * - 命中缓存后仍会进入一次 loose 校验以防同名歧义；
+ * - 容量上限 2000 条，超出后按插入顺序淘汰最早的 25%。
+ */
+const RESOLVE_TTL_MS = 10 * 60 * 1000;
+const RESOLVE_MAX = 2000;
+const resolveCache = new Map<string, { value: string; expiresAt: number }>();
+
+function cacheGet(namespace: string, key: string): string | null {
+  const cacheKey = `${namespace}:${key.trim().toLowerCase()}`;
+  const hit = resolveCache.get(cacheKey);
+  if (!hit) return null;
+  if (hit.expiresAt < Date.now()) {
+    resolveCache.delete(cacheKey);
+    return null;
+  }
+  // LRU touch
+  resolveCache.delete(cacheKey);
+  resolveCache.set(cacheKey, hit);
+  return hit.value;
+}
+
+function cacheSet(namespace: string, key: string, value: string): void {
+  const cacheKey = `${namespace}:${key.trim().toLowerCase()}`;
+  if (resolveCache.size >= RESOLVE_MAX) {
+    const drop = Math.floor(RESOLVE_MAX * 0.25);
+    let dropped = 0;
+    for (const k of resolveCache.keys()) {
+      resolveCache.delete(k);
+      dropped += 1;
+      if (dropped >= drop) break;
+    }
+  }
+  resolveCache.set(cacheKey, { value, expiresAt: Date.now() + RESOLVE_TTL_MS });
+}
+
+function cacheInvalidatePrefix(prefix: string): void {
+  const fullPrefix = `${prefix}:`;
+  for (const k of resolveCache.keys()) {
+    if (k.startsWith(fullPrefix)) resolveCache.delete(k);
+  }
+}
+
+/**
  * 学校 / 部门解析器：
  * - 按 schools.name → school_aliases.alias → 规范化名称 LIKE 的顺序查找
  * - 找不到时自动创建学校（与 SchoolService.findOrCreateSchoolByName 行为一致）
@@ -55,7 +101,7 @@ export class ReferenceResolver {
     return this.departmentAliasesCache;
   }
 
-  /** 清空缓存，推送/回填结束后可调用 */
+  /** 清空实例级缓存，推送/回填结束后可调用；进程级解析缓存只失效不直接清空。 */
   resetCache(): void {
     this.schoolsCache = null;
     this.schoolAliasesCache = null;
@@ -66,29 +112,54 @@ export class ReferenceResolver {
   async resolveSchool(name: string | null | undefined): Promise<string | null> {
     const trimmed = name?.trim();
     if (!trimmed) return null;
+
+    // 0. 进程级缓存命中
+    const cached = cacheGet('school', trimmed);
+    if (cached) {
+      const schools = await this.ensureSchools();
+      const valid = schools.find((s) => s.id === cached);
+      if (valid) return valid.id;
+      cacheInvalidatePrefix('school');
+    }
+
     const schools = await this.ensureSchools();
 
     // 1. 精确名称
     const exact = schools.find((s) => s.name === trimmed);
-    if (exact) return exact.id;
+    if (exact) {
+      cacheSet('school', trimmed, exact.id);
+      return exact.id;
+    }
 
     // 2. 别名
     const aliases = await this.ensureSchoolAliases();
     const byAlias = aliases.find((a) => a.alias === trimmed);
-    if (byAlias) return byAlias.school_id;
+    if (byAlias) {
+      cacheSet('school', trimmed, byAlias.school_id);
+      return byAlias.school_id;
+    }
 
     // 3. 规范化（去空格/括号）匹配
     const loose = schools.find((s) => looseEqual(s.name, trimmed));
-    if (loose) return loose.id;
+    if (loose) {
+      cacheSet('school', trimmed, loose.id);
+      return loose.id;
+    }
     const looseAlias = aliases.find((a) => looseEqual(a.alias, trimmed));
-    if (looseAlias) return looseAlias.school_id;
+    if (looseAlias) {
+      cacheSet('school', trimmed, looseAlias.school_id);
+      return looseAlias.school_id;
+    }
 
     // 4. 子串包含（学校名包含输入，或输入包含学校名）
     const lower = trimmed.toLowerCase();
     const fuzzy = schools.find(
       (s) => s.name.toLowerCase().includes(lower) || lower.includes(s.name.toLowerCase()),
     );
-    if (fuzzy) return fuzzy.id;
+    if (fuzzy) {
+      cacheSet('school', trimmed, fuzzy.id);
+      return fuzzy.id;
+    }
 
     // 5. 都没命中：自动创建学校（沿用外部来源）
     const { data, error } = await this.db
@@ -101,11 +172,16 @@ export class ReferenceResolver {
       const retry = await this.db.from('schools').select('id, name').eq('name', trimmed).maybeSingle<SchoolRow>();
       if (retry.data) {
         this.schoolsCache = null;
+        cacheSet('school', trimmed, retry.data.id);
         return retry.data.id;
       }
       return null;
     }
     this.schoolsCache = null;
+    // 自动创建的结果缓存 30 秒，给并发请求一个短暂窗口命中，避免重复插入冲突；
+    // 同时不会因为名称后续被改名而长时间指向错误记录。
+    const cacheKey = `school:${trimmed.toLowerCase()}`;
+    resolveCache.set(cacheKey, { value: data.id, expiresAt: Date.now() + 30_000 });
     return data.id;
   }
 
@@ -120,19 +196,38 @@ export class ReferenceResolver {
   ): Promise<string | null> {
     const trimmed = name?.trim();
     if (!trimmed) return null;
+
+    const cacheNs = `dept:${schoolId ?? '_'}:${type}`;
+    const cached = cacheGet(cacheNs, trimmed);
+    if (cached) {
+      const depts = await this.ensureDepartments();
+      const valid = depts.find((d) => d.id === cached);
+      if (valid) return valid.id;
+      cacheInvalidatePrefix('dept:');
+    }
+
     const depts = await this.ensureDepartments();
     const inSchool = depts.filter((d) => !schoolId || d.school_id === schoolId);
 
     const exact = inSchool.find((d) => d.name === trimmed);
-    if (exact) return exact.id;
+    if (exact) {
+      cacheSet(cacheNs, trimmed, exact.id);
+      return exact.id;
+    }
 
     const deptAliases = await this.ensureDepartmentAliases();
     const candidateIds = new Set(inSchool.map((d) => d.id));
     const byAlias = deptAliases.find((a) => candidateIds.has(a.department_id) && a.alias === trimmed);
-    if (byAlias) return byAlias.department_id;
+    if (byAlias) {
+      cacheSet(cacheNs, trimmed, byAlias.department_id);
+      return byAlias.department_id;
+    }
 
     const loose = inSchool.find((d) => looseEqual(d.name, trimmed));
-    if (loose) return loose.id;
+    if (loose) {
+      cacheSet(cacheNs, trimmed, loose.id);
+      return loose.id;
+    }
 
     if (!schoolId) return null;
 
@@ -151,11 +246,15 @@ export class ReferenceResolver {
         .maybeSingle<DeptRow>();
       if (retry.data) {
         this.departmentsCache = null;
+        cacheSet(cacheNs, trimmed, retry.data.id);
         return retry.data.id;
       }
       return null;
     }
     this.departmentsCache = null;
+    // 自动创建的部门短缓存 30s，防并发重复插入
+    const cacheKey = `${cacheNs}:${trimmed.toLowerCase()}`;
+    resolveCache.set(cacheKey, { value: data.id, expiresAt: Date.now() + 30_000 });
     return data.id;
   }
 }

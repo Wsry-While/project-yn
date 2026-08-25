@@ -17,8 +17,10 @@ import {
   toNumber,
 } from '@/lib/domain/bidding-normalize';
 import { flattenChaoxingFormData } from '@/lib/domain/bidding-form-data';
+import { queueSyncLog, logPushReceived, logPushAck } from '@/lib/domain/external-sync-log';
 
 const SOURCE = 'bidding-screenshot';
+const SYNC_SOURCE = 'bidding-screenshot';
 const BIDDING_FORM_ID = '254045';
 
 export const runtime = 'nodejs';
@@ -279,37 +281,6 @@ function missingRequiredFields(mapped: MappedBody): string[] {
   return missing;
 }
 
-async function writeSyncLog(input: {
-  db: ReturnType<typeof getAdminSupabase>;
-  externalId: string;
-  op: string;
-  operator: string | null;
-  ip: string | null;
-  durationMs: number;
-  status: 'success' | 'failed' | 'skipped';
-  entityId?: string | null;
-  message?: string | null;
-  payload?: unknown;
-  error?: string | null;
-}): Promise<void> {
-  const { db, ...row } = input;
-  await db.from('external_sync_logs').insert({
-    source: SOURCE,
-    direction: 'inbound',
-    external_id: row.externalId,
-    entity_type: 'bidding_screenshot',
-    entity_id: row.entityId ?? null,
-    op: row.op,
-    operator: row.operator,
-    ip: row.ip,
-    duration_ms: row.durationMs,
-    status: row.status,
-    message: row.message ?? null,
-    error: row.error ?? null,
-    payload: (row.payload ?? null) as Record<string, unknown> | null,
-  });
-}
-
 export async function POST(request: NextRequest) {
   const startedAt = Date.now();
   return withApi(async () => {
@@ -325,12 +296,6 @@ export async function POST(request: NextRequest) {
     const memberService = new TeamMemberService(db);
     const dictService = new DictService(db);
     const ip = request.headers.get('x-forwarded-for') ?? request.headers.get('x-real-ip') ?? null;
-    const results: Array<{
-      externalId: string;
-      result: 'created' | 'updated' | 'deleted' | 'recovered' | 'skipped' | 'failed';
-      localId?: string | null;
-      reason?: string;
-    }> = [];
 
     const topLevelOp = typeof topLevelMeta.op === 'string' ? String(topLevelMeta.op) : undefined;
     const topLevelFormId =
@@ -340,35 +305,53 @@ export async function POST(request: NextRequest) {
     const topLevelFormName =
       typeof topLevelMeta.formName === 'string' ? topLevelMeta.formName : undefined;
 
+    logPushReceived('bidding-screenshot', {
+      itemCount: items.length,
+      topLevelOp,
+      topLevelFormId,
+      topLevelFormName,
+    });
+    const results: Array<{
+      externalId: string;
+      result: 'created' | 'updated' | 'deleted' | 'recovered' | 'skipped' | 'failed';
+      localId?: string | null;
+      reason?: string;
+    }> = [];
+
+
     // formId 白名单：只处理 254045（招投标截图），其他表单 ack skipped，和 chaoxing 推送行为一致
     if (topLevelFormId && topLevelFormId !== BIDDING_FORM_ID) {
-      await writeSyncLog({
-        db,
+      queueSyncLog({
+        source: SYNC_SOURCE,
         externalId: '0',
         op: topLevelOp ?? 'unknown',
         operator: null,
         ip,
         durationMs: Date.now() - startedAt,
         status: 'skipped',
+        entityType: 'bidding_screenshot',
         message: `formId 不匹配（期望 ${BIDDING_FORM_ID}，实际 ${topLevelFormId}）`,
         payload: { ...topLevelMeta, ip, receivedAt: new Date().toISOString() },
       });
+      logPushAck('bidding-screenshot', { result: 'skipped', reason: 'form_id_mismatch' }, startedAt);
       return ok({ received: 0, skipped: true, reason: 'form_id_mismatch' });
     }
 
     // form_update：仅记录元数据，不写业务数据
     if (topLevelOp && FORM_UPDATE_OPS.has(topLevelOp)) {
-      await writeSyncLog({
-        db,
+      queueSyncLog({
+        source: SYNC_SOURCE,
         externalId: '0',
         op: topLevelOp,
         operator: null,
         ip,
         durationMs: Date.now() - startedAt,
         status: 'success',
+        entityType: 'form',
         message: topLevelFormName ? `表单更新：${topLevelFormName}` : '表单更新',
         payload: { ...topLevelMeta, ip, receivedAt: new Date().toISOString() },
       });
+      logPushAck('bidding-screenshot', { result: 'ack' }, startedAt);
       return ok({ received: 0, results: [{ externalId: '0', result: 'ack' }] });
     }
 
@@ -389,26 +372,26 @@ export async function POST(request: NextRequest) {
       if (!externalId) {
         const reason = '缺少外部记录 ID（externalId/indexID/id）';
         results.push({ externalId: '', result: 'failed', reason });
-        await writeSyncLog({ db, externalId: '', op: effectiveOp, operator, ip, durationMs: Date.now() - startedAt, status: 'failed', error: reason, payload: auditPayload });
+        queueSyncLog({ source: SYNC_SOURCE, externalId: '', op: effectiveOp, operator, ip, durationMs: Date.now() - startedAt, status: 'failed', entityType: 'bidding_screenshot', error: reason, payload: auditPayload });
         continue;
       }
 
       if (REMOVE_OPS.has(effectiveOp)) {
         const row = await service.softDeleteByExternal(SOURCE, externalId);
         results.push({ externalId, result: row ? 'deleted' : 'skipped', localId: row?.id ?? null, reason: row ? undefined : '本地不存在该记录' });
-        await writeSyncLog({ db, externalId, op: effectiveOp, operator, ip, durationMs: Date.now() - startedAt, status: row ? 'success' : 'skipped', entityId: row?.id, message: row ? undefined : '本地不存在该记录', payload: auditPayload });
+        queueSyncLog({ source: SYNC_SOURCE, externalId, op: effectiveOp, operator, ip, durationMs: Date.now() - startedAt, status: row ? 'success' : 'skipped', entityType: 'bidding_screenshot', entityId: row?.id, message: row ? undefined : '本地不存在该记录', payload: auditPayload });
         continue;
       }
       if (RECOVER_OPS.has(effectiveOp)) {
         const row = await service.recoverByExternal(SOURCE, externalId);
         results.push({ externalId, result: row ? 'recovered' : 'skipped', localId: row?.id ?? null, reason: row ? undefined : '本地不存在该记录' });
-        await writeSyncLog({ db, externalId, op: effectiveOp, operator, ip, durationMs: Date.now() - startedAt, status: row ? 'success' : 'skipped', entityId: row?.id, message: row ? undefined : '本地不存在该记录', payload: auditPayload });
+        queueSyncLog({ source: SYNC_SOURCE, externalId, op: effectiveOp, operator, ip, durationMs: Date.now() - startedAt, status: row ? 'success' : 'skipped', entityType: 'bidding_screenshot', entityId: row?.id, message: row ? undefined : '本地不存在该记录', payload: auditPayload });
         continue;
       }
       if (!UPSERT_OPS.has(effectiveOp)) {
         const reason = `不支持的 op：${effectiveOp}`;
         results.push({ externalId, result: 'failed', reason });
-        await writeSyncLog({ db, externalId, op: effectiveOp, operator, ip, durationMs: Date.now() - startedAt, status: 'failed', error: reason, payload: auditPayload });
+        queueSyncLog({ source: SYNC_SOURCE, externalId, op: effectiveOp, operator, ip, durationMs: Date.now() - startedAt, status: 'failed', entityType: 'bidding_screenshot', error: reason, payload: auditPayload });
         continue;
       }
 
@@ -416,7 +399,7 @@ export async function POST(request: NextRequest) {
       if (missing.length > 0) {
         const reason = `缺少必填字段：${missing.join('、')}`;
         results.push({ externalId, result: 'failed', reason });
-        await writeSyncLog({ db, externalId, op: effectiveOp, operator, ip, durationMs: Date.now() - startedAt, status: 'failed', error: reason, payload: { ...auditPayload, recordKeys: Object.keys(record) } });
+        queueSyncLog({ source: SYNC_SOURCE, externalId, op: effectiveOp, operator, ip, durationMs: Date.now() - startedAt, status: 'failed', entityType: 'bidding_screenshot', error: reason, payload: { ...auditPayload, recordKeys: Object.keys(record) } });
         continue;
       }
 
@@ -486,7 +469,7 @@ export async function POST(request: NextRequest) {
           }
         }
         results.push({ externalId, result: created ? 'created' : 'updated', localId: row.id });
-        await writeSyncLog({ db, externalId, op: effectiveOp, operator, ip, durationMs: Date.now() - startedAt, status: 'success', entityId: row.id, message: `已${created ? '创建' : '更新'}招投标截图记录`, payload: auditPayload });
+        queueSyncLog({ source: SYNC_SOURCE, externalId, op: effectiveOp, operator, ip, durationMs: Date.now() - startedAt, status: 'success', entityType: 'bidding_screenshot', entityId: row.id, message: `已${created ? '创建' : '更新'}招投标截图记录`, payload: auditPayload });
         after(async () => {
           try {
             await processBiddingAttachments(row);
@@ -497,11 +480,22 @@ export async function POST(request: NextRequest) {
       } catch (err) {
         const reason = err instanceof Error ? err.message : '数据写入失败';
         results.push({ externalId, result: 'failed', reason });
-        await writeSyncLog({ db, externalId, op: effectiveOp, operator, ip, durationMs: Date.now() - startedAt, status: 'failed', error: reason, payload: { ...auditPayload, recordKeys: Object.keys(record) } });
+        queueSyncLog({ source: SYNC_SOURCE, externalId, op: effectiveOp, operator, ip, durationMs: Date.now() - startedAt, status: 'failed', entityType: 'bidding_screenshot', error: reason, payload: { ...auditPayload, recordKeys: Object.keys(record) } });
       }
     }
 
     const failed = results.filter((r) => r.result === 'failed');
+    logPushAck(
+      'bidding-screenshot',
+      {
+        received: results.length,
+        created: results.filter((r) => r.result === 'created').length,
+        updated: results.filter((r) => r.result === 'updated').length,
+        failed: failed.length,
+        skipped: results.filter((r) => r.result === 'skipped').length,
+      },
+      startedAt,
+    );
     if (failed.length > 0 && failed.length === results.length) {
       return fail('invalid_param', failed[0].reason || '推送处理失败', 422, { results });
     }
