@@ -11,8 +11,18 @@ import type {
   BiddingScreenshot,
 } from "./types";
 import { ScreenshotExampleService, type ScreenshotExample } from "./screenshot-example-service";
-import { parseAssetDocument, parseDocumentFromUrl, extractScoringSection } from "./parse/document-parser";
-import { buildMessages, getModelForScenario } from "./llm-prompts";
+import {
+  parseAssetDocument,
+  parseDocumentFromUrl,
+  extractScoringSection,
+  extractRequirementsSection,
+} from "./parse/document-parser";
+import {
+  buildMessages,
+  getModelForScenario,
+  buildBiddingScoreRulesPrompt,
+  buildBiddingRequirementsPrompt,
+} from "./llm-prompts";
 import { BiddingScreenshotService } from "./bidding-screenshot-service";
 
 type Supabase = ReturnType<typeof getAdminSupabase>;
@@ -24,6 +34,9 @@ interface ScoreItemRow extends Record<string, unknown> {
   requirement: string | null;
   score_value: number | null;
   category: string | null;
+  item_type: string | null;
+  delivery_method: string | null;
+  source_section: string | null;
   order_index: number;
   match_status: string;
   matched_example_id: string | null;
@@ -84,6 +97,23 @@ interface RawScoreItem {
   requirement?: string | null;
   scoreValue?: number | null;
   category?: string | null;
+  itemType?: "key" | "general" | "demo" | "document" | "unknown";
+  deliveryMethod?: "screenshot" | "demo" | "document" | "na";
+  sourceSection?: string | null;
+}
+
+interface RawScoreRules {
+  parameterRules?: {
+    keyParamDeduction?: number | null;
+    generalParamDeduction?: number | null;
+    keyParamMarkers?: string[];
+    ruleText?: string;
+  } | null;
+  demoRequired?: boolean;
+  demoRuleText?: string;
+  documentItems?: Array<{ title: string; maxScore?: number; rule?: string }>;
+  totalTechScore?: number | null;
+  notes?: string;
 }
 
 export type ProgressEmit = (type: "step" | "delta" | "done" | "error" | "meta", payload: unknown) => void;
@@ -184,19 +214,33 @@ export const BiddingDocumentService = {
       truncated: parsed.truncated,
     });
     emit("delta", {
-      content: `已从 ${parsed.fileName}（${parsed.kind.toUpperCase()}，${Math.round(parsed.text.length / 100) / 10} 万字）定位到评分办法章节${section.matched ? `（命中「${section.matched}」）` : "（基于启发式定位）"}。\n\n正在调用大模型抽取评分项…\n\n`,
+      content: `已从 ${parsed.fileName}（${parsed.kind.toUpperCase()}，${Math.round(parsed.text.length / 100) / 10} 万字）定位到评分办法章节${section.matched ? `（命中「${section.matched}」）` : "（基于启发式定位）"}。\n\n【阶段 1/3】调用大模型解析评分规则与参数类型…\n\n`,
     });
 
-    emit("step", { phase: "llm", message: "大模型抽取评分项…" });
-    const items = await extractScoreItemsWithLlm(section.text, record, emit, requestHeaders);
+    emit("step", { phase: "llm", message: "阶段 1/3：解析评分规则…" });
+    const rules = await extractScoreRulesWithLlm(section.text, requestHeaders);
+    emit("delta", {
+      content: `评分规则解析完成：技术部分总分 **${rules.totalTechScore ?? "?"}**，重点参数扣分 **${rules.parameterRules?.keyParamDeduction ?? "?"}**/条，一般参数扣分 **${rules.parameterRules?.generalParamDeduction ?? "?"}**/条，演示要求：**${rules.demoRequired ? "有" : "无"}**，文档类评分项 **${rules.documentItems?.length ?? 0}** 项。\n\n【阶段 2/3】定位采购需求章节并归纳交付项…\n\n`,
+    });
+
+    const reqSection = extractRequirementsSection(parsed.text);
+    if (!reqSection) {
+      throw new Error("未能从招标文件中定位到采购需求/技术要求章节");
+    }
+    emit("delta", {
+      content: `已截取采购需求章节（${reqSection.length} 字），正在归纳截图/演示/文档类交付项…\n\n`,
+    });
+
+    emit("step", { phase: "llm", message: "阶段 2/3：归纳交付项…" });
+    const items = await extractRequirementsWithLlm(reqSection, rules, requestHeaders);
     if (!items.length) {
       throw new Error("未能从招标文件中抽取到评分项");
     }
     emit("delta", {
-      content: `\n\n抽取完成：共 **${items.length}** 项评分点。正在匹配截图知识库…\n\n`,
+      content: `\n\n抽取完成：共 **${items.length}** 项交付点（重点参数 ${items.filter((i) => i.itemType === "key").length}、一般参数 ${items.filter((i) => i.itemType === "general").length}、演示 ${items.filter((i) => i.itemType === "demo").length}、文档 ${items.filter((i) => i.itemType === "document").length}）。\n\n【阶段 3/3】匹配截图知识库（仅截图类评分项）…\n\n`,
     });
 
-    emit("step", { phase: "match", message: "匹配截图知识库…" });
+    emit("step", { phase: "match", message: "阶段 3/3：匹配截图知识库…" });
     const matched = await matchExamplesForItems(supabase, items);
 
     const version = await nextVersion(supabase, recordId);
@@ -206,6 +250,17 @@ export const BiddingDocumentService = {
 
     const rows = items.map((it, idx) => {
       const m = matched[idx];
+      // 文档/演示类不走截图匹配，直接标 na（需要 PM 另行处理）
+      const initialStatus: BiddingScoreItemStatus =
+        it.deliveryMethod === "screenshot"
+          ? m
+            ? "matched"
+            : "pending"
+          : it.deliveryMethod === "document"
+            ? "na"
+            : it.deliveryMethod === "demo"
+              ? "pending"
+              : "pending";
       return {
         record_id: recordId,
         item_no: it.itemNo ?? idx + 1,
@@ -213,8 +268,11 @@ export const BiddingDocumentService = {
         requirement: it.requirement ?? null,
         score_value: it.scoreValue ?? null,
         category: it.category ?? null,
+        item_type: it.itemType ?? "general",
+        delivery_method: it.deliveryMethod ?? "screenshot",
+        source_section: it.sourceSection ?? null,
         order_index: idx,
-        match_status: m ? "matched" : "pending",
+        match_status: initialStatus,
         matched_example_id: m?.id ?? null,
         matched_asset_id: m?.assetId ?? null,
         task_id: null,
@@ -462,6 +520,10 @@ function mapScoreItem(row: ScoreItemRow): BiddingScoreItem {
     requirement: r.requirement,
     scoreValue: r.score_value,
     category: r.category,
+    itemType: (r.item_type as BiddingScoreItem["itemType"]) ?? "unknown",
+    deliveryMethod:
+      (r.delivery_method as BiddingScoreItem["deliveryMethod"]) ?? "screenshot",
+    sourceSection: r.source_section ?? null,
     orderIndex: r.order_index,
     matchStatus: r.match_status as BiddingScoreItemStatus,
     matchedExampleId: r.matched_example_id,
@@ -508,59 +570,90 @@ function mapFollowupTask(row: FollowupTaskRow): BiddingFollowupTask {
   };
 }
 
-// ============== LLM 抽取 ==============
+// ============== LLM 抽取（两阶段） ==============
 
-async function extractScoreItemsWithLlm(
+/**
+ * 阶段一：从评分办法章节抽取规则结构。
+ */
+async function extractScoreRulesWithLlm(
   sectionText: string,
-  record: BiddingScreenshot,
-  emit: ProgressEmit,
   requestHeaders?: Headers,
-): Promise<RawScoreItem[]> {
-  const prompt = [
-    `项目名称：${record.projectName}`,
-    `学校：${record.projectSchool}`,
-    "",
-    "以下是从招标文件中定位到的评分办法章节原文。请抽取所有评分项，以严格 JSON 数组返回（不要任何额外解释、不要 Markdown 代码块）。",
-    "",
-    "输出 JSON Schema：",
-    `[
-  {
-    "itemNo": number,
-    "title": string,
-    "requirement": string,
-    "scoreValue": number | null,
-    "category": string
-  }
-]`,
-    "",
-    "规则：",
-    "1. itemNo 从1递增；title 简短（≤30字）；requirement 描述具体评分标准（≤120字）。",
-    "2. category 取值：技术/商务/价格/服务/资质/其他。",
-    "3. 只抽取明确评分项；忽略说明段、目录、页眉页脚。",
-    "4. 严格 JSON 数组，不要任何前导/后缀文字。",
-    "",
-    "-----原文开始-----",
-    sectionText.slice(0, 60000),
-    "-----原文结束-----",
-  ].join("\n");
-
-  const messages = buildMessages({ scenario: "bidding-score", prompt });
+): Promise<RawScoreRules> {
+  const prompt = buildBiddingScoreRulesPrompt(sectionText);
   const customHeaders = requestHeaders
     ? HeaderUtils.extractForwardHeaders(requestHeaders)
     : undefined;
   const client = new LLMClient(new Config({ timeout: 180_000 }), customHeaders);
 
   let buffer = "";
-  for await (const part of client.stream(messages, {
-    model: getModelForScenario("bidding-score"),
-    temperature: 0.1,
-  })) {
+  for await (const part of client.stream(
+    buildMessages({ scenario: "bidding-score", prompt }),
+    {
+      model: getModelForScenario("bidding-score"),
+      temperature: 0.1,
+    },
+  )) {
     const text = part?.content?.toString?.() ?? "";
-    if (!text) continue;
-    buffer += text;
-    emit("delta", { content: text });
+    if (text) buffer += text;
   }
-  return parseScoreItemsJson(buffer);
+  return parseRulesJson(buffer);
+}
+
+/**
+ * 阶段二：基于规则 + 采购需求章节，拆解每一条交付项。
+ */
+async function extractRequirementsWithLlm(
+  requirementsText: string,
+  rules: RawScoreRules,
+  requestHeaders?: Headers,
+): Promise<RawScoreItem[]> {
+  const prompt = buildBiddingRequirementsPrompt(requirementsText, rules);
+  const customHeaders = requestHeaders
+    ? HeaderUtils.extractForwardHeaders(requestHeaders)
+    : undefined;
+  const client = new LLMClient(new Config({ timeout: 180_000 }), customHeaders);
+
+  let buffer = "";
+  for await (const part of client.stream(
+    buildMessages({ scenario: "bidding-score", prompt }),
+    {
+      model: getModelForScenario("bidding-score"),
+      temperature: 0.1,
+    },
+  )) {
+    const text = part?.content?.toString?.() ?? "";
+    if (text) buffer += text;
+  }
+  const items = parseScoreItemsJson(buffer);
+  // 把阶段一的文档类评分项也合并进来（如果 LLM 没在采购需求里提到它们）
+  const existing = new Set(items.map((i) => i.title.trim()));
+  for (const d of rules.documentItems ?? []) {
+    if (existing.has(d.title)) continue;
+    items.push({
+      itemNo: items.length + 1,
+      title: d.title,
+      requirement: d.rule ?? null,
+      scoreValue: typeof d.maxScore === "number" ? d.maxScore : null,
+      category: "文档",
+      itemType: "document",
+      deliveryMethod: "document",
+      sourceSection: "评分办法-文档类",
+    });
+  }
+  return items;
+}
+
+function parseRulesJson(text: string): RawScoreRules {
+  const cleaned = text.replace(/```(?:json)?/gi, "").trim();
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) return {};
+  try {
+    const obj = JSON.parse(cleaned.slice(start, end + 1));
+    return obj && typeof obj === "object" ? (obj as RawScoreRules) : {};
+  } catch {
+    return {};
+  }
 }
 
 function parseScoreItemsJson(text: string): RawScoreItem[] {
@@ -580,6 +673,10 @@ function parseScoreItemsJson(text: string): RawScoreItem[] {
         requirement: it.requirement != null ? String(it.requirement) : null,
         scoreValue: it.scoreValue != null ? Number(it.scoreValue) : null,
         category: it.category != null ? String(it.category) : null,
+        itemType: normalizeItemType(it.itemType),
+        deliveryMethod: normalizeDeliveryMethod(it.deliveryMethod),
+        sourceSection:
+          it.sourceSection != null ? String(it.sourceSection) : "采购需求",
       }));
   } catch {
     return [];
@@ -595,6 +692,11 @@ async function matchExamplesForItems(
   const exampleService = new ScreenshotExampleService(supabase);
   const results: Array<ScreenshotExample | null> = [];
   for (const it of items) {
+    // 只有需要截图的评分项才走知识库匹配
+    if (it.deliveryMethod && it.deliveryMethod !== "screenshot") {
+      results.push(null);
+      continue;
+    }
     try {
       const keywords = buildKeywords(it);
       const list = await exampleService.search(keywords, 1);
@@ -617,6 +719,28 @@ function buildKeywords(it: RawScoreItem): string[] {
     .map((s) => s.trim())
     .filter((s) => s.length >= 2 && s.length <= 12);
   return Array.from(new Set(tokens)).slice(0, 6);
+}
+
+function normalizeItemType(v: unknown): RawScoreItem["itemType"] {
+  if (v === "key" || v === "general" || v === "demo" || v === "document") return v;
+  if (typeof v === "string") {
+    const s = v.toLowerCase();
+    if (s.includes("key") || s.includes("重点") || s.includes("星") || s.includes("▲")) return "key";
+    if (s.includes("demo") || s.includes("演示")) return "demo";
+    if (s.includes("doc") || s.includes("文档") || s.includes("资质")) return "document";
+  }
+  return "general";
+}
+
+function normalizeDeliveryMethod(v: unknown): RawScoreItem["deliveryMethod"] {
+  if (v === "screenshot" || v === "demo" || v === "document" || v === "na") return v;
+  if (typeof v === "string") {
+    const s = v.toLowerCase();
+    if (s.includes("screen") || s.includes("截图")) return "screenshot";
+    if (s.includes("demo") || s.includes("演示")) return "demo";
+    if (s.includes("doc") || s.includes("文档")) return "document";
+  }
+  return "screenshot";
 }
 
 function buildMatchSummary(items: RawScoreItem[], matched: Array<unknown>): string {

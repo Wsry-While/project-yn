@@ -493,6 +493,9 @@ export type BiddingScoreItemStatus =
   | 'uploaded'
   | 'na';
 
+export type BiddingScoreItemType = 'key' | 'general' | 'demo' | 'document' | 'unknown';
+export type BiddingDeliveryMethod = 'screenshot' | 'demo' | 'document' | 'na';
+
 export interface BiddingScoreItem {
   id: string;
   recordId: string;
@@ -501,6 +504,12 @@ export interface BiddingScoreItem {
   requirement: string | null;
   scoreValue: number | null;
   category: string | null;
+  /** 重点参数(▲)/一般参数/演示项/文档项 */
+  itemType: BiddingScoreItemType;
+  /** 交付方式：截图/演示/文档 */
+  deliveryMethod: BiddingDeliveryMethod;
+  /** 来源章节：评分办法/采购需求 */
+  sourceSection: string | null;
   orderIndex: number;
   matchStatus: BiddingScoreItemStatus;
   matchedExampleId: string | null;

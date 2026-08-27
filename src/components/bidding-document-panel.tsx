@@ -525,9 +525,41 @@ function ScoreItemRow({
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs text-muted-foreground">#{index}</span>
             <span className="text-sm font-medium">{item.title}</span>
+            {item.itemType === "key" && (
+              <Badge tone="danger" className="text-[10px]">
+                ▲ 重点
+              </Badge>
+            )}
+            {item.itemType === "demo" && (
+              <Badge tone="brand" className="text-[10px]">
+                演示
+              </Badge>
+            )}
+            {item.itemType === "document" && (
+              <Badge tone="neutral" className="text-[10px]">
+                文档
+              </Badge>
+            )}
+            {item.itemType === "general" && (
+              <Badge tone="neutral" className="text-[10px]">
+                一般
+              </Badge>
+            )}
+            {item.deliveryMethod === "demo" && (
+              <Badge tone="brand" className="text-[10px]">
+                现场演示
+              </Badge>
+            )}
+            {item.deliveryMethod === "document" && (
+              <Badge tone="neutral" className="text-[10px]">
+                方案文档
+              </Badge>
+            )}
             {item.scoreValue != null && (
               <Badge tone="neutral" className="text-[10px]">
-                {item.scoreValue} 分
+                {item.itemType === "key" || item.itemType === "general"
+                  ? `扣 ${item.scoreValue} 分/条`
+                  : `${item.scoreValue} 分`}
               </Badge>
             )}
             {item.category && (

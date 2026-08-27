@@ -146,3 +146,96 @@ export function buildMessages(req: ChatRequest): ChatMessage[] {
     { role: 'user', content: req.prompt },
   ];
 }
+
+/**
+ * 招投标评分项抽取（两阶段，阶段一）。
+ *
+ * 输入：招标文件中"评分办法/磋商方法/评标办法"章节原文。
+ * 任务：识别本次招标的评分构成，尤其是：
+ *   1. 技术参数/性能响应度的扣分规则——重点参数（招标文件中常以 ▲ / ★ / * 标注）
+ *      与一般参数分别扣多少分；
+ *   2. 是否要求"现场演示/系统演示/功能演示"，以及演示项的得分规则；
+ *   3. 项目实施方案、安全方案、培训方案、业绩等文档/资质类得分项（这些不需要
+ *      截图也不需要演示，由商务/技术方案文档应答）。
+ */
+export function buildBiddingScoreRulesPrompt(sectionText: string): string {
+  return `你是招投标文档分析助手。请阅读下面的"评分办法/磋商方法"章节原文，提取本次招标的评分规则结构。
+
+必须返回严格 JSON（不要 Markdown 代码块、不要解释），结构如下：
+{
+  "parameterRules": {
+    "keyParamDeduction": 0.4,
+    "generalParamDeduction": 0.1,
+    "keyParamMarkers": ["▲", "★", "*"],
+    "ruleText": "原文中关于技术参数扣分的完整描述，保留关键句"
+  },
+  "demoRequired": false,
+  "demoRuleText": "若有演示评分项，原文摘录；没有给空字符串",
+  "documentItems": [
+    { "title": "项目实施方案", "maxScore": 12, "rule": "实施方案完整性分档..." }
+  ],
+  "totalTechScore": 65,
+  "notes": "其他需要保留的关键说明，如证明材料要求等"
+}
+
+字段说明：
+- parameterRules：技术参数扣分规则。keyParamDeduction/generalParamDeduction 是每一条不满足扣多少分（数字），没有就填 null。
+- demoRequired：评分办法中是否出现"现场演示/系统演示/功能演示/视频演示/演示得分"等字样。
+- documentItems：非截图/非演示的文档类评分项（实施方案、安全方案、培训方案、业绩、服务承诺、团队配置等）。
+- totalTechScore：技术部分总分。
+
+章节原文：
+""""""
+${sectionText.slice(0, 18000)}
+""""""
+
+只输出 JSON。`;
+}
+
+/**
+ * 招投标评分项抽取（两阶段，阶段二）。
+ */
+export function buildBiddingRequirementsPrompt(
+  requirementsText: string,
+  rules: unknown
+): string {
+  return `你是招投标技术响应分析助手。根据下面的"采购需求/技术要求"原文与已经解析出的评分规则，拆解出每一条需要我方在投标响应文件中以产品截图、现场演示或方案文档应答的评分项。
+
+输出严格 JSON 数组（不要 Markdown 代码块、不要解释），每项形如：
+{
+  "itemNo": "1",
+  "title": "一句话评分项标题（≤30字）",
+  "requirement": "招标文件原文或精炼后的具体要求，保留 ▲ 符号与关键指标",
+  "scoreValue": 0.4,
+  "category": "技术参数",
+  "itemType": "key",
+  "deliveryMethod": "screenshot"
+}
+
+itemType 取值：
+- "key"      重点参数：原文行首/行内带 ▲、★、* 等标记，或评分规则中明确每条扣更重分
+- "general"  一般参数：未带重点标记的普通技术参数/功能点
+- "demo"     演示项：需要现场演示/系统演示/视频演示才能得分的功能
+- "document" 文档项：需要方案文档、承诺函、检测报告、资质证书、业绩合同应答的项
+
+deliveryMethod 取值：
+- "screenshot" 产品功能/界面类，用产品截图即可证明
+- "demo"       明确要求现场操作、动态演示
+- "document"   方案文档、承诺函、检测报告、资质、业绩
+- "na"         不适用
+
+scoreValue：
+- key/general 参数按阶段一规则填每条扣分值（如 0.4/0.1），不要把 30 分总分复制到每一条
+- demo/document 项填该项实际分值
+- 不确定时给 null
+
+评分规则（阶段一输出，JSON）：
+${JSON.stringify(rules, null, 2)}
+
+采购需求原文：
+""""""
+${requirementsText.slice(0, 45000)}
+""""""
+
+只输出 JSON 数组。`;
+}

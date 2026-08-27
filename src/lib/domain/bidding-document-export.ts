@@ -146,13 +146,47 @@ export async function buildDocx(payload: DocumentPayload): Promise<{ buffer: Buf
   for (let idx = 0; idx < items.length; idx++) {
     const item = items[idx];
     const isPending = item.matchStatus === "pending" || item.matchStatus === "task_created";
+    const typeTag =
+      item.itemType === "key"
+        ? "【▲ 重点参数】"
+        : item.itemType === "demo"
+          ? "【演示】"
+          : item.itemType === "document"
+            ? "【文档】"
+            : "";
+    const methodTag =
+      item.deliveryMethod === "demo"
+        ? "［现场演示］"
+        : item.deliveryMethod === "document"
+          ? "［方案文档］"
+          : item.deliveryMethod === "screenshot"
+            ? "［产品截图］"
+            : "";
+    const typeColor =
+      item.itemType === "key"
+        ? "C0392B"
+        : item.itemType === "demo"
+          ? "1677FF"
+          : "666666";
     children.push(
       new Paragraph({
         heading: HeadingLevel.HEADING_3,
         children: [
           new TextRun({ text: `${idx + 1}. ${item.title}`, bold: true }),
+          ...(typeTag
+            ? [new TextRun({ text: `  ${typeTag}`, color: typeColor, bold: true })]
+            : []),
+          ...(methodTag ? [new TextRun({ text: ` ${methodTag}`, color: "888888" })] : []),
           ...(item.scoreValue != null
-            ? [new TextRun({ text: `  (${item.scoreValue} 分)`, color: "1677FF" })]
+            ? [
+                new TextRun({
+                  text:
+                    item.itemType === "key" || item.itemType === "general"
+                      ? `  (扣 ${item.scoreValue} 分/条)`
+                      : `  (${item.scoreValue} 分)`,
+                  color: "1677FF",
+                }),
+              ]
             : []),
           ...(isPending ? [new TextRun({ text: "  【待补充】", color: "D46B08", bold: true })] : []),
           ...(item.matchStatus === "na" ? [new TextRun({ text: "  【不适用】", color: "999999" })] : []),
@@ -351,8 +385,30 @@ export async function buildPdf(_payload: DocumentPayload): Promise<{ buffer: Buf
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     const isPending = item.matchStatus === "pending" || item.matchStatus === "task_created";
+    const typeTag =
+      item.itemType === "key"
+        ? "[重点]"
+        : item.itemType === "demo"
+          ? "[演示]"
+          : item.itemType === "document"
+            ? "[文档]"
+            : "";
+    const methodTag =
+      item.deliveryMethod === "demo"
+        ? "〔现场演示〕"
+        : item.deliveryMethod === "document"
+          ? "〔方案文档〕"
+          : item.deliveryMethod === "screenshot"
+            ? "〔截图〕"
+            : "";
+    const scoreText =
+      item.scoreValue != null
+        ? item.itemType === "key" || item.itemType === "general"
+          ? `(扣${item.scoreValue}分/条)`
+          : `(${item.scoreValue}分)`
+        : "";
     doc.text(
-      `${i + 1}. ${item.title}${item.scoreValue != null ? `（${item.scoreValue}分）` : ""}${isPending ? "  [待补充]" : ""}${item.matchStatus === "na" ? "  [不适用]" : ""}`,
+      `${i + 1}. ${item.title} ${typeTag}${methodTag}${scoreText}${isPending ? "  [待补充]" : ""}${item.matchStatus === "na" ? "  [不适用]" : ""}`,
     );
     if (item.requirement) {
       doc.fillColor("#444").fontSize(9).text(item.requirement.slice(0, 300), { indent: 12 });

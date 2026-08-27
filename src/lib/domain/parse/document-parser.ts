@@ -285,6 +285,72 @@ async function parseDocumentBuffer(buffer: Buffer, fileName: string): Promise<Pa
 }
 
 /**
+ * 从招标文件全文中定位"采购需求/项目需求/技术要求/技术参数"章节。
+ * 评分项归纳必须读到具体的技术参数行，因此这一章是阶段二的输入。
+ * 找不到时返回 null，由上层决定是否回退到全文。
+ */
+export function extractRequirementsSection(text: string): string | null {
+  if (!text) return null;
+
+  // 在文档中定位第三章/采购需求正文章节起点。
+  // 跳过目录（目录条目形如"第三章 项目需求及采购要求\t24"）：
+  // 要求章节标题后 200 字符内出现正文特征词（一、/二、 /1./1.1 等），而非制表符+页码。
+  const titleRe =
+    /(?:^|[\r\n])\s*第[三3]章[\s　]*[^\n]{0,40}?(?:项目需求|采购需求|技术要求|采购要求)[^\n]*/g;
+
+  const bodySignals = /[一二三四五六七八九十]+、|(?:^|\n)\s*\d+(?:\.\d+)+[\s　]/;
+  // 技术要求章节应包含这些强信号之一：技术参数表 / 功能模块 / 系统要求
+  const strongSignals = /技术要求一览表|技术参数表|技术规格|系统要求|功能要求|1\.1[\s　]/;
+  const candidates: Array<{ start: number; slice: string }> = [];
+  let m: RegExpExecArray | null;
+  while ((m = titleRe.exec(text)) !== null) {
+    // m[0] 可能包含前置换行，真实起点要去掉
+    const start = m.index + m[0].length - m[0].trimStart().length;
+    const line = text.slice(start, start + 80);
+    // 正文章节标题通常独占一行；目录行后紧跟制表符+页码
+    if (/\t\s*\d{1,3}\s*[\r\n]/.test(line)) continue;
+    // 排除正文中的"第三章《xxx》中..."这种引用（前面有"标注"/"注："等）
+    const before = text.slice(Math.max(0, start - 30), start);
+    if (/[：:。\u201c"]\s*$/.test(before)) continue;
+
+    const after = text.slice(start, start + 500);
+    if (!bodySignals.test(after)) continue;
+
+    const rest = text.slice(start + 5);
+    const nextMatch = rest.match(/[\r\n]\s*第[四五六七八九十]+章[\s　][^\n]{0,40}[\r\n]/);
+    const end = nextMatch && nextMatch.index != null
+      ? start + 5 + nextMatch.index
+      : text.length;
+    const slice = text.slice(start, Math.min(end, start + 60000));
+    if (slice.trim().length > 800) {
+      candidates.push({ start, slice });
+    }
+  }
+
+  if (candidates.length > 0) {
+    // 优先选包含技术要求强信号且 ▲ 标记最多的；否则取最长的章节
+    const scored = candidates
+      .map((c) => ({
+        ...c,
+        score:
+          (strongSignals.test(c.slice) ? 100 : 0) +
+          (c.slice.match(/▲/g)?.length ?? 0) * 5 +
+          c.slice.length / 1000,
+      }))
+      .sort((a, b) => b.score - a.score);
+    return scored[0].slice;
+  }
+
+  // 兜底：技术要求一览表/技术参数表（往前回退 2000 字，带上章节引言）
+  const tableIdx = text.search(/技术要求一览表|技术参数表|技术规格一览表/);
+  if (tableIdx >= 0) {
+    const back = Math.max(0, tableIdx - 2000);
+    return text.slice(back, back + 45000);
+  }
+  return null;
+}
+
+/**
  * 在长文档中定位"评标办法/评分标准"章节，只保留相关片段，减少无关 token。
  * 策略：
  * 1) 优先匹配评分表中才会出现的强信号词（如"评分因素"、"技术部分评分"、"商务部分评分"、"综合评分法"等）
