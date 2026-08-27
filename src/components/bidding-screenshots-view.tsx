@@ -41,6 +41,7 @@ import { ListToolbar } from '@/components/list-toolbar';
 import { EmptyState } from '@/components/crud/empty-state';
 import { Descriptions } from '@/components/crud/descriptions';
 import { Can } from '@/components/crud/can';
+import { BiddingDocumentPanel } from '@/components/bidding-document-panel';
 
 interface BiddingFilters extends Record<string, string> {
   search: string;
@@ -219,6 +220,7 @@ export function BiddingScreenshotsView() {
             <TableHead className="w-[120px]">提交 / 交付</TableHead>
             <TableHead className="w-[100px]">预留天数</TableHead>
             <TableHead className="w-[120px]">完成情况</TableHead>
+            <TableHead className="w-[110px]">文档进度</TableHead>
             <TableHead className="w-[100px] text-right">附件</TableHead>
             <TableHead className="w-[80px] text-right">操作</TableHead>
           </TableRow>
@@ -226,12 +228,12 @@ export function BiddingScreenshotsView() {
         <TableBody>
           {list.loading && list.rows.length === 0 && (
             <TableRow>
-              <TableCell colSpan={7} className="py-16 text-center text-muted-foreground">加载中…</TableCell>
+              <TableCell colSpan={8} className="py-16 text-center text-muted-foreground">加载中…</TableCell>
             </TableRow>
           )}
           {!list.loading && list.rows.length === 0 && (
             <TableRow>
-              <TableCell colSpan={7}>
+              <TableCell colSpan={8}>
                 <EmptyState title="暂无招投标截图记录" description="等待第三方系统推送数据" />
               </TableCell>
             </TableRow>
@@ -268,6 +270,9 @@ export function BiddingScreenshotsView() {
                   <Badge tone={toneFromStatus(b.completionStatus)}>
                     {b.completionStatus || '待处理'}
                   </Badge>
+                </TableCell>
+                <TableCell>
+                  <DocumentProgressCell recordId={b.id} onOpenDetail={() => setDetail(b)} />
                 </TableCell>
                 <TableCell className="text-right">
                   <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
@@ -419,6 +424,7 @@ function BiddingDetailModal({
               },
             ]}
           />
+          <BiddingDocumentPanel record={record} />
           <Descriptions
             column={1}
             title="截图需求说明"
@@ -496,6 +502,90 @@ function BiddingDetailModal({
         </div>
       )}
     </DetailDrawer>
+  );
+}
+
+function DocumentProgressCell({
+  recordId,
+  onOpenDetail,
+}: {
+  recordId: string;
+  onOpenDetail: () => void;
+}) {
+  const [p, setP] = useState<{
+    total: number;
+    matched: number;
+    pending: number;
+    task: number;
+    version: number;
+  } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch<{
+      progress: Record<
+        string,
+        { total: number; matched: number; pending: number; task: number; version: number }
+      >;
+    }>(`/api/bidding-screenshots/progress?ids=${recordId}`)
+      .then((res) => {
+        if (cancelled) return;
+        setP(res.progress[recordId] || null);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [recordId]);
+
+  if (!p || p.total === 0) {
+    return (
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onOpenDetail();
+        }}
+        className="text-[11px] text-muted-foreground hover:text-brand"
+      >
+        未生成
+      </button>
+    );
+  }
+  const pct = Math.round((p.matched / p.total) * 100);
+  const tone =
+    p.pending === 0
+      ? 'text-status-success'
+      : p.task > 0
+        ? 'text-brand'
+        : 'text-status-warning';
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpenDetail();
+      }}
+      className="block w-full text-left"
+    >
+      <div className={`text-[11px] font-medium ${tone}`}>
+        {p.matched}/{p.total} 已匹配
+      </div>
+      <div className="mt-0.5 h-1 w-[80px] overflow-hidden rounded-full bg-muted">
+        <div
+          className={`h-full rounded-full ${
+            p.pending === 0 ? 'bg-status-success' : p.task > 0 ? 'bg-brand' : 'bg-status-warning'
+          }`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      {(p.pending > 0 || p.task > 0) && (
+        <div className="mt-0.5 text-[10px] text-muted-foreground">
+          {p.pending > 0 && <span>待补充 {p.pending}</span>}
+          {p.pending > 0 && p.task > 0 && <span> · </span>}
+          {p.task > 0 && <span>督办 {p.task}</span>}
+        </div>
+      )}
+    </button>
   );
 }
 

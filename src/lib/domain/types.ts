@@ -484,6 +484,86 @@ export interface QimingConstructionInput {
   rawMeta?: unknown;
 }
 
+// ============== 招投标交付文档（评分项 + 督办任务） ==============
+
+export type BiddingScoreItemStatus =
+  | 'matched'
+  | 'pending'
+  | 'task_created'
+  | 'uploaded'
+  | 'na';
+
+export interface BiddingScoreItem {
+  id: string;
+  recordId: string;
+  itemNo: number;
+  title: string;
+  requirement: string | null;
+  scoreValue: number | null;
+  category: string | null;
+  orderIndex: number;
+  matchStatus: BiddingScoreItemStatus;
+  matchedExampleId: string | null;
+  matchedAssetId: string | null;
+  taskId: string | null;
+  deliveryAssetId: string | null;
+  deliveryNote: string | null;
+  createdAt: string;
+  updatedAt: string;
+  // 关联数据（join 回填）
+  matchedExample?: {
+    id: string;
+    assetId: string | null;
+    description: string | null;
+    systemModule: string | null;
+    school?: string | null;
+    projectName?: string | null;
+  } | null;
+  followupTask?: BiddingFollowupTask | null;
+  deliveryAsset?: BiddingFileRef | null;
+}
+
+export type BiddingDocumentStatus = 'generating' | 'ready' | 'failed';
+export type BiddingFollowupPriority = 'p0' | 'p1' | 'p2' | 'p3';
+export type BiddingFollowupStatus = 'todo' | 'in_progress' | 'done' | 'cancelled';
+
+export interface BiddingDocument {
+  id: string;
+  recordId: string;
+  version: number;
+  status: BiddingDocumentStatus;
+  docxAssetId: string | null;
+  pdfAssetId: string | null;
+  matchedCount: number;
+  pendingCount: number;
+  taskCount: number;
+  errorMessage: string | null;
+  generatedByName: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BiddingFollowupTask {
+  id: string;
+  recordId: string;
+  scoreItemId: string | null;
+  title: string;
+  description: string | null;
+  priority: BiddingFollowupPriority;
+  status: BiddingFollowupStatus;
+  assigneeId: string | null;
+  assigneeName?: string | null;
+  externalAssigneeName: string | null;
+  externalAssigneeContact: string | null;
+  externalAssigneeOrg: string | null;
+  dueDate: string | null;
+  resolvedAt: string | null;
+  resolutionNote: string | null;
+  createdByName: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ActivityLog {
   id: number;
   projectId: string | null;
