@@ -265,16 +265,25 @@ export const BiddingDocumentService = {
     });
 
     emit("step", { phase: "llm", message: "阶段 2/3：归纳交付项…" });
-    const items = await extractRequirementsWithLlm(reqSection, rules, requestHeaders, (msg) =>
-      emit("delta", { content: msg }),
+    const items = await extractRequirementsWithLlm(
+      reqSection,
+      rules,
+      { screenshotRequirement: record.screenshotRequirement },
+      requestHeaders,
+      (msg) => emit("delta", { content: msg }),
     );
     if (!items.length) {
       throw new Error(
         "未能从招标文件中抽取到评分项（采购需求可能过长或输出被截断，请检查招标文件或联系管理员）",
       );
     }
+    const keyCount = items.filter((i) => i.itemType === "key").length;
+    const generalCount = items.filter((i) => i.itemType === "general").length;
+    const demoCount = items.filter((i) => i.itemType === "demo").length;
+    const screenshotTotal = items.filter((i) => i.deliveryMethod === "screenshot").length;
+    const demoTotal = items.filter((i) => i.deliveryMethod === "demo").length;
     emit("delta", {
-      content: `\n\n抽取完成：共 **${items.length}** 项交付点（重点参数 ${items.filter((i) => i.itemType === "key").length}、一般参数 ${items.filter((i) => i.itemType === "general").length}、演示 ${items.filter((i) => i.itemType === "demo").length}、文档 ${items.filter((i) => i.itemType === "document").length}）。\n\n【阶段 3/3】匹配截图知识库（仅截图类评分项）…\n\n`,
+      content: `\n\n抽取完成：共 **${items.length}** 项交付点（重点参数 ${keyCount}、一般参数 ${generalCount}、演示 ${demoCount}）。其中 **需截图 ${screenshotTotal} 项**、需演示 ${demoTotal} 项。\n\n【阶段 3/3】匹配截图知识库（仅截图类评分项）…\n\n`,
     });
 
     emit("step", { phase: "match", message: "阶段 3/3：匹配截图知识库…" });
@@ -684,12 +693,43 @@ async function extractScoreRulesWithLlm(
  * 超长采购需求按"功能模块/标题级别"分块，每块独立调用 LLM（控制并发），
  * 最后合并、去重、重新编号，避免单次输出 token 上限导致 JSON 被截断。
  */
+interface ExtractOptions {
+  /** 招投标记录中的"截图需求说明"字段，用于决定一般参数是否需要截图 */
+  screenshotRequirement?: string | null;
+}
+
+/**
+ * 判断"截图需求说明"是否明确要求一般参数也需要截图。
+ * 销售在该字段通常会写明截图范围，如"所有技术参数均需截图"、"一般参数也需提供截图"等。
+ * 若字段为空或仅提及重点参数（▲/实质性/重要参数），则一般参数不进入截图交付清单。
+ */
+function generalParamNeedsScreenshot(screenshotRequirement?: string | null): boolean {
+  if (!screenshotRequirement) return false;
+  const text = screenshotRequirement.trim();
+  if (text.length === 0) return false;
+  // 明确表达"全部/所有参数都要截图"或点名"一般参数也要截图"
+  if (/(所有|全部|每个|各项|每条|任意).{0,8}(参数|功能|技术|截图)/.test(text)) return true;
+  if (/(一般参数|普通参数|非重点|非实质性).{0,8}(也|均|都|需要|需|要).{0,4}截图/.test(text)) {
+    return true;
+  }
+  if (/截图.{0,6}(所有|全部|每个|各项|每条|一般参数|普通参数)/.test(text)) return true;
+  // 仅要求重点参数/实质性/▲ 截图的，明确不包含一般参数
+  if (/(仅|只|只有).{0,6}(重点|实质性|重要|▲|★)/.test(text)) return false;
+  // 默认：字段存在但未明确要求一般参数时，只保留重点参数截图
+  return false;
+}
+
 async function extractRequirementsWithLlm(
   requirementsText: string,
   rules: RawScoreRules,
+  options: ExtractOptions = {},
   requestHeaders?: Headers,
   onProgress?: (msg: string) => void,
 ): Promise<RawScoreItem[]> {
+  const keepGeneralScreenshot = generalParamNeedsScreenshot(options.screenshotRequirement);
+  const finalize = (raw: RawScoreItem[]) =>
+    finalizeItems(raw, { keepGeneralScreenshot, screenshotRequirement: options.screenshotRequirement });
+
   const chunks = chunkRequirementsText(requirementsText, { targetChars: 9000 });
 
   // 采购需求较短（仅一块且不超长）时，走单次抽取（保持原有行为）
@@ -705,7 +745,7 @@ async function extractRequirementsWithLlm(
         buffer.slice(-500),
       );
     }
-    return finalizeItems(items);
+    return finalize(items);
   }
 
   onProgress?.(
@@ -766,7 +806,13 @@ async function extractRequirementsWithLlm(
   const runners = Array.from({ length: Math.min(CONCURRENCY, chunks.length) }, () => worker());
   await Promise.all(runners);
 
-  return finalizeItems(collected);
+  if (!keepGeneralScreenshot) {
+    onProgress?.(
+      `▸ 按「截图需求说明」过滤：未要求一般参数截图，仅保留重点参数与演示项…\n`,
+    );
+  }
+
+  return finalize(collected);
 }
 
 /**
@@ -797,7 +843,12 @@ async function callRequirementsLlm(
 /**
  * 统一后处理：去重、重新编号、文档类黑名单过滤、itemType/deliveryMethod 归一化。
  */
-function finalizeItems(items: RawScoreItem[]): RawScoreItem[] {
+function finalizeItems(
+  items: RawScoreItem[],
+  opts: { keepGeneralScreenshot: boolean; screenshotRequirement?: string | null } = {
+    keepGeneralScreenshot: true,
+  },
+): RawScoreItem[] {
   if (!items.length) return [];
   // 后处理：过滤掉 LLM 可能仍然返回的文档类项（实施方案、培训、业绩等），
   // 并对 itemType/deliveryMethod 做归一化
@@ -812,6 +863,15 @@ function finalizeItems(items: RawScoreItem[]): RawScoreItem[] {
     const title = (it.title ?? "").trim();
     if (!title) return false;
     if (documentBlocklist.some((re) => re.test(title))) return false;
+    // 截图需求说明未要求一般参数截图时，剔除「一般参数 + 截图」类项；
+    // 一般参数若需要演示（demo）则保留，重点参数（key）始终保留。
+    if (
+      !opts.keepGeneralScreenshot &&
+      (it.itemType === "general" || it.itemType === "unknown") &&
+      it.deliveryMethod !== "demo"
+    ) {
+      return false;
+    }
     return true;
   });
 

@@ -473,6 +473,8 @@ function PreviewBlock({
   const keyCount = preview.items.filter((i) => i.itemType === "key").length;
   const generalCount = preview.items.filter((i) => i.itemType === "general").length;
   const demoCount = preview.items.filter((i) => i.itemType === "demo").length;
+  const screenshotCount = preview.items.filter((i) => i.deliveryMethod === "screenshot").length;
+  const demoDeliveryCount = preview.items.filter((i) => i.deliveryMethod === "demo").length;
   return (
     <div className="rounded-md border border-amber-400/40 bg-amber-50/40 p-4">
       <div className="mb-3 flex items-start gap-2">
@@ -483,8 +485,11 @@ function PreviewBlock({
             来源：{preview.fileName}
             {preview.truncated ? "（文件较长已截断尾部）" : ""}。确认无误后点击「确认入库」，
             或取消后重新生成。共 {preview.total} 项，重点 {keyCount}、一般 {generalCount}
-            {demoCount > 0 ? `、演示 ${demoCount}` : ""}；已自动匹配 {preview.matchedCount} 项，待补充{" "}
-            {preview.pendingCount} 项。
+            {demoCount > 0 ? `、演示 ${demoCount}` : ""}；
+            <span className="font-medium text-foreground">
+              需截图 {screenshotCount} 项、需演示 {demoDeliveryCount} 项
+            </span>
+            ；已自动匹配 {preview.matchedCount} 项，待补充 {preview.pendingCount} 项。
           </p>
         </div>
       </div>
