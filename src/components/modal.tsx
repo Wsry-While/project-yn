@@ -10,7 +10,7 @@ interface ModalProps {
   description?: string;
   children: React.ReactNode;
   footer?: React.ReactNode;
-  size?: 'sm' | 'md' | 'lg' | 'xl';
+  size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl';
   /** 点击遮罩是否关闭，默认 false，防误触 */
   closeOnOverlay?: boolean;
 }
@@ -20,6 +20,8 @@ const SIZE: Record<NonNullable<ModalProps['size']>, string> = {
   md: 'max-w-lg',
   lg: 'max-w-2xl',
   xl: 'max-w-4xl',
+  '2xl': 'max-w-5xl',
+  '3xl': 'max-w-7xl',
 };
 
 /**

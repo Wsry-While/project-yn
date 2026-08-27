@@ -15,6 +15,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { MilestoneSection } from '@/components/milestone-section';
+import { KnowledgeBaseAdmin } from '@/components/knowledge-base-admin';
+import { usePermissions } from '@/lib/web/use-permissions';
 import type { ProjectSettings, ProjectType, SchoolWithDepartments } from '@/lib/domain/types';
 import { PROJECT_TYPE_LABEL } from '@/lib/domain/types';
 
@@ -86,6 +88,7 @@ export function SettingsView() {
   const [deleting, setDeleting] = useState(false);
 
   const isOwner = useMemo(() => !!project && !!userId && project.ownerId === userId, [project, userId]);
+  const { isSuperAdmin } = usePermissions();
 
   useEffect(() => {
     schoolWebService.list({ limit: 500 }).then(setSchools).catch(() => undefined);
@@ -456,6 +459,9 @@ export function SettingsView() {
             保存更改
           </Button>
         </div>
+
+        {/* 截图知识库（仅超管） */}
+        {isSuperAdmin && <KnowledgeBaseAdmin />}
 
         {/* 危险操作 */}
         {isOwner && (

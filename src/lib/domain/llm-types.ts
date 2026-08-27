@@ -20,7 +20,8 @@ export interface ChatRequest {
     | 'qiming-course'
     | 'bidding-score'
     | 'bidding-advice'
-    | 'bidding-vision';
+    | 'bidding-vision'
+    | 'bidding-vision-param';
   /** 用户这一轮的输入 */
   prompt: string;
   /** 历史消息（不含本轮用户输入；后端会自动追加） */

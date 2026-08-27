@@ -20,6 +20,7 @@ const PRO_SCENARIOS = new Set<ChatRequest['scenario']>([
   'bidding-score',
   'bidding-advice',
   'bidding-vision',
+  'bidding-vision-param',
 ]);
 
 export function getModelForScenario(scenario: ChatRequest['scenario']): string {
@@ -124,6 +125,32 @@ const SYSTEM_PROMPTS: Record<ChatRequest['scenario'], string> = {
   ]
 }
 只描述图中真实可见的内容，不要臆测；不要输出 JSON 以外的文字。`,
+
+  'bidding-vision-param': `你是招投标交付截图的"参数-图片映射"分析专家。用户会给你一张产品截图（通常来自历史招投标项目的交付材料）。
+你的任务不是泛泛描述界面，而是识别这张图能证明哪些**具体技术参数/功能点**，用于建设"截图知识库 1.0"。
+
+请输出严格 JSON：
+{
+  "systemModule": "图中所属的系统模块/一级菜单，无法判断填 null",
+  "pagePath": "推断的菜单路径，如 系统管理→知识图谱→样式配置，无法判断填 null",
+  "description": "一句话概述这张截图展示的页面",
+  "parameters": [
+    {
+      "name": "参数/功能点名称（简洁，≤20字，如 知识图谱背景色自定义）",
+      "evidenceElements": ["图中能证明该参数的关键界面要素，如 背景色选择器、预设色块、保存按钮"],
+      "note": "这张图如何证明该参数（截图要点），≤60字",
+      "confidence": 0.8
+    }
+  ]
+}
+
+要求：
+1. parameters 只列**图中确实能看到**的功能点，不要凭菜单名臆测没打开的页面。
+2. 粒度：一个可独立截图证明的功能点算一条（如"支持背景色自定义"），不要把整页写成一条"技术参数响应"，也不要拆得过细（按钮级文案不算独立参数）。
+3. 一张图通常对应 1~6 个参数；若图是列表/报表/证书等非功能配置页，按其能证明的能力归纳（如"题库批量导入记录""成绩统计报表"）。
+4. confidence 取 0~1：要素清晰可见 0.8+，部分可见/需推断 0.5~0.7，很勉强 <0.5。
+5. name 去掉 ▲★ 等符号和"支持/提供"等冗余前缀，保留核心功能词。
+6. 只输出 JSON，不要 Markdown 代码块，不要任何解释文字。`,
 };
 
 /**

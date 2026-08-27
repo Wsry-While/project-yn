@@ -15,6 +15,7 @@ import {
   ExternalLink,
   Upload,
   Image as ImageIcon,
+  ClipboardList,
 } from "lucide-react";
 import { apiFetch, apiFetchSSE } from "@/lib/web/api-client";
 import { showToast } from "@/lib/web/toast-store";
@@ -32,6 +33,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Modal } from "@/components/modal";
+import {
+  ScreenshotGuideDialog,
+  type ScreenshotGuide,
+} from "@/components/screenshot-guide-dialog";
 import type {
   BiddingFollowupPriority,
   BiddingFollowupTask,
@@ -124,6 +129,8 @@ export function BiddingDocumentPanel({ record }: PanelProps) {
   const [taskDialog, setTaskDialog] = useState<BiddingScoreItem | null>(null);
   const [preview, setPreview] = useState<DocumentPreview | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
+  const [exportingGuide, setExportingGuide] = useState(false);
 
   const fetchDoc = useCallback(async () => {
     setLoading(true);
@@ -259,6 +266,45 @@ export function BiddingDocumentPanel({ record }: PanelProps) {
     window.document.body.removeChild(a);
   };
 
+  const exportGuide = async (guide: ScreenshotGuide) => {
+    setExportingGuide(true);
+    try {
+      const res = await fetch(
+        `/api/bidding-screenshots/${record.id}/screenshot-guide/export`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify(guide),
+        },
+      );
+      if (!res.ok) {
+        let msg = `导出失败（HTTP ${res.status}）`;
+        try {
+          const j = (await res.json()) as { error?: { message?: string } };
+          if (j.error?.message) msg = j.error.message;
+        } catch {
+          /* ignore */
+        }
+        throw new Error(msg);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = window.document.createElement("a");
+      a.href = url;
+      a.download = "";
+      window.document.body.appendChild(a);
+      a.click();
+      window.document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast("截图指导书已导出", { kind: "success" });
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "导出失败", { kind: "error" });
+    } finally {
+      setExportingGuide(false);
+    }
+  };
+
   const reopen = async (item: BiddingScoreItem) => {
     try {
       await apiFetch(`/api/bidding-screenshots/${record.id}/score-items/${item.id}`, {
@@ -302,6 +348,16 @@ export function BiddingDocumentPanel({ record }: PanelProps) {
         <div className="flex items-center gap-2">
           {bundle && total > 0 && (
             <>
+              <Button
+                size="xs"
+                variant="outline"
+                className="h-7 rounded-sm"
+                onClick={() => setGuideOpen(true)}
+                title="基于评分项与截图知识库生成逐项截图作业说明"
+              >
+                <ClipboardList className="h-3 w-3" />
+                截图指导书
+              </Button>
               <Button
                 size="xs"
                 variant="outline"
@@ -429,6 +485,14 @@ export function BiddingDocumentPanel({ record }: PanelProps) {
           setTaskDialog(null);
           fetchDoc();
         }}
+      />
+
+      <ScreenshotGuideDialog
+        open={guideOpen}
+        recordId={record.id}
+        onClose={() => setGuideOpen(false)}
+        onExport={exportGuide}
+        exporting={exportingGuide}
       />
     </section>
   );

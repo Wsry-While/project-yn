@@ -39,6 +39,40 @@ interface ExampleRow {
   created_at: string;
 }
 
+export interface ParameterMapping {
+  id: string;
+  exampleId: string;
+  assetId: string | null;
+  sourceRecordId: string | null;
+  parameterKey: string;
+  parameterName: string;
+  systemModule: string | null;
+  visionNote: string | null;
+  evidenceElements: string[];
+  confidence: number;
+  kbVersion: string;
+  createdAt: string;
+  /** 示例图存储路径（从 examples 表回填） */
+  storagePath?: string | null;
+  // 回填，便于前端展示
+  example?: ScreenshotExample | null;
+}
+
+interface ParameterMappingRow extends Record<string, unknown> {
+  id: string;
+  example_id: string;
+  asset_id: string | null;
+  source_record_id: string | null;
+  parameter_key: string;
+  parameter_name: string;
+  system_module: string | null;
+  vision_note: string | null;
+  evidence_elements: string[] | null;
+  confidence: number;
+  kb_version: string;
+  created_at: string;
+}
+
 const STALE_DAYS = 30;
 
 export class ScreenshotExampleService {
@@ -150,4 +184,150 @@ export class ScreenshotExampleService {
     if (error) throw error;
     return data.id as string;
   }
+
+  /**
+   * 把视觉理解得到的"参数↔图片映射"批量写入（按 example_id + parameter_key 幂等）。
+   * 返回写入的 mapping id 列表。
+   */
+  async upsertParameterMappings(
+    input: Array<{
+      exampleId: string;
+      assetId: string | null;
+      sourceRecordId: string | null;
+      parameterName: string;
+      systemModule: string | null;
+      visionNote: string | null;
+      evidenceElements: string[];
+      confidence: number;
+      kbVersion?: string;
+    }>,
+  ): Promise<string[]> {
+    const ids: string[] = [];
+    for (const item of input) {
+      const parameterKey = normalizeParameterKey(item.parameterName, item.systemModule);
+      if (!parameterKey) continue;
+      const row = {
+        example_id: item.exampleId,
+        asset_id: item.assetId,
+        source_record_id: item.sourceRecordId,
+        parameter_key: parameterKey,
+        parameter_name: item.parameterName.trim().slice(0, 100),
+        system_module: item.systemModule,
+        vision_note: item.visionNote,
+        evidence_elements: item.evidenceElements ?? [],
+        confidence: Math.max(0, Math.min(1, item.confidence ?? 0.5)),
+        kb_version: item.kbVersion ?? '1.0',
+        updated_at: new Date().toISOString(),
+      };
+      const { data: existing } = await this.db
+        .from('screenshot_parameter_mappings')
+        .select('id')
+        .eq('example_id', item.exampleId)
+        .eq('parameter_key', parameterKey)
+        .maybeSingle();
+      if (existing) {
+        await this.db.from('screenshot_parameter_mappings').update(row).eq('id', existing.id);
+        ids.push(existing.id as string);
+      } else {
+        const { data, error } = await this.db
+          .from('screenshot_parameter_mappings')
+          .insert(row)
+          .select('id')
+          .single();
+        if (error) throw error;
+        ids.push(data.id as string);
+      }
+    }
+    return ids;
+  }
+
+  /**
+   * 按参数名/关键词召回参考图映射（Top N），按 confidence 排序。
+   * 同时做 parameter_key 精确匹配 + 关键词 ilike 模糊匹配。
+   */
+  async searchByParameter(
+    keywords: string[],
+    opts: { limit?: number; kbVersion?: string } = {},
+  ): Promise<ParameterMapping[]> {
+    const limit = opts.limit ?? 5;
+    const key = normalizeParameterKey(keywords.join(' '), null);
+
+    let q = this.db
+      .from('screenshot_parameter_mappings')
+      .select(
+        `id,example_id,asset_id,source_record_id,parameter_key,parameter_name,system_module,vision_note,evidence_elements,confidence,kb_version,created_at`,
+      )
+      .order('confidence', { ascending: false })
+      .order('created_at', { ascending: false })
+      .limit(limit * 3);
+
+    if (opts.kbVersion) q = q.eq('kb_version', opts.kbVersion);
+
+    // 优先 parameter_key 精确/前缀匹配
+    const ors: string[] = [];
+    if (key) ors.push(`parameter_key.eq.${key}`);
+    for (const kw of keywords.filter(Boolean).slice(0, 6)) {
+      const safe = kw.replace(/[,()]/g, ' ').trim();
+      if (safe.length >= 2) {
+        ors.push(`parameter_name.ilike.%${safe}%`);
+        ors.push(`vision_note.ilike.%${safe}%`);
+      }
+    }
+    if (ors.length) q = q.or(ors.join(','));
+
+    const { data, error } = await q;
+    if (error) throw error;
+    const rows = (data ?? []) as unknown as ParameterMappingRow[];
+
+    // 去重：同一 asset 只保留 confidence 最高的一条
+    const byAsset = new Map<string, ParameterMapping>();
+    for (const r of rows) {
+      const assetKey = r.asset_id ?? r.example_id;
+      const cur = byAsset.get(assetKey);
+      if (!cur || Number(r.confidence) > cur.confidence) {
+        byAsset.set(assetKey, {
+          id: r.id,
+          exampleId: r.example_id,
+          assetId: r.asset_id,
+          sourceRecordId: r.source_record_id,
+          parameterKey: r.parameter_key,
+          parameterName: r.parameter_name,
+          systemModule: r.system_module,
+          visionNote: r.vision_note,
+          evidenceElements: r.evidence_elements ?? [],
+          confidence: Number(r.confidence),
+          kbVersion: r.kb_version,
+          createdAt: r.created_at,
+          storagePath: null,
+        });
+      }
+    }
+    return Array.from(byAsset.values()).slice(0, limit);
+  }
+}
+
+/**
+ * 把参数名归一化为稳定的 parameter_key：
+ * 去 ▲★●、标点、空白、"支持/提供/具备"等冗余前缀，转小写。
+ * 若带 systemModule，前缀拼接以降低跨模块重名（如多个模块都有"列表查询"）。
+ */
+export function normalizeParameterKey(name: string, systemModule: string | null): string {
+  if (!name) return '';
+  const stripPrefix = (s: string) =>
+    s
+      .replace(/^[▲★●＊*＊\s]+/g, '')
+      .replace(/^(支持|提供|具备|可|能够|可以|实现|拥有|含|包括)\s*/g, '')
+      .trim();
+  const core = stripPrefix(name)
+    .replace(/[\s，,。.；;：:、（）()【】\[\]"'""''！!？?\/\\\-—_·]/g, '')
+    .toLowerCase();
+  if (!core) return '';
+  if (systemModule) {
+    const mod = systemModule
+      .replace(/[\s，,。.；;：:、（）()【】\[\]"'""''\/\\\-—_·]/g, '')
+      .toLowerCase()
+      .slice(0, 20);
+    if (mod) return `${mod}:${core}`;
+  }
+  return core;
 }
