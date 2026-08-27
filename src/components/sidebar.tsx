@@ -22,13 +22,18 @@ import {
   GitMerge,
   BarChart3,
   BookMarked,
+  PanelLeftClose,
+  PanelLeftOpen,
+  ShieldCheck,
 } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import { themeStore, toggleTheme } from '@/lib/web/theme';
 import { appStore } from '@/lib/web/app-store';
+import { useSidebarCollapsed, toggleCollapsed } from '@/lib/web/ui-store';
 import { LogoutButton } from '@/components/logout-button';
 import { Button } from '@/components/ui/button';
+import { usePermissions } from '@/lib/web/use-permissions';
 
 interface NavItem {
   href: string;
@@ -36,6 +41,7 @@ interface NavItem {
   icon: React.ComponentType<{ className?: string }>;
   shortcut?: string;
   match: (pathname: string) => boolean;
+  perm?: string;
 }
 
 const NAV: NavItem[] = [
@@ -119,18 +125,28 @@ const NAV: NavItem[] = [
     label: '团队',
     icon: Users,
     match: (p) => p.startsWith('/team'),
+    perm: 'team:list',
   },
   {
     href: '/data-align',
     label: '数据对齐',
     icon: GitMerge,
     match: (p) => p.startsWith('/data-align'),
+    perm: 'data-align:list',
   },
   {
     href: '/dict',
     label: '字典管理',
     icon: BookMarked,
     match: (p) => p.startsWith('/dict'),
+    perm: 'dict:list',
+  },
+  {
+    href: '/system/users',
+    label: '系统管理',
+    icon: ShieldCheck,
+    match: (p) => p.startsWith('/system'),
+    perm: 'user:manage',
   },
   {
     href: '/settings',
@@ -141,10 +157,17 @@ const NAV: NavItem[] = [
   },
 ];
 
-function Brand() {
+function Brand({ collapsed }: { collapsed: boolean }) {
+  if (collapsed) {
+    return (
+      <div className="flex h-10 w-10 items-center justify-center rounded-md bg-brand text-brand-foreground shadow-sm">
+        <Sparkles className="h-5 w-5" aria-hidden />
+      </div>
+    );
+  }
   return (
-    <div className="flex items-center gap-2.5 px-2">
-      <div className="flex h-9 w-9 items-center justify-center rounded-md bg-gradient-to-br from-brand to-brand/80 text-brand-foreground shadow-[0_1px_0_rgba(255,255,255,0.16)_inset,0_4px_12px_-4px_rgba(22,119,255,0.5)]">
+    <div className="flex items-center gap-2.5 px-1">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-brand text-brand-foreground shadow-sm">
         <Sparkles className="h-4.5 w-4.5" aria-hidden />
       </div>
       <div className="leading-tight">
@@ -166,6 +189,7 @@ function ThemeToggle() {
       type="button"
       onClick={toggleTheme}
       aria-label={mode === 'dark' ? '切换到浅色模式' : '切换到深色模式'}
+      title={mode === 'dark' ? '浅色模式' : '深色模式'}
       className="inline-flex h-8 w-8 items-center justify-center rounded-md text-sidebar-foreground/70 transition hover:bg-sidebar-accent hover:text-sidebar-foreground"
     >
       {mode === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
@@ -173,47 +197,57 @@ function ThemeToggle() {
   );
 }
 
-function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
+function NavLinks({
+  onNavigate,
+  collapsed,
+}: {
+  onNavigate?: () => void;
+  collapsed: boolean;
+}) {
   const pathname = usePathname();
+  const { can, loaded } = usePermissions();
+  const items = NAV.filter((item) => !item.perm || (loaded && can(item.perm as never)));
   return (
-    <nav aria-label="主导航" className="flex flex-col gap-0.5 px-2">
-      {NAV.map((item) => {
+    <nav
+      aria-label="主导航"
+      className={cn('flex flex-col gap-0.5', collapsed ? 'px-2' : 'px-2')}
+    >
+      {items.map((item) => {
         const active = item.match(pathname);
         const Icon = item.icon;
-        return (
+        const link = (
           <Link
             key={item.href}
             href={item.href}
             onClick={onNavigate}
             aria-current={active ? 'page' : undefined}
+            title={collapsed ? item.label : undefined}
             className={cn(
-              'group relative flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition',
+              'group relative flex items-center rounded-md text-sm transition-colors',
+              collapsed
+                ? 'h-10 w-10 justify-center'
+                : 'gap-2.5 px-3 py-2',
               active
-                ? 'bg-sidebar-accent text-sidebar-foreground'
-                : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground',
+                ? 'bg-sidebar-primary text-sidebar-primary-foreground'
+                : 'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground',
             )}
           >
-            {active && (
-              <span
-                aria-hidden
-                className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-r bg-brand"
-              />
-            )}
-            <Icon className="h-4 w-4" />
-            <span className="flex-1">{item.label}</span>
-            {item.shortcut && (
+            <Icon className="h-4.5 w-4.5 shrink-0" />
+            {!collapsed && <span className="flex-1 truncate">{item.label}</span>}
+            {!collapsed && item.shortcut && (
               <kbd className="rounded bg-sidebar-foreground/5 px-1.5 py-0.5 font-mono text-[10px] text-sidebar-foreground/40 group-hover:bg-sidebar-foreground/10">
                 {item.shortcut}
               </kbd>
             )}
           </Link>
         );
+        return link;
       })}
     </nav>
   );
 }
 
-function SidebarFooter() {
+function SidebarFooter({ collapsed }: { collapsed: boolean }) {
   const displayName = appStore.use((s) => s.currentUserDisplayName);
   const avatarUrl = appStore.use((s) => s.currentUserAvatarUrl);
   const uid = appStore.use((s) => s.currentUserUid);
@@ -223,6 +257,26 @@ function SidebarFooter() {
   const sub = orgName || (uid ? `学工号 ${uid}` : '超星登录会话');
   const initial = name.trim().charAt(0).toUpperCase() || '?';
 
+  if (collapsed) {
+    return (
+      <div className="mt-auto flex flex-col items-center gap-2 border-t border-sidebar-border/60 py-3">
+        {avatarUrl ? (
+          <img
+            src={avatarUrl}
+            alt={name}
+            referrerPolicy="no-referrer"
+            className="h-8 w-8 rounded-full object-cover"
+          />
+        ) : (
+          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-sidebar-foreground/10 text-[11px] font-semibold text-sidebar-foreground">
+            {initial}
+          </div>
+        )}
+        <ThemeToggle />
+        <LogoutButton />
+      </div>
+    );
+  }
   return (
     <div className="mt-auto flex items-center gap-2 border-t border-sidebar-border/60 px-3 py-3">
       {avatarUrl ? (
@@ -247,16 +301,36 @@ function SidebarFooter() {
   );
 }
 
+function CollapseToggle({ collapsed }: { collapsed: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={toggleCollapsed}
+      aria-label={collapsed ? '展开侧边栏' : '收起侧边栏'}
+      title={collapsed ? '展开' : '收起'}
+      className="inline-flex h-8 w-8 items-center justify-center rounded-md text-sidebar-foreground/70 transition hover:bg-sidebar-accent hover:text-sidebar-foreground"
+    >
+      {collapsed ? (
+        <PanelLeftOpen className="h-4 w-4" />
+      ) : (
+        <PanelLeftClose className="h-4 w-4" />
+      )}
+    </button>
+  );
+}
+
 /**
- * 应用侧边栏。桌面端固定 240px，移动端抽屉式。
+ * 应用侧边栏。
+ * 桌面端默认 210px，折叠后 64px；移动端抽屉式。
  */
 export function Sidebar() {
   const [open, setOpen] = useState(false);
+  const collapsed = useSidebarCollapsed();
   return (
     <>
       {/* 移动端顶栏 */}
-      <div className="sticky top-0 z-30 flex items-center justify-between border-b border-border bg-sidebar px-4 py-2.5 text-sidebar-foreground md:hidden">
-        <Brand />
+      <div className="sticky top-0 z-30 flex items-center justify-between border-b border-sidebar-border bg-sidebar px-4 py-2.5 text-sidebar-foreground md:hidden">
+        <Brand collapsed={false} />
         <Button
           variant="ghost"
           size="icon-sm"
@@ -271,13 +345,25 @@ export function Sidebar() {
       {/* 桌面侧边栏 */}
       <aside
         aria-label="侧边栏"
-        className="theme-transition sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r border-sidebar-border bg-sidebar md:flex"
+        style={{ width: collapsed ? 64 : 210 }}
+        className="theme-transition sticky top-0 hidden h-screen shrink-0 flex-col border-r border-sidebar-border bg-sidebar md:flex"
       >
-        <div className="px-3 pb-4 pt-4">
-          <Brand />
+        <div
+          className={cn(
+            'flex items-center pt-4',
+            collapsed ? 'justify-center pb-4' : 'justify-between px-4 pb-4',
+          )}
+        >
+          <Brand collapsed={collapsed} />
+          {!collapsed && <CollapseToggle collapsed={collapsed} />}
         </div>
-        <NavLinks />
-        <SidebarFooter />
+        {collapsed && (
+          <div className="flex justify-center pb-2">
+            <CollapseToggle collapsed={collapsed} />
+          </div>
+        )}
+        <NavLinks collapsed={collapsed} />
+        <SidebarFooter collapsed={collapsed} />
       </aside>
 
       {/* 移动端抽屉 */}
@@ -287,9 +373,9 @@ export function Sidebar() {
             className="absolute inset-0 bg-black/50 backdrop-blur-[1px]"
             onClick={() => setOpen(false)}
           />
-          <aside className="absolute left-0 top-0 flex h-full w-72 animate-fade-in-up flex-col bg-sidebar">
+          <aside className="absolute left-0 top-0 flex h-full w-64 animate-fade-in-up flex-col bg-sidebar">
             <div className="flex items-center justify-between px-3 pb-3 pt-4">
-              <Brand />
+              <Brand collapsed={false} />
               <button
                 type="button"
                 aria-label="关闭菜单"
@@ -299,8 +385,8 @@ export function Sidebar() {
                 <X className="h-4 w-4" />
               </button>
             </div>
-            <NavLinks onNavigate={() => setOpen(false)} />
-            <SidebarFooter />
+            <NavLinks onNavigate={() => setOpen(false)} collapsed={false} />
+            <SidebarFooter collapsed={false} />
           </aside>
         </div>
       )}
