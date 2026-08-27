@@ -294,63 +294,78 @@ async function parseDocumentBuffer(buffer: Buffer, fileName: string): Promise<Pa
 }
 
 /**
- * 从招标文件全文中定位"采购需求/项目需求/技术要求/技术参数"章节。
- * 评分项归纳必须读到具体的技术参数行，因此这一章是阶段二的输入。
- * 找不到时返回 null，由上层决定是否回退到全文。
+ * 通用"第X章 标题"章节切片器（基于 52 份真实招标文件学习，见 analyze-tender-structure.ts）。
+ * 目录条目形如"第五章 采购需求\t24"（制表符+页码）需跳过；正文标题独占一行。
+ * 返回每个匹配章节的完整区间，调用方按强信号打分选最合适的一段。
+ */
+function sliceChaptersByTitle(
+  text: string,
+  titleRe: RegExp,
+): Array<{ start: number; end: number; slice: string; title: string }> {
+  const results: Array<{ start: number; end: number; slice: string; title: string }> = [];
+  const boundaryRe = /(?:^|[\r\n])\s*第[一二三四五六七八九十百0-9]+章[\s　][^\n]{0,50}/g;
+  const boundaries: number[] = [];
+  let bm: RegExpExecArray | null;
+  while ((bm = boundaryRe.exec(text)) !== null) {
+    const off = bm[0].length - bm[0].trimStart().length;
+    boundaries.push(bm.index + off);
+  }
+
+  let m: RegExpExecArray | null;
+  while ((m = titleRe.exec(text)) !== null) {
+    const off = m[0].length - m[0].trimStart().length;
+    const start = m.index + off;
+    const titleLine = text.slice(start, start + 80);
+    if (/\t\s*\d{1,3}\s*[\r\n]/.test(titleLine)) continue;
+    const before = text.slice(Math.max(0, start - 30), start);
+    if (/[：:。\u201c"'《]/.test(before.slice(-1))) continue;
+
+    const nextBoundary = boundaries.find((p) => p > start + 10);
+    const end = nextBoundary ?? text.length;
+    const slice = text.slice(start, end);
+    if (slice.trim().length > 200) {
+      results.push({ start, end, slice, title: titleLine.split(/[\r\n]/)[0].trim() });
+    }
+  }
+  return results;
+}
+
+/**
+ * 从招标文件全文中定位"采购需求/项目需求/技术要求"章节（阶段二输入）。
+ * 真实数据：18/43 为"第五章 采购需求"，其余散布第三~七章，标题变体含
+ * 采购需求/项目需求/采购内容及要求/服务内容及要求/采购需求及技术要求/技术要求/技术指标。
  */
 export function extractRequirementsSection(text: string): string | null {
   if (!text) return null;
 
-  // 在文档中定位第三章/采购需求正文章节起点。
-  // 跳过目录（目录条目形如"第三章 项目需求及采购要求\t24"）：
-  // 要求章节标题后 200 字符内出现正文特征词（一、/二、 /1./1.1 等），而非制表符+页码。
   const titleRe =
-    /(?:^|[\r\n])\s*第[三3]章[\s　]*[^\n]{0,40}?(?:项目需求|采购需求|技术要求|采购要求)[^\n]*/g;
-
-  const bodySignals = /[一二三四五六七八九十]+、|(?:^|\n)\s*\d+(?:\.\d+)+[\s　]/;
-  // 技术要求章节应包含这些强信号之一：技术参数表 / 功能模块 / 系统要求
-  const strongSignals = /技术要求一览表|技术参数表|技术规格|系统要求|功能要求|1\.1[\s　]/;
-  const candidates: Array<{ start: number; slice: string }> = [];
-  let m: RegExpExecArray | null;
-  while ((m = titleRe.exec(text)) !== null) {
-    // m[0] 可能包含前置换行，真实起点要去掉
-    const start = m.index + m[0].length - m[0].trimStart().length;
-    const line = text.slice(start, start + 80);
-    // 正文章节标题通常独占一行；目录行后紧跟制表符+页码
-    if (/\t\s*\d{1,3}\s*[\r\n]/.test(line)) continue;
-    // 排除正文中的"第三章《xxx》中..."这种引用（前面有"标注"/"注："等）
-    const before = text.slice(Math.max(0, start - 30), start);
-    if (/[：:。\u201c"]\s*$/.test(before)) continue;
-
-    const after = text.slice(start, start + 500);
-    if (!bodySignals.test(after)) continue;
-
-    const rest = text.slice(start + 5);
-    const nextMatch = rest.match(/[\r\n]\s*第[四五六七八九十]+章[\s　][^\n]{0,40}[\r\n]/);
-    const end = nextMatch && nextMatch.index != null
-      ? start + 5 + nextMatch.index
-      : text.length;
-    const slice = text.slice(start, Math.min(end, start + 60000));
-    if (slice.trim().length > 800) {
-      candidates.push({ start, slice });
-    }
-  }
+    /(?:^|[\r\n])\s*第[一二三四五六七八九十百0-9]+章[\s　][^\n]{0,30}?(?:采购需求|项目需求|采购内容|服务内容|采购要求|参数要求|技术要求|技术指标|招标内容)/g;
+  const candidates = sliceChaptersByTitle(text, titleRe);
 
   if (candidates.length > 0) {
-    // 优先选包含技术要求强信号且 ▲ 标记最多的；否则取最长的章节
+    const strongSignals =
+      /技术要求一览表|技术参数表|技术规格|功能要求|功能模块|系统要求|参数要求|▲|★|●/;
     const scored = candidates
       .map((c) => ({
         ...c,
         score:
           (strongSignals.test(c.slice) ? 100 : 0) +
-          (c.slice.match(/▲/g)?.length ?? 0) * 5 +
+          (c.slice.match(/▲|★|●/g)?.length ?? 0) * 5 +
           c.slice.length / 1000,
       }))
       .sort((a, b) => b.score - a.score);
-    return scored[0].slice;
+    return scored[0].slice.slice(0, 60000);
   }
 
-  // 兜底：技术要求一览表/技术参数表（往前回退 2000 字，带上章节引言）
+  const standaloneRe =
+    /(?:^|[\r\n])\s{0,6}(采购需求及技术要求|采购需求一览表|技术指标|参数要求)[\s　]*[\r\n]/;
+  const sm = text.match(standaloneRe);
+  if (sm && sm.index != null) {
+    const start = sm.index + sm[0].length - sm[0].trimStart().length;
+    const slice = text.slice(start, start + 45000);
+    if (slice.trim().length > 800) return slice;
+  }
+
   const tableIdx = text.search(/技术要求一览表|技术参数表|技术规格一览表/);
   if (tableIdx >= 0) {
     const back = Math.max(0, tableIdx - 2000);
@@ -360,35 +375,67 @@ export function extractRequirementsSection(text: string): string | null {
 }
 
 /**
- * 在长文档中定位"评标办法/评分标准"章节，只保留相关片段，减少无关 token。
- * 策略：
- * 1) 优先匹配评分表中才会出现的强信号词（如"评分因素"、"技术部分评分"、"商务部分评分"、"综合评分法"等）
- * 2) 其次匹配章节标题（"第四章 磋商方法"、"评标办法"、"评分细则"等）
- * 3) 最后才是宽泛的"评分标准"——这个词可能在功能描述中出现（如"AI自动评分"），作为兜底
- * 找不到时返回原文（已截断）。
+ * 在长文档中定位"评标办法/评审办法/磋商方法"章节（阶段一输入）。
+ * 基于 52 份真实招标文件学习：
+ * - 评分章节分布在第三~七章，标题为 评标方法/评审办法/评审方法/磋商方法/评标办法/评审标准/磋商程序和方法
+ * - 强锚点：综合评分法、分值构成与评分标准、技术部分评分、商务部分评分、详细评审、评分因素、满分
+ * 策略：先按"第X章"标题切出完整章节并按评分信号打分；无章节标题时退化为强关键词片段。
+ * 找不到时返回原文（已截断），matched=false 供上层判断。
  */
 export function extractScoringSection(text: string): { text: string; matched: boolean } {
-  // 强信号：评分表 / 评分办法章节才会出现的关键词，权重最高
-  const strongPatterns: RegExp[] = [
-    /评分因素[\s\S]{0,15000}/,
-    /技术部分评分[\s\S]{0,15000}/,
-    /商务部分评分[\s\S]{0,15000}/,
-    /价格部分评分[\s\S]{0,15000}/,
-    /综合评分法[\s\S]{0,15000}/,
-    /评分细则[\s\S]{0,15000}/,
-    /评分表[\s\S]{0,15000}/,
-    /评标办法[\s\S]{0,15000}/,
-    /评审办法[\s\S]{0,15000}/,
-    /评审方法[\s\S]{0,15000}/,
-    /磋商方法[\s\S]{0,15000}/,
-  ];
-  for (const re of strongPatterns) {
-    const m = text.match(re);
-    if (m && m[0].trim().length > 200) return { text: m[0], matched: true };
+  // 评分章节信号：出现越多越可能是评分办法正文章节
+  const scoreSignals =
+    /综合评分法|分值构成|评分标准|评分因素|技术部分评分|商务部分评分|价格部分评分|详细评审|评标办法前附表|评审办法前附表|评分细则|评分表|满分\s*\d+\s*分|扣分/;
+
+  // 1) 优先：按"第X章 + 评分类标题"切出完整章节
+  const titleRe =
+    /(?:^|[\r\n])\s*第[一二三四五六七八九十百0-9]+章[\s　][^\n]{0,40}?(?:评标方法|评标办法|评审办法|评审方法|评审标准|磋商方法|磋商程序|资格审查、评标办法|评分)/g;
+  const chapters = sliceChaptersByTitle(text, titleRe);
+  if (chapters.length > 0) {
+    const scored = chapters
+      .map((c) => {
+        const sigMatches = c.slice.match(
+          /综合评分法|分值构成|评分因素|技术部分|商务部分|价格部分|详细评审|评分细则|评分表|满分|扣分|得分/g,
+        );
+        return {
+          ...c,
+          score: (sigMatches?.length ?? 0) * 10 + c.slice.length / 2000,
+        };
+      })
+      .sort((a, b) => b.score - a.score);
+    const best = scored[0];
+    // 至少要有一个评分信号，否则可能切到了错误章节
+    if (scoreSignals.test(best.slice) || best.score >= 10) {
+      return { text: best.slice.slice(0, 60000), matched: true };
+    }
   }
 
-  // 弱信号兜底：寻找"评分标准"，但需要附近还有得分/满分等评分表特征词，避免误匹配功能描述
-  const candidate = text.match(/评分标准[\s\S]{0,15000}/);
+  // 2) 无标准章节标题时：从强关键词起点截取到下一个"第X章"边界
+  const strongKeywords = [
+    '综合评分法',
+    '分值构成与评分标准',
+    '技术部分评分',
+    '商务部分评分',
+    '价格部分评分',
+    '详细评审',
+    '评分因素',
+    '评分细则',
+    '评标办法',
+    '评审办法',
+    '磋商方法',
+  ];
+  for (const kw of strongKeywords) {
+    const idx = text.indexOf(kw);
+    if (idx >= 0) {
+      const slice = text.slice(idx, idx + 30000);
+      if (slice.trim().length > 500 && scoreSignals.test(slice)) {
+        return { text: slice, matched: true };
+      }
+    }
+  }
+
+  // 3) 弱兜底："评分标准"需附近有评分表特征，避免误命中功能描述（如"AI自动评分"）
+  const candidate = text.match(/评分标准[\s\S]{0,12000}/);
   if (candidate && candidate[0].trim().length > 200) {
     const snippet = candidate[0];
     const hasScoreTable =
@@ -397,15 +444,8 @@ export function extractScoringSection(text: string): { text: string; matched: bo
       /评分因素/.test(snippet) ||
       /技术部分/.test(snippet) ||
       /商务部分/.test(snippet) ||
-      /价格部分/.test(snippet) ||
       /扣分/.test(snippet);
     if (hasScoreTable) return { text: snippet, matched: true };
-  }
-
-  // 最后兜底：找包含"评分"且在表格上下文中的位置
-  const tableCandidate = text.match(/序号[\s\S]{0,200}评分[\s\S]{0,15000}/);
-  if (tableCandidate && tableCandidate[0].length > 500) {
-    return { text: tableCandidate[0], matched: true };
   }
 
   return { text, matched: false };

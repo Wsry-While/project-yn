@@ -68,7 +68,7 @@ export function apiFetchSSE(
   body: unknown,
   handlers: {
     onDelta: (text: string) => void;
-    onDone: () => void;
+    onDone: (evt?: unknown) => void;
     onError: (err: Error) => void;
     onMeta?: (meta: unknown) => void;
     onStep?: (step: { phase?: string; message?: string; [k: string]: unknown }) => void;
@@ -110,8 +110,10 @@ export function apiFetchSSE(
               [k: string]: unknown;
             };
             if (evt.type === 'delta' && evt.content) handlers.onDelta(evt.content);
-            else if (evt.type === 'done') handlers.onDone();
-            else if (evt.type === 'meta') handlers.onMeta?.(evt);
+            else if (evt.type === 'done') {
+              handlers.onDone(evt);
+              return;
+            } else if (evt.type === 'meta') handlers.onMeta?.(evt);
             else if (evt.type === 'step') handlers.onStep?.(evt);
             else if (evt.type === 'error') throw new Error(evt.message ?? '流式响应错误');
           } catch (err) {
@@ -120,7 +122,6 @@ export function apiFetchSSE(
           }
         }
       }
-      handlers.onDone();
     } catch (err) {
       if ((err as { name?: string })?.name === 'AbortError') return;
       handlers.onError(err instanceof Error ? err : new Error(String(err)));

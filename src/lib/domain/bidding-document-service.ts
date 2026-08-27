@@ -118,6 +118,38 @@ interface RawScoreRules {
 
 export type ProgressEmit = (type: "step" | "delta" | "done" | "error" | "meta", payload: unknown) => void;
 
+/**
+ * 生成结果预览（未入库）。前端展示后由用户人工确认，再调用 confirmDocument 持久化。
+ */
+export interface DocumentPreview {
+  recordId: string;
+  projectName: string;
+  school: string | null;
+  fileName: string;
+  truncated: boolean;
+  rules: {
+    totalTechScore: number | null;
+    keyParamDeduction: number | null;
+    generalParamDeduction: number | null;
+    demoRequired: boolean;
+    documentItemCount: number;
+  };
+  items: Array<{
+    itemNo: number;
+    title: string;
+    requirement: string | null;
+    scoreValue: number | null;
+    category: string | null;
+    itemType: "key" | "general" | "demo" | "document" | "unknown";
+    deliveryMethod: "screenshot" | "demo" | "document" | "na";
+    sourceSection: string | null;
+    matchedExample: ScreenshotExample | null;
+  }>;
+  matchedCount: number;
+  pendingCount: number;
+  total: number;
+}
+
 function parseBiddingFile(file: unknown): { assetId?: string; url?: string; name?: string } | null {
   if (!file) return null;
   if (Array.isArray(file)) return parseBiddingFile(file[0]);
@@ -186,7 +218,7 @@ export const BiddingDocumentService = {
     actor: ServerActor,
     emit: ProgressEmit,
     requestHeaders?: Headers,
-  ): Promise<BiddingDocument> {
+  ): Promise<DocumentPreview> {
     const supabase = getAdminSupabase();
 
     emit("step", { phase: "load", message: "读取招标文件…" });
@@ -214,7 +246,7 @@ export const BiddingDocumentService = {
       truncated: parsed.truncated,
     });
     emit("delta", {
-      content: `已从 ${parsed.fileName}（${parsed.kind.toUpperCase()}，${Math.round(parsed.text.length / 100) / 10} 万字）定位到评分办法章节${section.matched ? `（命中「${section.matched}」）` : "（基于启发式定位）"}。\n\n【阶段 1/3】调用大模型解析评分规则与参数类型…\n\n`,
+      content: `已从 ${parsed.fileName}（${parsed.kind.toUpperCase()}，${Math.round(parsed.text.length / 100) / 10} 万字）定位到评分办法章节${section.matched ? "" : "（基于启发式定位）"}。\n\n【阶段 1/3】调用大模型解析评分规则与参数类型…\n\n`,
     });
 
     emit("step", { phase: "llm", message: "阶段 1/3：解析评分规则…" });
@@ -243,14 +275,71 @@ export const BiddingDocumentService = {
     emit("step", { phase: "match", message: "阶段 3/3：匹配截图知识库…" });
     const matched = await matchExamplesForItems(supabase, items);
 
+    const matchedCount = matched.filter(Boolean).length;
+    const pendingCount = items.length - matchedCount;
+
+    emit("delta", { content: `\n\n${buildMatchSummary(items, matched)}` });
+    emit("delta", {
+      content:
+        "\n\n**抽取完成，请在下方核对评分项，确认无误后点击「确认入库」；如需调整可取消后重新生成。**\n\n",
+    });
+
+    const preview: DocumentPreview = {
+      recordId,
+      projectName: record.projectName,
+      school: record.projectSchool,
+      fileName: parsed.fileName,
+      truncated: parsed.truncated,
+      rules: {
+        totalTechScore: rules.totalTechScore ?? null,
+        keyParamDeduction: rules.parameterRules?.keyParamDeduction ?? null,
+        generalParamDeduction: rules.parameterRules?.generalParamDeduction ?? null,
+        demoRequired: rules.demoRequired ?? false,
+        documentItemCount: rules.documentItems?.length ?? 0,
+      },
+      items: items.map((it, idx) => ({
+        itemNo: it.itemNo ?? idx + 1,
+        title: it.title,
+        requirement: it.requirement ?? null,
+        scoreValue: it.scoreValue ?? null,
+        category: it.category ?? null,
+        itemType: it.itemType ?? "unknown",
+        deliveryMethod: it.deliveryMethod ?? "na",
+        sourceSection: it.sourceSection ?? null,
+        matchedExample: matched[idx] ?? null,
+      })),
+      matchedCount,
+      pendingCount,
+      total: items.length,
+    };
+
+    emit("done", {
+      preview,
+      matchedCount,
+      pendingCount,
+      total: items.length,
+    });
+
+    return preview;
+  },
+
+  /**
+   * 人工确认预览结果后正式入库：写入 bidding_documents + bidding_score_items。
+   * 二次生成（已有文档）时调用方需校验超管权限。
+   */
+  async confirmDocument(
+    preview: DocumentPreview,
+    actor: ServerActor,
+  ): Promise<BiddingDocument> {
+    const supabase = getAdminSupabase();
+    const { recordId, items } = preview;
     const version = await nextVersion(supabase, recordId);
 
     // 清理旧评分项并写入新评分项
     await supabase.from("bidding_score_items").delete().eq("record_id", recordId);
 
     const rows = items.map((it, idx) => {
-      const m = matched[idx];
-      // 文档/演示类不走截图匹配，直接标 na（需要 PM 另行处理）
+      const m = it.matchedExample;
       const initialStatus: BiddingScoreItemStatus =
         it.deliveryMethod === "screenshot"
           ? m
@@ -258,9 +347,7 @@ export const BiddingDocumentService = {
             : "pending"
           : it.deliveryMethod === "document"
             ? "na"
-            : it.deliveryMethod === "demo"
-              ? "pending"
-              : "pending";
+            : "pending";
       return {
         record_id: recordId,
         item_no: it.itemNo ?? idx + 1,
@@ -286,9 +373,6 @@ export const BiddingDocumentService = {
       .insert(rows as never);
     if (insertErr) throw new Error(`写入评分项失败: ${insertErr.message}`);
 
-    const matchedCount = matched.filter(Boolean).length;
-    const pendingCount = items.length - matchedCount;
-
     const { data: docData, error: docErr } = await supabase
       .from("bidding_documents")
       .insert({
@@ -297,8 +381,8 @@ export const BiddingDocumentService = {
         status: "ready" as const,
         docx_asset_id: null,
         pdf_asset_id: null,
-        matched_count: matchedCount,
-        pending_count: pendingCount,
+        matched_count: preview.matchedCount,
+        pending_count: preview.pendingCount,
         task_count: 0,
         error_message: null,
         generated_by: actor.id,
@@ -307,15 +391,6 @@ export const BiddingDocumentService = {
       .select("*")
       .single();
     if (docErr) throw new Error(`写入文档记录失败: ${docErr.message}`);
-
-    emit("delta", { content: `\n\n${buildMatchSummary(items, matched)}` });
-    emit("done", {
-      documentId: (docData as DocumentRow).id,
-      version,
-      matchedCount,
-      pendingCount,
-      total: items.length,
-    });
 
     return mapDocument(docData as DocumentRow);
   },

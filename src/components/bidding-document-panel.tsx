@@ -61,6 +61,44 @@ interface TeamMember {
   name: string;
 }
 
+interface PreviewExample {
+  id: string;
+  pagePath: string | null;
+  tags: string[];
+  source: string | null;
+}
+
+interface PreviewItem {
+  itemNo: number;
+  title: string;
+  requirement: string | null;
+  scoreValue: number | null;
+  category: string | null;
+  itemType: "key" | "general" | "demo" | "document" | "unknown";
+  deliveryMethod: "screenshot" | "demo" | "document" | "na";
+  sourceSection: string | null;
+  matchedExample: PreviewExample | null;
+}
+
+interface DocumentPreview {
+  recordId: string;
+  projectName: string;
+  school: string | null;
+  fileName: string;
+  truncated: boolean;
+  rules: {
+    totalTechScore: number | null;
+    keyParamDeduction: number | null;
+    generalParamDeduction: number | null;
+    demoRequired: boolean;
+    documentItemCount: number;
+  };
+  items: PreviewItem[];
+  matchedCount: number;
+  pendingCount: number;
+  total: number;
+}
+
 const PRIORITY_LABEL: Record<BiddingFollowupPriority, string> = {
   p0: "P0 紧急",
   p1: "P1 高",
@@ -84,6 +122,8 @@ export function BiddingDocumentPanel({ record }: PanelProps) {
   const [generating, setGenerating] = useState(false);
   const [streamLog, setStreamLog] = useState<string>("");
   const [taskDialog, setTaskDialog] = useState<BiddingScoreItem | null>(null);
+  const [preview, setPreview] = useState<DocumentPreview | null>(null);
+  const [confirming, setConfirming] = useState(false);
 
   const fetchDoc = useCallback(async () => {
     setLoading(true);
@@ -143,6 +183,7 @@ export function BiddingDocumentPanel({ record }: PanelProps) {
     }
     setGenerating(true);
     setStreamLog("");
+    setPreview(null);
     let acc = "";
     apiFetchSSE(
       `/api/bidding-screenshots/${record.id}/generate-document`,
@@ -165,10 +206,16 @@ export function BiddingDocumentPanel({ record }: PanelProps) {
           acc += text;
           setStreamLog((prev) => `${prev}${text}`);
         },
-        onDone: () => {
+        onDone: (evt) => {
           setGenerating(false);
-          showToast("交付文档生成完成", { kind: "success" });
-          fetchDoc();
+          const data = (evt ?? {}) as { preview?: DocumentPreview };
+          if (data.preview) {
+            setPreview(data.preview);
+            showToast("抽取完成，请核对后确认入库", { kind: "success" });
+          } else {
+            showToast("交付文档生成完成", { kind: "success" });
+            fetchDoc();
+          }
         },
         onError: (err) => {
           setGenerating(false);
@@ -176,6 +223,31 @@ export function BiddingDocumentPanel({ record }: PanelProps) {
         },
       },
     );
+  };
+
+  const confirmPreview = async () => {
+    if (!preview) return;
+    setConfirming(true);
+    try {
+      await apiFetch(`/api/bidding-screenshots/${record.id}/confirm-document`, {
+        method: "POST",
+        body: JSON.stringify({ preview }),
+      });
+      showToast("已确认入库", { kind: "success" });
+      setPreview(null);
+      setStreamLog("");
+      await fetchDoc();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "确认入库失败", { kind: "error" });
+    } finally {
+      setConfirming(false);
+    }
+  };
+
+  const cancelPreview = () => {
+    setPreview(null);
+    setStreamLog("");
+    showToast("已取消预览，未写入任何数据", { kind: "info" });
   };
 
   const download = (format: "docx" | "pdf") => {
@@ -272,7 +344,7 @@ export function BiddingDocumentPanel({ record }: PanelProps) {
           <div className="py-10 text-center text-xs text-muted-foreground">加载中…</div>
         )}
 
-        {!loading && !bundle && !generating && (
+        {!loading && !bundle && !generating && !preview && (
           <div className="rounded-md border border-dashed border-border bg-muted/30 p-6 text-center">
             <Sparkles className="mx-auto mb-2 h-5 w-5 text-muted-foreground" />
             <p className="text-sm text-muted-foreground">
@@ -296,6 +368,16 @@ export function BiddingDocumentPanel({ record }: PanelProps) {
               {streamLog || "正在连接大模型…"}
             </pre>
           </div>
+        )}
+
+        {preview && !generating && (
+          <PreviewBlock
+            preview={preview}
+            confirming={confirming}
+            streamLog={streamLog}
+            onConfirm={confirmPreview}
+            onCancel={cancelPreview}
+          />
         )}
 
         {bundle && total > 0 && (
@@ -349,6 +431,133 @@ export function BiddingDocumentPanel({ record }: PanelProps) {
         }}
       />
     </section>
+  );
+}
+
+const ITEM_TYPE_LABEL: Record<PreviewItem["itemType"], string> = {
+  key: "重点参数",
+  general: "一般参数",
+  demo: "演示",
+  document: "文档",
+  unknown: "其他",
+};
+
+const DELIVERY_LABEL: Record<PreviewItem["deliveryMethod"], string> = {
+  screenshot: "截图",
+  demo: "演示",
+  document: "文档",
+  na: "不适用",
+};
+
+const ITEM_TYPE_TONE: Record<PreviewItem["itemType"], "danger" | "brand" | "warning" | "neutral"> = {
+  key: "danger",
+  general: "brand",
+  demo: "warning",
+  document: "neutral",
+  unknown: "neutral",
+};
+
+function PreviewBlock({
+  preview,
+  confirming,
+  streamLog,
+  onConfirm,
+  onCancel,
+}: {
+  preview: DocumentPreview;
+  confirming: boolean;
+  streamLog: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const keyCount = preview.items.filter((i) => i.itemType === "key").length;
+  const generalCount = preview.items.filter((i) => i.itemType === "general").length;
+  const demoCount = preview.items.filter((i) => i.itemType === "demo").length;
+  return (
+    <div className="rounded-md border border-amber-400/40 bg-amber-50/40 p-4">
+      <div className="mb-3 flex items-start gap-2">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+        <div className="flex-1 text-xs text-foreground">
+          <p className="font-semibold">请核对抽取结果（尚未入库）</p>
+          <p className="mt-0.5 text-muted-foreground">
+            来源：{preview.fileName}
+            {preview.truncated ? "（文件较长已截断尾部）" : ""}。确认无误后点击「确认入库」，
+            或取消后重新生成。共 {preview.total} 项，重点 {keyCount}、一般 {generalCount}
+            {demoCount > 0 ? `、演示 ${demoCount}` : ""}；已自动匹配 {preview.matchedCount} 项，待补充{" "}
+            {preview.pendingCount} 项。
+          </p>
+        </div>
+      </div>
+
+      <div className="mb-3 max-h-80 space-y-1.5 overflow-auto rounded border border-border bg-card p-2">
+        {preview.items.map((it) => (
+          <div
+            key={it.itemNo}
+            className="flex items-start gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-muted/50"
+          >
+            <span className="mt-0.5 w-6 shrink-0 font-mono text-muted-foreground">
+              {it.itemNo}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="font-medium text-foreground">{it.title}</span>
+                <Badge tone={ITEM_TYPE_TONE[it.itemType]} className="px-1 py-0 text-[10px]">
+                  {ITEM_TYPE_LABEL[it.itemType]}
+                </Badge>
+                <Badge tone="neutral" className="px-1 py-0 text-[10px]">
+                  {DELIVERY_LABEL[it.deliveryMethod]}
+                </Badge>
+                {typeof it.scoreValue === "number" && it.scoreValue > 0 && (
+                  <span className="text-[10px] text-muted-foreground">{it.scoreValue} 分</span>
+                )}
+                {it.matchedExample && (
+                  <span className="text-[10px] text-status-success">已匹配知识库</span>
+                )}
+              </div>
+              {it.requirement && (
+                <p className="mt-0.5 line-clamp-2 text-muted-foreground">{it.requirement}</p>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex items-center justify-end gap-2">
+        <Button
+          size="xs"
+          variant="outline"
+          className="h-7 rounded-sm"
+          onClick={onCancel}
+          disabled={confirming}
+        >
+          取消
+        </Button>
+        <Button
+          size="xs"
+          className="h-7 rounded-sm bg-brand text-white hover:bg-brand/90"
+          onClick={onConfirm}
+          disabled={confirming}
+        >
+          {confirming ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <CheckCircle2 className="h-3 w-3" />
+          )}
+          确认入库
+        </Button>
+      </div>
+
+      {streamLog && (
+        <details className="mt-3">
+          <summary className="cursor-pointer text-[11px] text-muted-foreground">
+            查看抽取过程日志
+          </summary>
+          <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-muted/50 p-2 text-[11px] leading-5 text-muted-foreground">
+            {streamLog}
+          </pre>
+        </details>
+      )}
+    </div>
   );
 }
 
