@@ -68,8 +68,9 @@ export class BiddingScreenshotService {
     if (filter.salesManager) q = q.eq('sales_manager', filter.salesManager);
     if (filter.search) {
       const pattern = `%${filter.search}%`;
+      // project_category 是 text[]，不能直接 ilike；按需求仅搜索常见文本字段
       q = q.or(
-        `project_name.ilike.${pattern},project_school.ilike.${pattern},sales_manager.ilike.${pattern},assigned_project_manager.ilike.${pattern},project_category.ilike.${pattern}`,
+        `project_name.ilike.${pattern},project_school.ilike.${pattern},sales_manager.ilike.${pattern},assigned_project_manager.ilike.${pattern},project_secondary_unit.ilike.${pattern},screenshot_requirement.ilike.${pattern}`,
       );
     }
     if (filter.overdue) {

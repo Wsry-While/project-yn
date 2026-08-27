@@ -381,7 +381,8 @@ function BiddingDetailModal({
                 label: '需交付日期',
                 children: record.dueDeliveryDate || '—',
               },
-              { label: '预留天数', children: record.reservedDays ?? '—' },
+              { label: '预留天数', children: record.reservedDays != null ? `${record.reservedDays} 天` : '—' },
+              { label: '外部编号', children: record.externalSerial || record.externalId || '—' },
               {
                 label: '类别',
                 children: record.projectCategory.length
@@ -400,12 +401,27 @@ function BiddingDetailModal({
                       ? '否'
                       : '—',
               },
-              { label: ' ', children: ' ' },
             ]}
           />
           <Descriptions
             column={1}
-            title="截图需求"
+            title="项目招标文件"
+            items={[
+              {
+                label: '招标文件',
+                children: (
+                  <FileLink
+                    file={record.projectBiddingFile}
+                    onRetry={onRetry}
+                    retrying={retryingId === record.projectBiddingFile?.assetId}
+                  />
+                ),
+              },
+            ]}
+          />
+          <Descriptions
+            column={1}
+            title="截图需求说明"
             items={[
               {
                 label: '详情',
@@ -422,8 +438,8 @@ function BiddingDetailModal({
             title="交付信息"
             items={[
               { label: '交付文档', children: <FileLink file={record.deliveryDocument} onRetry={onRetry} retrying={retryingId === record.deliveryDocument?.assetId} /> },
-              { label: '交付备注', children: record.deliveryRemark || '—' },
-              { label: '销售反馈', children: record.salesFeedback || '—' },
+              { label: '交付信息备注', children: record.deliveryRemark || '—' },
+              { label: '销售反馈意见', children: record.salesFeedback || '—' },
             ]}
           />
           {record.attachments.length > 0 && (
