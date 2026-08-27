@@ -13,6 +13,8 @@ import {
   X,
   UserPlus,
   ExternalLink,
+  Upload,
+  Image as ImageIcon,
 } from "lucide-react";
 import { apiFetch, apiFetchSSE } from "@/lib/web/api-client";
 import { showToast } from "@/lib/web/toast-store";
@@ -319,6 +321,7 @@ export function BiddingDocumentPanel({ record }: PanelProps) {
               onReopen={reopen}
               onCreateTask={(it) => setTaskDialog(it)}
               onTaskStatus={updateTaskStatus}
+              onUploaded={() => fetchDoc()}
             />
 
             {tasks.length > 0 && (
@@ -356,12 +359,14 @@ function ScoreItemList({
   onReopen,
   onCreateTask,
   onTaskStatus,
+  onUploaded,
 }: {
   items: BiddingScoreItem[];
   onMarkNa: (it: BiddingScoreItem) => void;
   onReopen: (it: BiddingScoreItem) => void;
   onCreateTask: (it: BiddingScoreItem) => void;
   onTaskStatus: (t: BiddingFollowupTask, s: BiddingFollowupTask["status"]) => void;
+  onUploaded: (recordId: string, itemId: string) => void;
 }) {
   const [filter, setFilter] = useState<"all" | "pending" | "matched" | "task">("all");
   const filtered = useMemo(() => {
@@ -414,12 +419,14 @@ function ScoreItemList({
         {filtered.map((it) => (
           <ScoreItemRow
             key={it.id}
+            recordId={items[0]?.recordId ?? ""}
             item={it}
             index={items.indexOf(it) + 1}
             onMarkNa={onMarkNa}
             onReopen={onReopen}
             onCreateTask={onCreateTask}
             onTaskStatus={onTaskStatus}
+            onUploaded={onUploaded}
           />
         ))}
       </div>
@@ -428,24 +435,67 @@ function ScoreItemList({
 }
 
 function ScoreItemRow({
+  recordId,
   item,
   index,
   onMarkNa,
   onReopen,
   onCreateTask,
   onTaskStatus,
+  onUploaded,
 }: {
+  recordId: string;
   item: BiddingScoreItem;
   index: number;
   onMarkNa: (it: BiddingScoreItem) => void;
   onReopen: (it: BiddingScoreItem) => void;
   onCreateTask: (it: BiddingScoreItem) => void;
   onTaskStatus: (t: BiddingFollowupTask, s: BiddingFollowupTask["status"]) => void;
+  onUploaded: (recordId: string, itemId: string) => void;
 }) {
   const isPending = item.matchStatus === "pending";
   const isTask = item.matchStatus === "task_created";
   const isNa = item.matchStatus === "na";
   const isMatched = item.matchStatus === "matched" || item.matchStatus === "uploaded";
+  const isUploaded = item.matchStatus === "uploaded";
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const pickFile = () => fileInputRef.current?.click();
+
+  const handleFile = async (file: File) => {
+    if (file.size > 15 * 1024 * 1024) {
+      showToast("截图不能超过 15 MB", { kind: "error" });
+      return;
+    }
+    if (!/^image\/(png|jpe?g|gif|webp|bmp)$/i.test(file.type)) {
+      showToast("仅支持 PNG/JPG/GIF/WEBP/BMP 图片", { kind: "error" });
+      return;
+    }
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch(
+        `/api/bidding-screenshots/${recordId}/score-items/${item.id}/upload`,
+        { method: "POST", body: fd, credentials: "same-origin" },
+      );
+      const json = (await res.json().catch(() => ({}))) as {
+        success?: boolean;
+        error?: { message?: string };
+      };
+      if (!res.ok || !json.success) {
+        throw new Error(json.error?.message || "上传失败");
+      }
+      showToast("截图已上传", { kind: "success" });
+      onUploaded(recordId, item.id);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "上传失败", { kind: "error" });
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
 
   return (
     <div
@@ -499,22 +549,51 @@ function ScoreItemRow({
             <div className="mt-2 rounded border border-border bg-muted/30 p-2">
               <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
                 <CheckCircle2 className="h-3 w-3 text-status-success" />
-                已匹配历史截图：
-                {item.matchedExample.systemModule ||
-                  item.matchedExample.description ||
-                  "历史交付截图"}
-                {item.matchedExample.school && <span>· {item.matchedExample.school}</span>}
+                {isUploaded ? "PM 已上传截图：" : "已匹配历史截图："}
+                {isUploaded
+                  ? item.deliveryNote || "手动上传"
+                  : item.matchedExample.systemModule ||
+                    item.matchedExample.description ||
+                    "历史交付截图"}
+                {!isUploaded && item.matchedExample.school && (
+                  <span>· {item.matchedExample.school}</span>
+                )}
               </div>
-              {item.matchedExample.assetId && (
-                <a
-                  href={`/api/files/preview/${item.matchedExample.assetId}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="mt-1 inline-flex items-center gap-1 text-[11px] text-brand hover:underline"
-                >
-                  <ExternalLink className="h-3 w-3" />
-                  查看截图
-                </a>
+              {(item.deliveryAssetId || item.matchedExample.assetId) && (
+                <div className="mt-2 flex items-center gap-3">
+                  <a
+                    href={`/api/files/preview/${item.deliveryAssetId || item.matchedExample.assetId}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 text-[11px] text-brand hover:underline"
+                  >
+                    <ImageIcon className="h-3 w-3" />
+                    {isUploaded ? "查看我上传的截图" : "查看截图"}
+                  </a>
+                  <button
+                    type="button"
+                    onClick={pickFile}
+                    disabled={uploading}
+                    className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-brand disabled:opacity-60"
+                  >
+                    {uploading ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Upload className="h-3 w-3" />
+                    )}
+                    {isUploaded ? "替换截图" : "用自己的截图替换"}
+                  </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/gif,image/webp,image/bmp"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) void handleFile(f);
+                    }}
+                  />
+                </div>
               )}
             </div>
           )}
@@ -551,9 +630,33 @@ function ScoreItemRow({
             </div>
           )}
 
-          <div className="mt-2 flex items-center gap-1">
+          <div className="mt-2 flex flex-wrap items-center gap-1">
             {isPending && (
               <>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/gif,image/webp,image/bmp"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void handleFile(f);
+                  }}
+                />
+                <Button
+                  size="xs"
+                  variant="outline"
+                  className="h-6 rounded-sm text-[11px]"
+                  onClick={pickFile}
+                  disabled={uploading}
+                >
+                  {uploading ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Upload className="h-3 w-3" />
+                  )}
+                  上传截图
+                </Button>
                 <Button
                   size="xs"
                   variant="outline"
@@ -570,6 +673,34 @@ function ScoreItemRow({
                   onClick={() => onMarkNa(item)}
                 >
                   标记不适用
+                </Button>
+              </>
+            )}
+            {isTask && (
+              <>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/gif,image/webp,image/bmp"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void handleFile(f);
+                  }}
+                />
+                <Button
+                  size="xs"
+                  variant="outline"
+                  className="h-6 rounded-sm text-[11px]"
+                  onClick={pickFile}
+                  disabled={uploading}
+                >
+                  {uploading ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Upload className="h-3 w-3" />
+                  )}
+                  直接补截图
                 </Button>
               </>
             )}
