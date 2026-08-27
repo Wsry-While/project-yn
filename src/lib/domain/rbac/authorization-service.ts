@@ -52,7 +52,7 @@ export class AuthorizationService {
 
     const { data: rows, error } = await this.db
       .from('app_user_roles')
-      .select('scope, team_id, team_member_id, roles(id, code, name, description, is_builtin)')
+      .select('scope, team_id, team_member_id, app_roles(id, code, name, description, is_builtin)')
       .or(`user_id.eq.${user.id},team_member_id.eq.${
         // team_member_id 在下面查到后再二次查询；此处先按 user_id 查
         '00000000-0000-0000-0000-000000000000'
@@ -75,7 +75,7 @@ export class AuthorizationService {
         teamMemberId = tmId;
         const { data: tmRows, error: tmErr } = await this.db
           .from('app_user_roles')
-          .select('scope, team_id, team_member_id, roles(id, code, name, description, is_builtin)')
+          .select('scope, team_id, team_member_id, app_roles(id, code, name, description, is_builtin)')
           .eq('team_member_id', tmId);
         if (tmErr) throw tmErr;
         const extra = (tmRows ?? []) as unknown as Array<

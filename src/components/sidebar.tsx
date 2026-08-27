@@ -205,8 +205,13 @@ function NavLinks({
   collapsed: boolean;
 }) {
   const pathname = usePathname();
-  const { can, loaded } = usePermissions();
-  const items = NAV.filter((item) => !item.perm || (loaded && can(item.perm as never)));
+  const { can, loaded, isSuperAdmin } = usePermissions();
+  const items = NAV.filter((item) => {
+    if (!item.perm) return true;
+    if (!loaded) return true; // 权限未加载完先显示，避免闪烁
+    if (isSuperAdmin) return true;
+    return can(item.perm);
+  });
   return (
     <nav
       aria-label="主导航"
