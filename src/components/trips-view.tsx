@@ -16,7 +16,7 @@ import { tripWebService } from '@/lib/web/trip-web-service';
 import { showToast } from '@/lib/web/toast-store';
 import { exportCsv, datedName } from '@/lib/web/csv-export';
 import { apiFetch } from '@/lib/web/api-client';
-import { Modal } from '@/components/modal';
+import { DetailDrawer } from '@/components/crud/detail-drawer';
 import { PageHeader } from '@/components/page-header';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -397,12 +397,11 @@ function TripDetailModal({
   }, [trip]);
 
   return (
-    <Modal
+    <DetailDrawer
       open={!!trip}
       onClose={onClose}
       title={trip?.schoolName ?? '外出详情'}
       description={trip ? `${trip.tripDate} · ${trip.supportType}` : undefined}
-      size="xl"
       footer={
         trip ? (
           <div className="flex justify-end gap-2">
@@ -508,7 +507,7 @@ function TripDetailModal({
           </details>
         </div>
       )}
-    </Modal>
+    </DetailDrawer>
   );
 }
 

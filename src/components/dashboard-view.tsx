@@ -262,6 +262,7 @@ export function DashboardView() {
             value={stats?.totals.todo ?? '—'}
             icon={Circle}
             tone="neutral"
+            unit="项"
             hint={stats ? `共 ${stats.total} 个任务` : '加载中'}
           />
           <KpiCard
@@ -269,22 +270,28 @@ export function DashboardView() {
             value={stats?.totals.in_progress ?? '—'}
             icon={Clock}
             tone="brand"
+            unit="项"
+            hint="正在推进"
           />
           <KpiCard
             label="审阅中"
             value={stats?.totals.review ?? '—'}
             icon={AlertTriangle}
             tone="warning"
+            unit="项"
+            hint="等待审阅"
           />
           <KpiCard
             label="已完成"
             value={stats?.totals.done ?? '—'}
             icon={CheckCircle2}
             tone="success"
+            unit="项"
             delta={
               stats && stats.total > 0 ? Math.round(stats.doneRatio * 100) : undefined
             }
-            hint={stats ? `完成率` : undefined}
+            deltaPolarity="positive"
+            deltaLabel="完成率"
           />
         </div>
 

@@ -4,7 +4,7 @@ import { Pencil, Paperclip, ExternalLink, FileCheck2, FileX2 } from 'lucide-reac
 import { showToast } from '@/lib/web/toast-store';
 import { exportCsv, datedName } from '@/lib/web/csv-export';
 import { apiFetch } from '@/lib/web/api-client';
-import { Modal } from '@/components/modal';
+import { DetailDrawer } from '@/components/crud/detail-drawer';
 import { PageHeader } from '@/components/page-header';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -321,12 +321,12 @@ function QimingDetailModal({
   }, [record]);
 
   return (
-    <Modal
+    <DetailDrawer
       open={!!record}
       onClose={onClose}
       title={record?.projectName ?? '启明星建设详情'}
       description={record ? `${record.school ?? ''}${record.college ? ` · ${record.college}` : ''}` : undefined}
-      size="xl"
+      width={760}
       footer={
         record ? (
           <div className="flex justify-end gap-2">
@@ -440,7 +440,7 @@ function QimingDetailModal({
           </details>
         </div>
       )}
-    </Modal>
+    </DetailDrawer>
   );
 }
 

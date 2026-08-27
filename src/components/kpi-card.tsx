@@ -7,7 +7,17 @@ interface KpiCardProps {
   icon?: React.ComponentType<{ className?: string }> | React.ReactNode;
   tone?: 'brand' | 'success' | 'warning' | 'danger' | 'neutral' | 'info';
   unit?: string;
+  /** 环比百分比；正数↑，负数↓ */
   delta?: number;
+  /**
+   * 指标极性，决定 delta 颜色语义：
+   * - 'positive'（默认）：升 = 好（绿），降 = 坏（红）
+   * - 'negative'：升 = 坏（红），降 = 好（绿），例如「逾期任务」
+   * - 'neutral'：始终中性灰
+   */
+  deltaPolarity?: 'positive' | 'negative' | 'neutral';
+  /** delta 的对比基准文案，例如「较昨日」 */
+  deltaLabel?: string;
   hint?: string;
   compact?: boolean;
 }
@@ -34,6 +44,8 @@ export function KpiCard({
   tone = 'brand',
   unit,
   delta,
+  deltaPolarity = 'positive',
+  deltaLabel,
   hint,
   compact = false,
 }: KpiCardProps) {
@@ -41,6 +53,15 @@ export function KpiCard({
   const isComp = isComponentType(icon);
   const IconNode = isComp ? (icon as React.ComponentType<{ className?: string }>) : null;
   const iconNode = isComp ? null : (icon as React.ReactNode);
+
+  // 按指标极性计算 delta 的色调
+  let deltaColor = 'text-muted-foreground';
+  if (typeof delta === 'number' && delta !== 0 && deltaPolarity !== 'neutral') {
+    const goingUp = delta > 0;
+    const good = deltaPolarity === 'positive' ? goingUp : !goingUp;
+    deltaColor = good ? 'text-status-success' : 'text-status-danger';
+  }
+
   return (
     <div
       className={cn(
@@ -76,20 +97,16 @@ export function KpiCard({
           </div>
         )}
       </div>
-      {(typeof delta === 'number' || hint) && (
+      {(typeof delta === 'number' || hint || deltaLabel) && (
         <div className="mt-3 flex items-center gap-1.5 text-[11px] text-muted-foreground">
           {typeof delta === 'number' && delta !== 0 && (
-            <span
-              className={cn(
-                'inline-flex items-center gap-0.5 font-mono font-medium',
-                delta > 0 ? 'text-status-success' : 'text-status-danger',
-              )}
-            >
+            <span className={cn('inline-flex items-center gap-0.5 font-mono font-medium', deltaColor)}>
               {delta > 0 ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
               {delta > 0 ? '+' : ''}
               {delta}%
             </span>
           )}
+          {deltaLabel && <span className="text-muted-foreground/80">{deltaLabel}</span>}
           {hint && <span className="truncate">{hint}</span>}
         </div>
       )}
