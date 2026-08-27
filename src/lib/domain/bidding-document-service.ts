@@ -123,7 +123,7 @@ export const BiddingDocumentService = {
     const { data, error } = await supabase
       .from("bidding_score_items")
       .select(
-        "*, matched_example:bidding_screenshot_examples(id, asset_id, description, system_module, school, project_name), followup_task:bidding_followup_tasks(id, title, status, priority, assignee_id, external_assignee_name, external_assignee_org, due_date)",
+        "*, matched_example:bidding_screenshot_examples(id, asset_id, description, system_module, page_path, tags, source), followup_task:bidding_followup_tasks(id, title, status, priority, assignee_id, external_assignee_name, external_assignee_org, due_date)",
       )
       .eq("record_id", recordId)
       .order("order_index", { ascending: true })
@@ -477,8 +477,9 @@ function mapScoreItem(row: ScoreItemRow): BiddingScoreItem {
           assetId: r.matched_example.asset_id,
           description: r.matched_example.description,
           systemModule: r.matched_example.system_module,
-          school: r.matched_example.school,
-          projectName: r.matched_example.project_name,
+          pagePath: (r.matched_example as { page_path?: string | null }).page_path ?? null,
+          tags: (r.matched_example as { tags?: string[] | null }).tags ?? null,
+          source: (r.matched_example as { source?: string | null }).source ?? null,
         }
       : null,
     followupTask: r.followup_task ? mapFollowupTask(r.followup_task) : null,

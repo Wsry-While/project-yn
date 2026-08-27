@@ -555,8 +555,8 @@ function ScoreItemRow({
                   : item.matchedExample.systemModule ||
                     item.matchedExample.description ||
                     "历史交付截图"}
-                {!isUploaded && item.matchedExample.school && (
-                  <span>· {item.matchedExample.school}</span>
+                {!isUploaded && (item.matchedExample.source || item.matchedExample.tags?.length) && (
+                  <span>· {item.matchedExample.source || item.matchedExample.tags?.join("、")}</span>
                 )}
               </div>
               {(item.deliveryAssetId || item.matchedExample.assetId) && (

@@ -516,8 +516,9 @@ export interface BiddingScoreItem {
     assetId: string | null;
     description: string | null;
     systemModule: string | null;
-    school?: string | null;
-    projectName?: string | null;
+    pagePath?: string | null;
+    tags?: string[] | null;
+    source?: string | null;
   } | null;
   followupTask?: BiddingFollowupTask | null;
   deliveryAsset?: BiddingFileRef | null;
