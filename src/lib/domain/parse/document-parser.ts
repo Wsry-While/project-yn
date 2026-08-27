@@ -88,12 +88,22 @@ export async function parseAssetDocument(assetId: string): Promise<ParsedDocumen
  * 最后调用 /ananas/status/{objectId} 换取真实签名下载地址。
  */
 export async function parseDocumentFromUrl(url: string, fileNameHint?: string): Promise<ParsedDocument> {
-  const chaoxing = resolveChaoxingMultiDownload(url);
-  if (chaoxing) {
-    const first = await fetchChaoxingFirstFile(chaoxing);
+  // 1) 超星多文件下载页：/front/open/data/export/multiple/download?...
+  const multi = resolveChaoxingMultiDownload(url);
+  if (multi) {
+    const first = await fetchChaoxingFirstFile(multi);
     if (first) {
       const signed = await getChaoxingSignedUrl(first.objectId);
       const { buffer, fileName } = await downloadUrlBuffer(signed, first.name || fileNameHint);
+      return parseDocumentBuffer(buffer, fileName);
+    }
+  }
+  // 2) 超星单文件下载页：/front/open/data/export/download?objectid=...&resid=...&suffix=...
+  const single = resolveChaoxingSingleDownload(url);
+  if (single) {
+    const signed = await fetchChaoxingSingleSignedUrl(single);
+    if (signed) {
+      const { buffer, fileName } = await downloadUrlBuffer(signed, single.fileName || fileNameHint);
       return parseDocumentBuffer(buffer, fileName);
     }
   }
@@ -175,6 +185,51 @@ async function fetchChaoxingFirstFile(params: ChaoxingMultiParams): Promise<Chao
   const target = bidding ?? formData.find((x) => Array.isArray(x.fields?.[0]?.values) && (x.fields?.[0]?.values?.[0] as { objectId?: string })?.objectId);
   const firstFile = target?.fields?.[0]?.values?.find((v) => v && v.objectId);
   return firstFile ?? null;
+}
+
+interface ChaoxingSingleParams {
+  objectid: string;
+  resid?: string;
+  suffix?: string;
+  fileName?: string;
+}
+
+function resolveChaoxingSingleDownload(url: string): ChaoxingSingleParams | null {
+  try {
+    const u = new URL(url);
+    if (!/(^|\.)chaoxing\.com$/i.test(u.hostname)) return null;
+    if (!/\/(?:front\/open\/data\/export|data\/export)\/download$/i.test(u.pathname)) return null;
+    // 注意：多文件路径 /multiple/download 不在此分支处理。
+    const objectid = u.searchParams.get('objectid');
+    if (!objectid) return null;
+    return {
+      objectid,
+      resid: u.searchParams.get('resid') || undefined,
+      suffix: u.searchParams.get('suffix') || undefined,
+      fileName: u.searchParams.get('fileName') || undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchChaoxingSingleSignedUrl(params: ChaoxingSingleParams): Promise<string | null> {
+  // type 与超星前端 filePreviewUtils.getType 对齐：docx/doc → 5 等，实际服务端只校验是否合法。
+  const qs = new URLSearchParams({ objectid: params.objectid, type: '5' });
+  if (params.resid) qs.set('resid', params.resid);
+  const endpoint = `https://office.chaoxing.com/data/export/get/download/url?${qs.toString()}`;
+  const res = await fetch(endpoint, {
+    headers: {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+      Referer: 'https://office.chaoxing.com/front/open/data/export/download',
+      Accept: 'application/json, text/plain, */*',
+      'X-Requested-With': 'XMLHttpRequest',
+    },
+  });
+  if (!res.ok) return null;
+  const json = (await res.json()) as { success?: boolean; data?: string };
+  return json?.success && json.data ? json.data : null;
 }
 
 async function getChaoxingSignedUrl(objectId: string): Promise<string> {
