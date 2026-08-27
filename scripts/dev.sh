@@ -31,4 +31,8 @@ echo "Clearing port ${DEPLOY_RUN_PORT} before start."
 kill_port_if_listening
 echo "Starting HTTP service on port ${DEPLOY_RUN_PORT} for dev..."
 
+# 文档解析 + LLM 流式 + docx 生成会同时占用较多内存，显式提高老生代上限，
+# 避免处理大体积招标文件时 V8 默认 2GB 堆上限触发 OOM 把 dev server 整进程带崩。
+export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=4096}"
+
 PORT=${DEPLOY_RUN_PORT} pnpm tsx watch src/server.ts

@@ -11,8 +11,9 @@ import type {
   BiddingScreenshot,
 } from "./types";
 import { ScreenshotExampleService, type ScreenshotExample } from "./screenshot-example-service";
-import { parseAssetDocument, extractScoringSection } from "./parse/document-parser";
+import { parseAssetDocument, parseDocumentFromUrl, extractScoringSection } from "./parse/document-parser";
 import { buildMessages, getModelForScenario } from "./llm-prompts";
+import { BiddingScreenshotService } from "./bidding-screenshot-service";
 
 type Supabase = ReturnType<typeof getAdminSupabase>;
 interface ScoreItemRow extends Record<string, unknown> {
@@ -87,12 +88,13 @@ interface RawScoreItem {
 
 export type ProgressEmit = (type: "step" | "delta" | "done" | "error" | "meta", payload: unknown) => void;
 
-function parseBiddingFile(file: unknown): { assetId?: string } | null {
+function parseBiddingFile(file: unknown): { assetId?: string; url?: string; name?: string } | null {
   if (!file) return null;
   if (Array.isArray(file)) return parseBiddingFile(file[0]);
   if (typeof file === "object") {
-    const f = file as { assetId?: string; url?: string };
-    if (f.assetId) return { assetId: f.assetId };
+    const f = file as { assetId?: string; url?: string; name?: string };
+    if (f.assetId) return { assetId: f.assetId, url: f.url, name: f.name };
+    if (f.url && /^https?:\/\//i.test(f.url)) return { url: f.url, name: f.name };
   }
   return null;
 }
@@ -143,15 +145,10 @@ export const BiddingDocumentService = {
 
   async getRecordById(recordId: string): Promise<BiddingScreenshot> {
     const supabase = getAdminSupabase();
-    const { data, error } = await supabase
-      .from("bidding_screenshots")
-      .select("*")
-      .eq("id", recordId)
-      .is("deleted_at", null)
-      .maybeSingle();
-    if (error) throw new Error(`读取招投标记录失败: ${error.message}`);
-    if (!data) throw new Error("招投标记录不存在");
-    return data as unknown as BiddingScreenshot;
+    const service = new BiddingScreenshotService(supabase);
+    const record = await service.getById(recordId);
+    if (!record) throw new Error("招投标记录不存在");
+    return record;
   },
 
   async generateDocument(
@@ -170,7 +167,9 @@ export const BiddingDocumentService = {
     }
 
     emit("step", { phase: "parse", message: "解析招标文件…" });
-    const parsed = await parseAssetDocument(fileRef.assetId);
+    const parsed = fileRef.assetId
+      ? await parseAssetDocument(fileRef.assetId)
+      : await parseDocumentFromUrl(fileRef.url as string, fileRef.name);
     if (parsed.kind === "unsupported") {
       throw new Error(`暂不支持解析该文件类型（${parsed.fileName}），请上传 PDF 或 Word（.docx）。`);
     }
