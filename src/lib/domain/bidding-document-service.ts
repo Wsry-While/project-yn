@@ -625,22 +625,30 @@ async function extractRequirementsWithLlm(
     if (text) buffer += text;
   }
   const items = parseScoreItemsJson(buffer);
-  // 把阶段一的文档类评分项也合并进来（如果 LLM 没在采购需求里提到它们）
-  const existing = new Set(items.map((i) => i.title.trim()));
-  for (const d of rules.documentItems ?? []) {
-    if (existing.has(d.title)) continue;
-    items.push({
-      itemNo: items.length + 1,
-      title: d.title,
-      requirement: d.rule ?? null,
-      scoreValue: typeof d.maxScore === "number" ? d.maxScore : null,
-      category: "文档",
-      itemType: "document",
-      deliveryMethod: "document",
-      sourceSection: "评分办法-文档类",
-    });
+  // 后处理：过滤掉 LLM 可能仍然返回的文档类项（实施方案、培训、业绩等），
+  // 并对 itemType/deliveryMethod 做归一化
+  const documentBlocklist = [
+    /实施方案/, /安全.*(方案|保密|保障|措施)/, /服务团队/, /项目负责人.*经验/,
+    /人员配置/, /人员资质/, /培训方案/, /培训计划/, /售后服务/, /服务承诺/,
+    /保证措施/, /类似业绩/, /业绩/, /合同案例/, /质量管理体系/, /验收方案/,
+    /投资估算/, /报价说明/, /商务条款/, /资质要求/, /资格要求/,
+  ];
+  const filtered = items.filter((it) => {
+    if (it.itemType === "document" || it.deliveryMethod === "document") return false;
+    const title = (it.title ?? "").trim();
+    if (documentBlocklist.some((re) => re.test(title))) return false;
+    return true;
+  });
+  // 归一化：screenshot/general/key/demo 之外的值兜底
+  for (const it of filtered) {
+    if (it.itemType !== "key" && it.itemType !== "demo" && it.itemType !== "general") {
+      it.itemType = "general";
+    }
+    if (it.deliveryMethod !== "screenshot" && it.deliveryMethod !== "demo") {
+      it.deliveryMethod = "screenshot";
+    }
   }
-  return items;
+  return filtered;
 }
 
 function parseRulesJson(text: string): RawScoreRules {

@@ -175,19 +175,6 @@ export function BiddingDocumentPanel({ record }: PanelProps) {
     window.document.body.removeChild(a);
   };
 
-  const markNa = async (item: BiddingScoreItem) => {
-    try {
-      await apiFetch(`/api/bidding-screenshots/${record.id}/score-items/${item.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ matchStatus: "na", deliveryNote: "已标记为不适用" }),
-      });
-      await fetchDoc();
-      showToast("已标记为不适用", { kind: "success" });
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : "操作失败", { kind: "error" });
-    }
-  };
-
   const reopen = async (item: BiddingScoreItem) => {
     try {
       await apiFetch(`/api/bidding-screenshots/${record.id}/score-items/${item.id}`, {
@@ -317,7 +304,6 @@ export function BiddingDocumentPanel({ record }: PanelProps) {
 
             <ScoreItemList
               items={items}
-              onMarkNa={markNa}
               onReopen={reopen}
               onCreateTask={(it) => setTaskDialog(it)}
               onTaskStatus={updateTaskStatus}
@@ -355,14 +341,12 @@ export function BiddingDocumentPanel({ record }: PanelProps) {
 
 function ScoreItemList({
   items,
-  onMarkNa,
   onReopen,
   onCreateTask,
   onTaskStatus,
   onUploaded,
 }: {
   items: BiddingScoreItem[];
-  onMarkNa: (it: BiddingScoreItem) => void;
   onReopen: (it: BiddingScoreItem) => void;
   onCreateTask: (it: BiddingScoreItem) => void;
   onTaskStatus: (t: BiddingFollowupTask, s: BiddingFollowupTask["status"]) => void;
@@ -422,7 +406,6 @@ function ScoreItemList({
             recordId={items[0]?.recordId ?? ""}
             item={it}
             index={items.indexOf(it) + 1}
-            onMarkNa={onMarkNa}
             onReopen={onReopen}
             onCreateTask={onCreateTask}
             onTaskStatus={onTaskStatus}
@@ -438,7 +421,6 @@ function ScoreItemRow({
   recordId,
   item,
   index,
-  onMarkNa,
   onReopen,
   onCreateTask,
   onTaskStatus,
@@ -447,7 +429,6 @@ function ScoreItemRow({
   recordId: string;
   item: BiddingScoreItem;
   index: number;
-  onMarkNa: (it: BiddingScoreItem) => void;
   onReopen: (it: BiddingScoreItem) => void;
   onCreateTask: (it: BiddingScoreItem) => void;
   onTaskStatus: (t: BiddingFollowupTask, s: BiddingFollowupTask["status"]) => void;
@@ -455,7 +436,6 @@ function ScoreItemRow({
 }) {
   const isPending = item.matchStatus === "pending";
   const isTask = item.matchStatus === "task_created";
-  const isNa = item.matchStatus === "na";
   const isMatched = item.matchStatus === "matched" || item.matchStatus === "uploaded";
   const isUploaded = item.matchStatus === "uploaded";
   const [uploading, setUploading] = useState(false);
@@ -504,9 +484,7 @@ function ScoreItemRow({
           ? "border-status-warning/40 bg-status-warning/5"
           : isTask
             ? "border-brand/40 bg-brand/5"
-            : isNa
-              ? "border-border bg-muted/30 opacity-70"
-              : "border-border bg-card"
+            : "border-border bg-card"
       }`}
     >
       <div className="flex items-start gap-2">
@@ -515,8 +493,6 @@ function ScoreItemRow({
             <CheckCircle2 className="h-4 w-4 text-status-success" />
           ) : isTask ? (
             <AlertTriangle className="h-4 w-4 text-brand" />
-          ) : isNa ? (
-            <Circle className="h-4 w-4 text-muted-foreground/50" />
           ) : (
             <Circle className="h-4 w-4 text-status-warning" />
           )}
@@ -535,24 +511,9 @@ function ScoreItemRow({
                 演示
               </Badge>
             )}
-            {item.itemType === "document" && (
-              <Badge tone="neutral" className="text-[10px]">
-                文档
-              </Badge>
-            )}
-            {item.itemType === "general" && (
-              <Badge tone="neutral" className="text-[10px]">
-                一般
-              </Badge>
-            )}
             {item.deliveryMethod === "demo" && (
               <Badge tone="brand" className="text-[10px]">
                 现场演示
-              </Badge>
-            )}
-            {item.deliveryMethod === "document" && (
-              <Badge tone="neutral" className="text-[10px]">
-                方案文档
               </Badge>
             )}
             {item.scoreValue != null && (
@@ -569,7 +530,6 @@ function ScoreItemRow({
             )}
             {isPending && <Badge tone="warning">待补充</Badge>}
             {isTask && <Badge tone="brand">督办中</Badge>}
-            {isNa && <Badge tone="neutral">不适用</Badge>}
           </div>
           {item.requirement && (
             <p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
@@ -698,14 +658,6 @@ function ScoreItemRow({
                   <Plus className="h-3 w-3" />
                   创建督办任务
                 </Button>
-                <Button
-                  size="xs"
-                  variant="ghost"
-                  className="h-6 rounded-sm text-[11px] text-muted-foreground"
-                  onClick={() => onMarkNa(item)}
-                >
-                  标记不适用
-                </Button>
               </>
             )}
             {isTask && (
@@ -736,7 +688,7 @@ function ScoreItemRow({
                 </Button>
               </>
             )}
-            {(isMatched || isNa) && (
+            {isMatched && (
               <Button
                 size="xs"
                 variant="ghost"
