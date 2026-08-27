@@ -16,6 +16,7 @@ import {
   parseDocumentFromUrl,
   extractScoringSection,
   extractRequirementsSection,
+  chunkRequirementsText,
 } from "./parse/document-parser";
 import {
   buildMessages,
@@ -264,9 +265,13 @@ export const BiddingDocumentService = {
     });
 
     emit("step", { phase: "llm", message: "阶段 2/3：归纳交付项…" });
-    const items = await extractRequirementsWithLlm(reqSection, rules, requestHeaders);
+    const items = await extractRequirementsWithLlm(reqSection, rules, requestHeaders, (msg) =>
+      emit("delta", { content: msg }),
+    );
     if (!items.length) {
-      throw new Error("未能从招标文件中抽取到评分项");
+      throw new Error(
+        "未能从招标文件中抽取到评分项（采购需求可能过长或输出被截断，请检查招标文件或联系管理员）",
+      );
     }
     emit("delta", {
       content: `\n\n抽取完成：共 **${items.length}** 项交付点（重点参数 ${items.filter((i) => i.itemType === "key").length}、一般参数 ${items.filter((i) => i.itemType === "general").length}、演示 ${items.filter((i) => i.itemType === "demo").length}、文档 ${items.filter((i) => i.itemType === "document").length}）。\n\n【阶段 3/3】匹配截图知识库（仅截图类评分项）…\n\n`,
@@ -676,18 +681,105 @@ async function extractScoreRulesWithLlm(
 
 /**
  * 阶段二：基于规则 + 采购需求章节，拆解每一条交付项。
+ * 超长采购需求按"功能模块/标题级别"分块，每块独立调用 LLM（控制并发），
+ * 最后合并、去重、重新编号，避免单次输出 token 上限导致 JSON 被截断。
  */
 async function extractRequirementsWithLlm(
   requirementsText: string,
   rules: RawScoreRules,
   requestHeaders?: Headers,
+  onProgress?: (msg: string) => void,
 ): Promise<RawScoreItem[]> {
-  const prompt = buildBiddingRequirementsPrompt(requirementsText, rules);
+  const chunks = chunkRequirementsText(requirementsText, { targetChars: 9000 });
+
+  // 采购需求较短（仅一块且不超长）时，走单次抽取（保持原有行为）
+  if (chunks.length <= 1) {
+    const buffer = await callRequirementsLlm(
+      buildBiddingRequirementsPrompt(requirementsText, rules),
+      requestHeaders,
+    );
+    const items = parseScoreItemsJson(buffer);
+    if (!items.length) {
+      console.warn(
+        "[bidding/extract-requirements] LLM 返回无法解析为评分项数组，原文尾部：",
+        buffer.slice(-500),
+      );
+    }
+    return finalizeItems(items);
+  }
+
+  onProgress?.(
+    `采购需求较长（${requirementsText.length} 字），已按功能模块拆分为 **${chunks.length}** 块并行抽取…\n\n`,
+  );
+
+  const customHeaders = requestHeaders
+    ? HeaderUtils.extractForwardHeaders(requestHeaders)
+    : undefined;
+
+  // 限制并发数为 3，避免一次性发起过多 LLM 请求
+  const CONCURRENCY = 3;
+  const collected: RawScoreItem[] = [];
+  let cursor = 0;
+  let completed = 0;
+
+  async function worker() {
+    while (true) {
+      const myIdx = cursor++;
+      if (myIdx >= chunks.length) return;
+      const chunk = chunks[myIdx];
+      try {
+        const prompt = buildBiddingRequirementsPrompt(chunk.text, rules, {
+          index: chunk.index,
+          total: chunks.length,
+          title: chunk.title,
+        });
+        // 复用同一个 client 配置，但每块独立请求
+        const client = new LLMClient(new Config({ timeout: 180_000 }), customHeaders);
+        let buffer = "";
+        for await (const part of client.stream(
+          buildMessages({ scenario: "bidding-score", prompt }),
+          {
+            model: getModelForScenario("bidding-score"),
+            temperature: 0.1,
+          },
+        )) {
+          const text = part?.content?.toString?.() ?? "";
+          if (text) buffer += text;
+        }
+        const chunkItems = parseScoreItemsJson(buffer);
+        if (!chunkItems.length) {
+          console.warn(
+            `[bidding/extract-requirements] 块「${chunk.title}」无法解析，原文尾部：`,
+            buffer.slice(-300),
+          );
+        }
+        collected.push(...chunkItems);
+      } catch (err) {
+        console.warn(`[bidding/extract-requirements] 块「${chunk.title}」抽取失败：`, err);
+      } finally {
+        completed++;
+        onProgress?.(`▸ 已完成模块 ${completed}/${chunks.length}：${chunk.title}（累计 ${collected.length} 项）\n`);
+      }
+    }
+  }
+
+  const runners = Array.from({ length: Math.min(CONCURRENCY, chunks.length) }, () => worker());
+  await Promise.all(runners);
+
+  return finalizeItems(collected);
+}
+
+/**
+ * 单次调用阶段二 LLM 并返回完整文本（供短文档走单次路径）。
+ */
+async function callRequirementsLlm(
+  prompt: string,
+  requestHeaders?: Headers,
+): Promise<string> {
   const customHeaders = requestHeaders
     ? HeaderUtils.extractForwardHeaders(requestHeaders)
     : undefined;
   const client = new LLMClient(new Config({ timeout: 180_000 }), customHeaders);
-
   let buffer = "";
   for await (const part of client.stream(
     buildMessages({ scenario: "bidding-score", prompt }),
@@ -699,14 +791,14 @@ async function extractRequirementsWithLlm(
     const text = part?.content?.toString?.() ?? "";
     if (text) buffer += text;
   }
-  const items = parseScoreItemsJson(buffer);
-  if (!items.length) {
-    // 诊断日志：把 LLM 原始输出尾部 500 字记录下来，便于排查
-    console.warn(
-      "[bidding/extract-requirements] LLM 返回无法解析为评分项数组，原文尾部：",
-      buffer.slice(-500),
-    );
-  }
+  return buffer;
+}
+
+/**
+ * 统一后处理：去重、重新编号、文档类黑名单过滤、itemType/deliveryMethod 归一化。
+ */
+function finalizeItems(items: RawScoreItem[]): RawScoreItem[] {
+  if (!items.length) return [];
   // 后处理：过滤掉 LLM 可能仍然返回的文档类项（实施方案、培训、业绩等），
   // 并对 itemType/deliveryMethod 做归一化
   const documentBlocklist = [
@@ -718,19 +810,39 @@ async function extractRequirementsWithLlm(
   const filtered = items.filter((it) => {
     if (it.itemType === "document" || it.deliveryMethod === "document") return false;
     const title = (it.title ?? "").trim();
+    if (!title) return false;
     if (documentBlocklist.some((re) => re.test(title))) return false;
     return true;
   });
-  // 归一化：screenshot/general/key/demo 之外的值兜底
+
+  // 去重：按 title 归一化（去空白/标点/▲★●）判重，保留首次出现
+  const seen = new Set<string>();
+  const deduped: RawScoreItem[] = [];
   for (const it of filtered) {
-    if (it.itemType !== "key" && it.itemType !== "demo" && it.itemType !== "general") {
-      it.itemType = "general";
-    }
-    if (it.deliveryMethod !== "screenshot" && it.deliveryMethod !== "demo") {
-      it.deliveryMethod = "screenshot";
-    }
+    const norm = (it.title ?? "").replace(/[\s▲★●、，,。.（）()【】\[\]]/g, "").toLowerCase();
+    if (norm.length < 3 || seen.has(norm)) continue;
+    seen.add(norm);
+    deduped.push(it);
   }
-  return filtered;
+
+  // 归一化 + 重新连续编号
+  return deduped.map((it, idx) => {
+    const itemType =
+      it.itemType === "key" || it.itemType === "demo" || it.itemType === "general"
+        ? it.itemType
+        : "general";
+    const deliveryMethod =
+      it.deliveryMethod === "screenshot" || it.deliveryMethod === "demo"
+        ? it.deliveryMethod
+        : "screenshot";
+    return {
+      ...it,
+      itemNo: idx + 1,
+      itemType,
+      deliveryMethod,
+      sourceSection: it.sourceSection ?? "采购需求",
+    };
+  });
 }
 
 function parseRulesJson(text: string): RawScoreRules {
@@ -790,6 +902,24 @@ function parseScoreItemsJson(text: string): RawScoreItem[] {
       }
     } catch {
       // ignore
+    }
+  }
+  // 4) 截断兜底：LLM 输出被 token 上限截断，数组缺少闭合 ]。
+  //    回退到最后一个完整对象边界 `},` 或 `}`，补 `]` 后再解析，保住前面所有完整项。
+  if (!Array.isArray(arr)) {
+    const start = cleaned.indexOf("[");
+    if (start !== -1) {
+      const body = cleaned.slice(start + 1);
+      const lastComplete = Math.max(body.lastIndexOf("},"), body.lastIndexOf("}\n"));
+      if (lastComplete > 0) {
+        const candidate = "[" + body.slice(0, lastComplete + 1).replace(/,\s*$/, "") + "]";
+        try {
+          const parsed = JSON.parse(candidate);
+          if (Array.isArray(parsed)) arr = parsed;
+        } catch {
+          // ignore
+        }
+      }
     }
   }
   if (!Array.isArray(arr)) return [];

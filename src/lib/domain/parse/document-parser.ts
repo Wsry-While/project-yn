@@ -261,12 +261,13 @@ async function parseDocumentBuffer(buffer: Buffer, fileName: string): Promise<Pa
 
   let fullText = '';
   if (kind === 'pdf') {
-    // pdf-parse 在某些打包环境下会读取测试文件；动态 import 并用 `.default`/模块本体兼容。
+    // pdf-parse 在不同打包环境下导出形态不一（函数本体 / { default } / { default: { default } }），
+    // 逐级解包，避免出现 "pdfParse is not a function"。
     const mod: unknown = await import('pdf-parse');
-    const pdfParse: (buf: Buffer) => Promise<{ text: string }> =
-      typeof (mod as { default?: unknown }).default === 'function'
-        ? ((mod as { default: (buf: Buffer) => Promise<{ text: string }> }).default)
-        : (mod as (buf: Buffer) => Promise<{ text: string }>);
+    const pdfParse = resolvePdfParse(mod);
+    if (!pdfParse) {
+      throw new Error('pdf-parse 模块加载异常：未找到可用的解析函数');
+    }
     const result = await pdfParse(buffer);
     fullText = result.text ?? '';
   } else if (kind === 'docx') {
@@ -450,3 +451,147 @@ export function extractScoringSection(text: string): { text: string; matched: bo
 
   return { text, matched: false };
 }
+
+/**
+ * 兼容 pdf-parse 在 ESM/CJS 互操作下的多种导出形态。
+ */
+function resolvePdfParse(mod: unknown): ((buf: Buffer) => Promise<{ text: string }>) | null {
+  const candidates: unknown[] = [
+    (mod as { default?: unknown } | null)?.default,
+    mod,
+    ((mod as { default?: { default?: unknown } } | null)?.default as { default?: unknown })?.default,
+  ];
+  for (const c of candidates) {
+    if (typeof c === 'function') return c as (buf: Buffer) => Promise<{ text: string }>;
+  }
+  return null;
+}
+
+export interface RequirementChunk {
+  /** 块内功能模块标题（用于 Prompt 上下文与进度提示） */
+  title: string;
+  /** 块正文 */
+  text: string;
+  /** 块序号（从 0 开始） */
+  index: number;
+}
+
+/**
+ * 按"标题级别 / 功能模块"把超长采购需求切成语义块，供 LLM 分块抽取，
+ * 避免单次输出 token 超限导致 JSON 被截断。
+ *
+ * 切分优先级：
+ * 1) 一级中文标题：一、二、… 或 1. / 1． 后跟模块名
+ * 2) 二级编号：1.1 / 2.3.1 后跟中文模块名
+ * 3) 独占一行的中文模块名（2~20 字，如"知识图谱建设"）
+ * 4) 以上都识别不到时，按目标字数滑动窗口切，切点对齐到最近的 ▲/数字 行首
+ *
+ * 每块目标 6000~10000 字；过短（<200 字）的块会被并入相邻块或丢弃。
+ */
+export function chunkRequirementsText(
+  text: string,
+  opts: { targetChars?: number; minChars?: number } = {},
+): RequirementChunk[] {
+  if (!text || text.trim().length === 0) return [];
+  const TARGET = opts.targetChars ?? 9000;
+  const MIN = opts.minChars ?? 300;
+
+  // 识别"模块边界行"：匹配到的行起点即为一个新块的开始。
+  const headingRe =
+    /(?:^|\n)\s*(?:(?:[一二三四五六七八九十百]+[、.．])|(?:\d{1,2}(?:[.．]\d+){0,3})[\s　])\s*[^\n]{2,40}/g;
+  const boundaryPos: number[] = [];
+  const boundaryTitles: string[] = [];
+  let hm: RegExpExecArray | null;
+  while ((hm = headingRe.exec(text)) !== null) {
+    const lineStart = text.lastIndexOf('\n', hm.index) + 1; // 行首（可能为 0）
+    const raw = text.slice(lineStart, hm.index + hm[0].length).trim();
+    boundaryPos.push(lineStart);
+    boundaryTitles.push(raw.replace(/\s+/g, ' '));
+  }
+
+  // 把全文按边界切成段
+  let segments: Array<{ title: string; text: string }> = [];
+  if (boundaryPos.length > 0) {
+    for (let i = 0; i < boundaryPos.length; i++) {
+      const start = boundaryPos[i];
+      const end = i + 1 < boundaryPos.length ? boundaryPos[i + 1] : text.length;
+      const seg = text.slice(start, end).trim();
+      if (seg.length >= MIN) {
+        segments.push({ title: boundaryTitles[i] || `模块 ${i + 1}`, text: seg });
+      } else if (segments.length > 0) {
+        // 短段并入上一段（通常是边界识别到了正文里的小序号）
+        segments[segments.length - 1].text += '\n' + seg;
+      }
+    }
+  }
+
+  // 若没有可用的标题边界，退化为按字数窗口切
+  if (segments.length === 0) {
+    segments = windowChunk(text, TARGET).map((t, i) => ({ title: `模块 ${i + 1}`, text: t }));
+  }
+
+  // 合并过短或过长的段，使每块接近 TARGET
+  const merged = mergeSegments(segments, TARGET);
+
+  return merged.map((s, idx) => ({ title: s.title, text: s.text, index: idx }));
+}
+
+/**
+ * 按目标字数滑动窗口切分，切点对齐到最近的 ▲/★/数字 行首，避免从一条参数中间砍断。
+ */
+function windowChunk(text: string, target: number): string[] {
+  const chunks: string[] = [];
+  let pos = 0;
+  while (pos < text.length) {
+    const idealEnd = Math.min(text.length, pos + target);
+    if (idealEnd >= text.length) {
+      chunks.push(text.slice(pos).trim());
+      break;
+    }
+    // 在 [idealEnd-2000, idealEnd+1000] 范围内找最近的"行首带 ▲/★/数字"的位置作为切点
+    const searchFrom = Math.max(pos, idealEnd - 2000);
+    const window = text.slice(searchFrom, idealEnd + 1000);
+    const lineRe = /[\r\n]\s*(?:[▲★●]|\d{1,2}[.．、])/g;
+    let cut = -1;
+    let m: RegExpExecArray | null;
+    while ((m = lineRe.exec(window)) !== null) {
+      const abs = searchFrom + m.index;
+      if (abs > pos + 1000) {
+        cut = abs;
+        break;
+      }
+    }
+    const end = cut > 0 ? cut : idealEnd;
+    chunks.push(text.slice(pos, end).trim());
+    pos = end;
+  }
+  return chunks.filter((c) => c.length > 0);
+}
+
+/**
+ * 把段落合并到接近 target 字数；单段超过 1.6×target 的，用 windowChunk 再切。
+ */
+function mergeSegments(
+  segments: Array<{ title: string; text: string }>,
+  target: number,
+): Array<{ title: string; text: string }> {
+  const out: Array<{ title: string; text: string }> = [];
+  for (const seg of segments) {
+    if (seg.text.length > target * 1.6) {
+      // 先把已累积的收尾
+      const subs = windowChunk(seg.text, target).map((t, i) => ({
+        title: i === 0 ? seg.title : `${seg.title}（${i + 1}）`,
+        text: t,
+      }));
+      out.push(...subs);
+    } else if (out.length > 0 && out[out.length - 1].text.length + seg.text.length < target * 1.3) {
+      // 与上一块合并仍不超 1.3×target，就并入
+      const last = out[out.length - 1];
+      last.text += '\n\n' + seg.text;
+    } else {
+      out.push({ ...seg });
+    }
+  }
+  return out.filter((s) => s.text.trim().length > 0);
+}
+
