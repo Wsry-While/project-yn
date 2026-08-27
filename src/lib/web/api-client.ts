@@ -71,6 +71,7 @@ export function apiFetchSSE(
     onDone: () => void;
     onError: (err: Error) => void;
     onMeta?: (meta: unknown) => void;
+    onStep?: (step: { phase?: string; message?: string; [k: string]: unknown }) => void;
   },
 ): () => void {
   const controller = new AbortController();
@@ -102,14 +103,16 @@ export function apiFetchSSE(
           if (!payload) continue;
           try {
             const evt = JSON.parse(payload) as {
-              type: 'delta' | 'done' | 'error' | 'meta';
+              type: 'delta' | 'done' | 'error' | 'meta' | 'step';
               content?: string;
               message?: string;
+              phase?: string;
               [k: string]: unknown;
             };
             if (evt.type === 'delta' && evt.content) handlers.onDelta(evt.content);
             else if (evt.type === 'done') handlers.onDone();
             else if (evt.type === 'meta') handlers.onMeta?.(evt);
+            else if (evt.type === 'step') handlers.onStep?.(evt);
             else if (evt.type === 'error') throw new Error(evt.message ?? '流式响应错误');
           } catch (err) {
             handlers.onError(err instanceof Error ? err : new Error(String(err)));

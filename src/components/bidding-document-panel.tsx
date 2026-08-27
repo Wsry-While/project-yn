@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { apiFetch, apiFetchSSE } from "@/lib/web/api-client";
 import { showToast } from "@/lib/web/toast-store";
+import { usePermissions } from "@/lib/web/use-permissions";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
@@ -75,6 +76,7 @@ const PRIORITY_TONE: Record<BiddingFollowupPriority, "danger" | "warning" | "bra
 };
 
 export function BiddingDocumentPanel({ record }: PanelProps) {
+  const { isSuperAdmin } = usePermissions();
   const [bundle, setBundle] = useState<DocumentBundle | null>(null);
   const [items, setItems] = useState<BiddingScoreItem[]>([]);
   const [tasks, setTasks] = useState<BiddingFollowupTask[]>([]);
@@ -135,6 +137,10 @@ export function BiddingDocumentPanel({ record }: PanelProps) {
 
   const generate = async () => {
     if (generating) return;
+    if (bundle && !isSuperAdmin) {
+      showToast("该项目已生成过交付文档，重新生成会覆盖当前结果，请联系超级管理员操作。", { kind: "info" });
+      return;
+    }
     setGenerating(true);
     setStreamLog("");
     let acc = "";
@@ -150,12 +156,18 @@ export function BiddingDocumentPanel({ record }: PanelProps) {
             setStreamLog((prev) => `${prev}\n▸ ${m.message}`);
           }
         },
+        onStep: (step) => {
+          if (step.message) {
+            setStreamLog((prev) => `${prev}\n▸ ${step.message}`);
+          }
+        },
         onDelta: (text) => {
           acc += text;
           setStreamLog((prev) => `${prev}${text}`);
         },
         onDone: () => {
           setGenerating(false);
+          showToast("交付文档生成完成", { kind: "success" });
           fetchDoc();
         },
         onError: (err) => {
@@ -243,13 +255,14 @@ export function BiddingDocumentPanel({ record }: PanelProps) {
             className="h-7 rounded-sm bg-brand text-white hover:bg-brand/90"
             onClick={generate}
             disabled={generating}
+            title={bundle && !isSuperAdmin ? "重新生成需要超级管理员权限" : undefined}
           >
             {generating ? (
               <Loader2 className="h-3 w-3 animate-spin" />
             ) : (
               <Sparkles className="h-3 w-3" />
             )}
-            {bundle ? "重新生成" : "生成文档"}
+            {bundle ? (isSuperAdmin ? "重新生成" : "已生成") : "生成文档"}
           </Button>
         </div>
       </header>

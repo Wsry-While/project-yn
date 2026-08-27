@@ -625,6 +625,13 @@ async function extractRequirementsWithLlm(
     if (text) buffer += text;
   }
   const items = parseScoreItemsJson(buffer);
+  if (!items.length) {
+    // 诊断日志：把 LLM 原始输出尾部 500 字记录下来，便于排查
+    console.warn(
+      "[bidding/extract-requirements] LLM 返回无法解析为评分项数组，原文尾部：",
+      buffer.slice(-500),
+    );
+  }
   // 后处理：过滤掉 LLM 可能仍然返回的文档类项（实施方案、培训、业绩等），
   // 并对 itemType/deliveryMethod 做归一化
   const documentBlocklist = [
@@ -665,30 +672,66 @@ function parseRulesJson(text: string): RawScoreRules {
 }
 
 function parseScoreItemsJson(text: string): RawScoreItem[] {
-  // 去除 ```json 包裹
-  const cleaned = text.replace(/```(?:json)?/gi, "").trim();
-  const start = cleaned.indexOf("[");
-  const end = cleaned.lastIndexOf("]");
-  if (start === -1 || end === -1 || end <= start) return [];
-  try {
-    const arr = JSON.parse(cleaned.slice(start, end + 1));
-    if (!Array.isArray(arr)) return [];
-    return arr
-      .filter((it) => it && typeof it.title === "string")
-      .map((it, idx) => ({
-        itemNo: typeof it.itemNo === "number" ? it.itemNo : idx + 1,
-        title: String(it.title).trim(),
-        requirement: it.requirement != null ? String(it.requirement) : null,
-        scoreValue: it.scoreValue != null ? Number(it.scoreValue) : null,
-        category: it.category != null ? String(it.category) : null,
-        itemType: normalizeItemType(it.itemType),
-        deliveryMethod: normalizeDeliveryMethod(it.deliveryMethod),
-        sourceSection:
-          it.sourceSection != null ? String(it.sourceSection) : "采购需求",
-      }));
-  } catch {
-    return [];
+  // 去除 ```json 等代码块包裹
+  let cleaned = text.replace(/```(?:json)?/gi, "").trim();
+
+  // 1) 优先定位数组
+  let arrStart = cleaned.indexOf("[");
+  let arrEnd = cleaned.lastIndexOf("]");
+  let arr: unknown = null;
+  if (arrStart !== -1 && arrEnd > arrStart) {
+    try {
+      arr = JSON.parse(cleaned.slice(arrStart, arrEnd + 1));
+    } catch {
+      arr = null;
+    }
   }
+  // 2) 回退：LLM 有时会包一层 { items: [...] } 或 { data: [...] }
+  if (!Array.isArray(arr)) {
+    const objStart = cleaned.indexOf("{");
+    const objEnd = cleaned.lastIndexOf("}");
+    if (objStart !== -1 && objEnd > objStart) {
+      try {
+        const obj = JSON.parse(cleaned.slice(objStart, objEnd + 1)) as Record<string, unknown>;
+        if (Array.isArray(obj.items)) arr = obj.items;
+        else if (Array.isArray(obj.data)) arr = obj.data;
+        else if (Array.isArray(obj.result)) arr = obj.result;
+        else if (Array.isArray(obj.scoreItems)) arr = obj.scoreItems;
+      } catch {
+        // ignore
+      }
+    }
+  }
+  // 3) 最后兜底：尝试修复常见 LLM 输出问题（尾逗号、单引号）
+  if (!Array.isArray(arr)) {
+    try {
+      const fixed = cleaned
+        .replace(/,\s*([}\]])/g, "$1")
+        .replace(/'([^']*)'/g, (_, s: string) => `"${s.replace(/"/g, '\\"')}"`);
+      const start = fixed.indexOf("[");
+      const end = fixed.lastIndexOf("]");
+      if (start !== -1 && end > start) {
+        arr = JSON.parse(fixed.slice(start, end + 1));
+      }
+    } catch {
+      // ignore
+    }
+  }
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .filter((it): it is Record<string, unknown> => !!it && typeof it === "object")
+    .map((it, idx) => ({
+      itemNo: typeof it.itemNo === "number" ? it.itemNo : idx + 1,
+      title: String(it.title ?? it.name ?? "").trim(),
+      requirement: it.requirement != null ? String(it.requirement) : null,
+      scoreValue: it.scoreValue != null ? Number(it.scoreValue) : null,
+      category: it.category != null ? String(it.category) : null,
+      itemType: normalizeItemType(it.itemType),
+      deliveryMethod: normalizeDeliveryMethod(it.deliveryMethod),
+      sourceSection:
+        it.sourceSection != null ? String(it.sourceSection) : "采购需求",
+    }))
+    .filter((it) => it.title.length > 0);
 }
 
 // ============== 匹配知识库 ==============

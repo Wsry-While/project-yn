@@ -3,12 +3,13 @@
  *
  * - PDF 使用 pdf-parse
  * - docx 使用 mammoth
- * - 老版 .doc / 其他格式不支持纯文本解析，返回 unsupported
+ * - 老版 .doc 使用 word-extractor（纯 JS，无需系统依赖）
  * - 超长文本自动截断，避免灌入模型时 token 爆炸
  */
+import WordExtractor from 'word-extractor';
 import { resolveAssetDownload } from '../asset-access';
 
-export type ParseKind = 'pdf' | 'docx' | 'unsupported';
+export type ParseKind = 'pdf' | 'docx' | 'doc' | 'unsupported';
 
 export interface ParsedDocument {
   kind: ParseKind;
@@ -19,12 +20,13 @@ export interface ParsedDocument {
   fileName: string;
 }
 
-const MAX_TEXT_CHARS = 60_000;
+const MAX_TEXT_CHARS = 120_000;
 
 function inferKind(fileName: string): ParseKind {
   const name = fileName.toLowerCase();
   if (name.endsWith('.pdf')) return 'pdf';
   if (name.endsWith('.docx')) return 'docx';
+  if (name.endsWith('.doc')) return 'doc';
   return 'unsupported';
 }
 
@@ -272,6 +274,13 @@ async function parseDocumentBuffer(buffer: Buffer, fileName: string): Promise<Pa
     const mammoth = mod as { extractRawText: (input: { buffer: Buffer }) => Promise<{ value: string }> };
     const result = await mammoth.extractRawText({ buffer });
     fullText = result.value ?? '';
+  } else if (kind === 'doc') {
+    // 老版 .doc（OLE 复合文档），word-extractor 纯 JS 实现，无需系统依赖
+    const extractor = new WordExtractor();
+    const doc = await extractor.extract(buffer);
+    fullText = [doc.getBody(), doc.getFootnotes(), doc.getHeaders(), doc.getEndnotes()]
+      .filter(Boolean)
+      .join('\n');
   }
 
   const truncated = fullText.length > MAX_TEXT_CHARS;
