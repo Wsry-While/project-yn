@@ -1,22 +1,29 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
-  CalendarClock,
-  CheckCircle2,
-  Clock,
-  FileText,
-  UserRound,
+  Pencil,
+  Paperclip,
+  AlertTriangle,
+  Download,
+  RefreshCw,
+  ExternalLink,
 } from 'lucide-react';
-import { biddingScreenshotWebService } from '@/lib/web/bidding-screenshot-web-service';
 import { showToast } from '@/lib/web/toast-store';
 import { exportCsv, datedName } from '@/lib/web/csv-export';
-import { LlmLoadingMask } from '@/components/llm-loading-mask';
+import { apiFetch } from '@/lib/web/api-client';
 import { Modal } from '@/components/modal';
-import { AttachmentList, AttachmentLink } from '@/components/attachment-viewer';
-import { BiddingAiPanel } from '@/components/bidding-ai-panel';
 import { PageHeader } from '@/components/page-header';
-import { Badge } from '@/components/ui/badge';
+import { Badge, toneFromStatus } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Pagination } from '@/components/ui/pagination';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import {
   Select,
   SelectContent,
@@ -24,67 +31,41 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import type { BiddingScreenshot } from '@/lib/domain/types';
+import { Textarea } from '@/components/ui/textarea';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import type { BiddingFileRef, BiddingScreenshot } from '@/lib/domain/types';
 import { useServerPaginatedList } from '@/hooks/use-server-paginated-list';
-import { ListContainer, ListBody, ListEmpty } from '@/components/list-container';
+import { ListContainer } from '@/components/list-container';
 import { ListToolbar } from '@/components/list-toolbar';
-import { cn } from '@/lib/utils';
-
-const PAGE_SIZE = 20;
+import { EmptyState } from '@/components/crud/empty-state';
+import { Descriptions } from '@/components/crud/descriptions';
+import { Can } from '@/components/crud/can';
 
 interface BiddingFilters extends Record<string, string> {
   search: string;
   completionStatus: string;
+  salesManager: string;
   overdue: string;
-}
-
-type BadgeTone = 'success' | 'warning' | 'brand' | 'neutral' | 'danger';
-const STATUS_TONE: Record<string, BadgeTone> = {
-  已完成: 'success',
-  已交付: 'success',
-  待交付: 'warning',
-  处理中: 'brand',
-};
-
-const STATUS_OPTIONS = ['已完成', '已交付', '待交付', '处理中'];
-
-function statusMeta(status: string | null): { label: string; tone: BadgeTone } {
-  if (status && STATUS_TONE[status]) return { label: status, tone: STATUS_TONE[status] };
-  return { label: status || '待处理', tone: 'neutral' };
-}
-
-function isOverdue(row: BiddingScreenshot): boolean {
-  if (!row.dueDeliveryDate) return false;
-  if (row.completionStatus === '已完成' || row.completionStatus === '已交付') return false;
-  const today = new Date().toISOString().slice(0, 10);
-  return row.dueDeliveryDate < today;
 }
 
 export function BiddingScreenshotsView() {
   const [detail, setDetail] = useState<BiddingScreenshot | null>(null);
-  const [focusId, setFocusId] = useState<string | null>(null);
+  const [editing, setEditing] = useState<BiddingScreenshot | null>(null);
+  const [retrying, setRetrying] = useState<string | null>(null);
 
   const list = useServerPaginatedList<BiddingScreenshot, BiddingFilters>({
     endpoint: '/api/bidding-screenshots',
-    pageSize: PAGE_SIZE,
-    initialFilters: { search: '', completionStatus: '', overdue: '' },
-    errorMessage: '加载招投标截图失败',
+    pageSize: 20,
+    initialFilters: { search: '', completionStatus: '', salesManager: '', overdue: '' },
+    errorMessage: '加载招投标截图记录失败',
   });
 
-  const refresh = () => list.refresh();
-
   useEffect(() => {
-    refresh();
+    list.refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const focus = params.get('focus');
-    if (focus) setFocusId(focus);
-  }, []);
-
-  // 详情弹窗数据随列表刷新同步（附件转存状态等）
   useEffect(() => {
     if (!detail) return;
     const fresh = list.rows.find((r) => r.id === detail.id);
@@ -92,211 +73,579 @@ export function BiddingScreenshotsView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [list.rows]);
 
-  const overdueOnly = list.filters.overdue === '1';
+  const salesOptions = useMemo(() => {
+    const s = new Set<string>();
+    list.rows.forEach((r) => r.salesManager && s.add(r.salesManager));
+    return [...s].sort();
+  }, [list.rows]);
+
+  const completionOptions = useMemo(() => {
+    const s = new Set<string>();
+    list.rows.forEach((r) => r.completionStatus && s.add(r.completionStatus));
+    return [...s].sort();
+  }, [list.rows]);
+
+  const reset = () => {
+    list.setSearchInput('');
+    list.setFilter('completionStatus', '');
+    list.setFilter('salesManager', '');
+    list.setFilter('overdue', '');
+    list.setPage(1);
+  };
 
   const handleExport = async () => {
     try {
       const all = await list.fetchAll();
-      if (all.length === 0) {
-        showToast('当前筛选结果为空，无法导出', { kind: 'info' });
+      if (!all.length) {
+        showToast('当前筛选结果为空', { kind: 'info' });
         return;
       }
       exportCsv(datedName('招投标截图'), [
-        { header: '项目名称', get: (r) => r.projectName },
-        { header: '学校', get: (r) => r.projectSchool },
-        { header: '二级单位', get: (r) => r.projectSecondaryUnit },
         { header: '销售经理', get: (r) => r.salesManager },
-        { header: '项目经理', get: (r) => r.assignedProjectManager },
-        { header: '类别', get: (r) => r.projectCategory.join('、') },
-        { header: '是否公司参数', get: (r) => (r.isCompanyParameter ? '是' : '否') },
+        { header: '项目名称', get: (r) => r.projectName },
+        { header: '项目所属学校', get: (r) => r.projectSchool },
+        { header: '二级单位', get: (r) => r.projectSecondaryUnit },
         { header: '提交日期', get: (r) => r.submissionDate },
         { header: '需交付日期', get: (r) => r.dueDeliveryDate },
         { header: '预留天数', get: (r) => r.reservedDays },
-        { header: '完成状态', get: (r) => r.completionStatus },
-        { header: '是否满足截图需求', get: (r) =>
-          r.isMeetScreenshotRequirement === null ? '' : r.isMeetScreenshotRequirement ? '是' : '否' },
-        { header: '交付备注', get: (r) => r.deliveryRemark },
-        { header: '销售反馈', get: (r) => r.salesFeedback },
-        { header: '整改反馈', get: (r) => r.rectificationFeedback },
-        { header: '附件数', get: (r) => r.attachments.length },
+        { header: '完成情况', get: (r) => r.completionStatus },
+        { header: '类别', get: (r) => r.projectCategory.join('、') },
+        { header: '项目经理', get: (r) => r.assignedProjectManager },
       ], all);
-      showToast(`已导出 ${all.length} 条招投标记录`, { kind: 'success' });
+      showToast(`已导出 ${all.length} 条`, { kind: 'success' });
     } catch (err) {
       showToast(err instanceof Error ? err.message : '导出失败', { kind: 'error' });
     }
   };
 
+  const retryAttachment = async (file: BiddingFileRef) => {
+    if (!file.assetId) return;
+    setRetrying(file.assetId);
+    try {
+      await apiFetch(`/api/files/${file.assetId}/retry`, { method: 'POST' });
+      showToast('已触发重新转存', { kind: 'success' });
+      list.refresh();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : '重试失败', { kind: 'error' });
+    } finally {
+      setRetrying(null);
+    }
+  };
+
+  const saveEdit = async (patch: Partial<BiddingScreenshot>) => {
+    if (!editing) return;
+    const updated = await apiFetch<BiddingScreenshot>(`/api/bidding-screenshots/${editing.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    });
+    setEditing(null);
+    setDetail(updated);
+    list.refresh();
+    showToast('已保存修改', { kind: 'success' });
+  };
+
   return (
-    <LlmLoadingMask loading={list.loading} label="加载招投标截图…" className="min-h-[70vh]">
-      <ListContainer>
-        <PageHeader
-          icon={FileText}
-          title="招投标截图"
-          subtitle={`数据由第三方系统推送，共 ${list.total} 条，系统内仅查看与筛选。`}
-          breadcrumb={[{ label: '工作台' }, { label: '招投标截图' }]}
-        />
+    <ListContainer>
+      <PageHeader
+        title="招投标截图"
+        subtitle={`第三方推送数据，共 ${list.total} 条；本页只读，可由超管修正交付状态。`}
+      />
+      <ListToolbar
+        search={{
+          value: list.searchInput,
+          onChange: list.setSearchInput,
+          onSubmit: () => list.setPage(1),
+          placeholder: '搜索项目名称、学校、销售',
+        }}
+        filters={
+          <>
+            <Select
+              value={list.filters.completionStatus || '__all__'}
+              onValueChange={(v) => list.setFilter('completionStatus', v === '__all__' ? '' : v)}
+            >
+              <SelectTrigger size="sm" className="h-8 w-[140px] rounded-sm text-xs">
+                <SelectValue placeholder="完成情况" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">全部状态</SelectItem>
+                {completionOptions.map((c) => (
+                  <SelectItem key={c} value={c}>{c}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select
+              value={list.filters.salesManager || '__all__'}
+              onValueChange={(v) => list.setFilter('salesManager', v === '__all__' ? '' : v)}
+            >
+              <SelectTrigger size="sm" className="h-8 w-[130px] rounded-sm text-xs">
+                <SelectValue placeholder="销售经理" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">全部销售</SelectItem>
+                {salesOptions.map((c) => (
+                  <SelectItem key={c} value={c}>{c}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select
+              value={list.filters.overdue || '__all__'}
+              onValueChange={(v) => list.setFilter('overdue', v === '__all__' ? '' : v)}
+            >
+              <SelectTrigger size="sm" className="h-8 w-[120px] rounded-sm text-xs">
+                <SelectValue placeholder="逾期" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">全部</SelectItem>
+                <SelectItem value="1">仅逾期</SelectItem>
+                <SelectItem value="0">仅未逾期</SelectItem>
+              </SelectContent>
+            </Select>
+          </>
+        }
+        onSubmit={() => list.setPage(1)}
+        onReset={reset}
+        onRefresh={list.refresh}
+        refreshing={list.loading}
+        onExport={handleExport}
+        exportDisabled={list.total === 0}
+        total={list.total}
+      />
 
-        <ListToolbar
-          search={{
-            value: list.searchInput,
-            onChange: list.setSearchInput,
-            placeholder: '搜索项目、学校、销售',
-          }}
-          filters={
-            <>
-              <Select
-                value={list.filters.completionStatus || '__all__'}
-                onValueChange={(v) => list.setFilter('completionStatus', v === '__all__' ? '' : v)}
-              >
-                <SelectTrigger size="sm" className="h-8 w-[140px] text-xs">
-                  <SelectValue placeholder="完成状态" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__all__">全部状态</SelectItem>
-                  {STATUS_OPTIONS.map((s) => (
-                    <SelectItem key={s} value={s}>{s}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <button
-                type="button"
-                onClick={() => list.setFilter('overdue', overdueOnly ? '' : '1')}
-                className={cn(
-                  'h-8 rounded-md border px-2.5 text-xs transition',
-                  overdueOnly
-                    ? 'border-status-danger/40 bg-status-danger/10 text-status-danger'
-                    : 'border-border text-muted-foreground hover:text-foreground',
-                )}
-              >
-                仅逾期
-              </button>
-            </>
-          }
-          onRefresh={refresh}
-          refreshing={list.loading}
-          onExport={handleExport}
-          exportDisabled={list.total === 0}
-          total={list.total}
-        />
-
-        <div className="hidden grid-cols-[1.4fr_1fr_.9fr_.9fr_.8fr_.8fr] gap-3 border-b border-border bg-muted/30 px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground lg:grid">
-          <span>项目 / 学校</span>
-          <span>销售 / 项目经理</span>
-          <span>提交 / 截止</span>
-          <span>类别 / 文件</span>
-          <span>状态</span>
-          <span className="text-right">预留天数</span>
-        </div>
-        <ListBody>
-          {list.rows.map((row) => {
-            const meta = statusMeta(row.completionStatus);
-            const overdue = isOverdue(row);
-            const isFocus = focusId === row.id;
+      <Table>
+        <TableHeader>
+          <TableRow className="hover:bg-muted/60">
+            <TableHead className="min-w-[240px]">项目</TableHead>
+            <TableHead className="w-[160px]">销售 / 经理</TableHead>
+            <TableHead className="w-[120px]">提交 / 交付</TableHead>
+            <TableHead className="w-[100px]">预留天数</TableHead>
+            <TableHead className="w-[120px]">完成情况</TableHead>
+            <TableHead className="w-[100px] text-right">附件</TableHead>
+            <TableHead className="w-[80px] text-right">操作</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {list.loading && list.rows.length === 0 && (
+            <TableRow>
+              <TableCell colSpan={7} className="py-16 text-center text-muted-foreground">加载中…</TableCell>
+            </TableRow>
+          )}
+          {!list.loading && list.rows.length === 0 && (
+            <TableRow>
+              <TableCell colSpan={7}>
+                <EmptyState title="暂无招投标截图记录" description="等待第三方系统推送数据" />
+              </TableCell>
+            </TableRow>
+          )}
+          {list.rows.map((b) => {
+            const overdue = b.dueDeliveryDate ? new Date(b.dueDeliveryDate).getTime() < Date.now() && !b.completionStatus : false;
             return (
-              <button
-                type="button"
-                key={row.id}
-                onClick={() => setDetail(row)}
-                className={cn(
-                  'grid w-full grid-cols-1 gap-2 px-4 py-3 text-left transition hover:bg-muted/30 lg:grid-cols-[1.4fr_1fr_.9fr_.9fr_.8fr_.8fr] lg:items-center lg:gap-3',
-                  isFocus && 'bg-brand/5 ring-1 ring-inset ring-brand/40',
-                )}
-              >
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-medium">{row.projectName}</div>
-                  <div className="mt-0.5 truncate text-xs text-muted-foreground">{row.projectSchool}</div>
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  <div className="inline-flex items-center gap-1"><UserRound className="h-3 w-3" />{row.salesManager}</div>
-                  <div className="mt-0.5">{row.assignedProjectManager || '未指派'}</div>
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  <div>提交 {row.submissionDate}</div>
-                  <div
-                    className={cn(
-                      'mt-0.5 inline-flex items-center gap-1',
-                      overdue && 'text-status-danger',
+              <TableRow key={b.id} className="cursor-pointer" onClick={() => setDetail(b)}>
+                <TableCell>
+                  <div className="flex items-center gap-1.5">
+                    <span className="truncate text-sm font-medium">{b.projectName}</span>
+                    {b.isCompanyParameter && (
+                      <Badge tone="brand" className="shrink-0">公司参数</Badge>
                     )}
-                  >
-                    <CalendarClock className="h-3 w-3" />
-                    {row.dueDeliveryDate || '—'}
                   </div>
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  <div>{row.projectCategory?.length ? row.projectCategory.join('、') : '—'}</div>
-                  <div className="mt-0.5">{row.projectBiddingFile ? '含招标文件' : '无招标文件'}</div>
-                </div>
-                <Badge tone={meta.tone} dot={overdue && meta.tone !== 'danger'}>
-                  {row.completionStatus === '已完成' || row.completionStatus === '已交付' ? (
-                    <CheckCircle2 className="h-3 w-3" />
-                  ) : (
-                    <Clock className="h-3 w-3" />
-                  )}
-                  {meta.label}
-                </Badge>
-                <div className="text-right text-xs text-muted-foreground">
-                  {row.reservedDays ?? '—'} 天
-                </div>
-              </button>
+                  <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                    {b.projectSchool}
+                    {b.projectSecondaryUnit ? ` · ${b.projectSecondaryUnit}` : ''}
+                  </div>
+                </TableCell>
+                <TableCell className="text-xs text-muted-foreground">
+                  <div>{b.salesManager || '—'}</div>
+                  <div className="mt-0.5">{b.assignedProjectManager || '—'}</div>
+                </TableCell>
+                <TableCell className="text-xs text-muted-foreground">
+                  <div>提交：{b.submissionDate || '—'}</div>
+                  <div className={overdue ? 'text-status-danger' : ''}>
+                    交付：{b.dueDeliveryDate || '—'}
+                    {overdue && <AlertTriangle className="ml-1 inline h-3 w-3" />}
+                  </div>
+                </TableCell>
+                <TableCell className="text-xs">{b.reservedDays ?? '—'}</TableCell>
+                <TableCell>
+                  <Badge tone={toneFromStatus(b.completionStatus)}>
+                    {b.completionStatus || '待处理'}
+                  </Badge>
+                </TableCell>
+                <TableCell className="text-right">
+                  <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                    <Paperclip className="h-3 w-3" />
+                    {b.attachments.length}
+                  </span>
+                </TableCell>
+                <TableCell className="text-right">
+                  <Can perm="bidding:edit">
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      className="h-7 rounded-sm px-2 text-brand"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditing(b);
+                      }}
+                    >
+                      <Pencil className="h-3 w-3" />
+                      编辑
+                    </Button>
+                  </Can>
+                </TableCell>
+              </TableRow>
             );
           })}
-          {list.rows.length === 0 && !list.loading && (
-            <ListEmpty>暂无招投标截图记录</ListEmpty>
-          )}
-        </ListBody>
-        {list.totalPages > 1 && (
-          <Pagination page={list.page} pageSize={list.pageSize} total={list.total} onPageChange={list.setPage} />
-        )}
-      </ListContainer>
+        </TableBody>
+      </Table>
 
-      <Modal open={!!detail} onClose={() => setDetail(null)} title={detail?.projectName ?? '招投标截图详情'} description={detail?.projectSchool} size="xl">
-        {detail && (
-          <div className="space-y-5">
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              <Detail label="销售经理">{detail.salesManager}</Detail>
-              <Detail label="项目经理">{detail.assignedProjectManager || '—'}</Detail>
-              <Detail label="所属学校">{detail.projectSchool}</Detail>
-              <Detail label="二级单位">{detail.projectSecondaryUnit || '—'}</Detail>
-              <Detail label="项目类别">{detail.projectCategory?.length ? detail.projectCategory.join('、') : '—'}</Detail>
-              <Detail label="公司参数">{detail.isCompanyParameter ? '是' : '否'}</Detail>
-              <Detail label="提交日期">{detail.submissionDate}</Detail>
-              <Detail label="需交付日期">{detail.dueDeliveryDate || '—'}</Detail>
-              <Detail label="预留天数">{detail.reservedDays ?? '—'}</Detail>
-              <Detail label="完成情况">{detail.completionStatus || '—'}</Detail>
-              <Detail label="按需求完成">{detail.isMeetScreenshotRequirement === null ? '—' : detail.isMeetScreenshotRequirement ? '是' : '否'}</Detail>
-              <Detail label="附件数">{detail.attachments.length}</Detail>
-            </div>
-            <Detail label="截图需求说明">
-              <p className="whitespace-pre-wrap text-sm text-muted-foreground">{detail.screenshotRequirement || '—'}</p>
-            </Detail>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Detail label="项目招标文件"><AttachmentLink file={detail.projectBiddingFile} fallbackLabel="项目招标文件" variant="doc" business="bidding" externalId={detail.id} field="projectBiddingFile" onRetried={refresh} /></Detail>
-              <Detail label="交付文档上传"><AttachmentLink file={detail.deliveryDocument} fallbackLabel="交付文档" variant="doc" business="bidding" externalId={detail.id} field="deliveryDocument" onRetried={refresh} /></Detail>
-              <Detail label="整改后文档"><AttachmentLink file={detail.rectifiedDocument} fallbackLabel="整改后文档" variant="doc" business="bidding" externalId={detail.id} field="rectifiedDocument" onRetried={refresh} /></Detail>
-              <Detail label="附件材料"><AttachmentList files={detail.attachments} business="bidding" externalId={detail.id} field="attachments" onRetried={refresh} /></Detail>
-            </div>
-            <BiddingAiPanel record={detail} />
-            <Detail label="交付信息备注">
-              <p className="whitespace-pre-wrap text-sm text-muted-foreground">{detail.deliveryRemark || '—'}</p>
-            </Detail>
-            <Detail label="销售反馈意见">
-              <p className="whitespace-pre-wrap text-sm text-muted-foreground">{detail.salesFeedback || '—'}</p>
-            </Detail>
-            <Detail label="整改情况反馈">
-              <p className="whitespace-pre-wrap text-sm text-muted-foreground">{detail.rectificationFeedback || '—'}</p>
-            </Detail>
-          </div>
-        )}
-      </Modal>
-    </LlmLoadingMask>
+      {list.totalPages > 1 && (
+        <div className="border-t border-border p-3">
+          <Pagination page={list.page} pageSize={list.pageSize} total={list.total} onPageChange={list.setPage} />
+        </div>
+      )}
+
+      <BiddingDetailModal
+        record={detail}
+        onClose={() => setDetail(null)}
+        onEdit={() => { if (detail) { setEditing(detail); setDetail(null); } }}
+        onRetry={retryAttachment}
+        retryingId={retrying}
+      />
+      {editing && (
+        <BiddingEditDrawer
+          record={editing}
+          completionOptions={completionOptions}
+          onClose={() => setEditing(null)}
+          onSubmit={saveEdit}
+        />
+      )}
+    </ListContainer>
   );
 }
 
-function Detail({ label, children }: { label: string; children: React.ReactNode }) {
+function BiddingDetailModal({
+  record,
+  onClose,
+  onEdit,
+  onRetry,
+  retryingId,
+}: {
+  record: BiddingScreenshot | null;
+  onClose: () => void;
+  onEdit: () => void;
+  onRetry: (f: BiddingFileRef) => void;
+  retryingId: string | null;
+}) {
+  const rawJson = useMemo(() => {
+    if (!record) return '';
+    return JSON.stringify({ meta: record.rawMeta, payload: record.rawPayload }, null, 2);
+  }, [record]);
+
   return (
-    <div className="space-y-1">
-      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className="text-sm">{children ?? '—'}</div>
+    <Modal
+      open={!!record}
+      onClose={onClose}
+      title={record?.projectName ?? '招投标截图详情'}
+      description={record ? `${record.projectSchool} · 提交 ${record.submissionDate}` : undefined}
+      size="xl"
+      footer={
+        record ? (
+          <div className="flex justify-end gap-2">
+            <Can perm="bidding:edit">
+              <Button size="sm" className="rounded-sm" onClick={onEdit}>
+                <Pencil className="h-3.5 w-3.5" />
+                编辑
+              </Button>
+            </Can>
+          </div>
+        ) : null
+      }
+    >
+      {record && (
+        <div className="space-y-4">
+          <Descriptions
+            column={3}
+            items={[
+              { label: '销售经理', children: record.salesManager || '—' },
+              { label: '项目经理', children: record.assignedProjectManager || '—' },
+              {
+                label: '公司参数',
+                children: record.isCompanyParameter ? '是' : '否',
+              },
+              { label: '项目所属学校', children: record.projectSchool },
+              { label: '二级单位', children: record.projectSecondaryUnit || '—' },
+              {
+                label: '提交日期',
+                children: record.submissionDate || '—',
+              },
+              {
+                label: '需交付日期',
+                children: record.dueDeliveryDate || '—',
+              },
+              { label: '预留天数', children: record.reservedDays ?? '—' },
+              {
+                label: '类别',
+                children: record.projectCategory.length
+                  ? record.projectCategory.map((c) => (
+                      <Badge key={c} tone="info" className="mr-1">{c}</Badge>
+                    ))
+                  : '—',
+              },
+              { label: '完成情况', children: record.completionStatus || '—' },
+              {
+                label: '需求达成',
+                children:
+                  record.isMeetScreenshotRequirement === true
+                    ? '是'
+                    : record.isMeetScreenshotRequirement === false
+                      ? '否'
+                      : '—',
+              },
+              { label: ' ', children: ' ' },
+            ]}
+          />
+          <Descriptions
+            column={1}
+            title="截图需求"
+            items={[
+              {
+                label: '详情',
+                children: (
+                  <pre className="whitespace-pre-wrap rounded-sm bg-muted/30 p-3 text-xs leading-relaxed">
+                    {record.screenshotRequirement || '—'}
+                  </pre>
+                ),
+              },
+            ]}
+          />
+          <Descriptions
+            column={1}
+            title="交付信息"
+            items={[
+              { label: '交付文档', children: <FileLink file={record.deliveryDocument} onRetry={onRetry} retrying={retryingId === record.deliveryDocument?.assetId} /> },
+              { label: '交付备注', children: record.deliveryRemark || '—' },
+              { label: '销售反馈', children: record.salesFeedback || '—' },
+            ]}
+          />
+          {record.attachments.length > 0 && (
+            <Descriptions
+              column={1}
+              title={`交付附件（${record.attachments.length}）`}
+              items={[
+                {
+                  label: '附件',
+                  children: (
+                    <div className="space-y-1.5">
+                      {record.attachments.map((f, i) => (
+                        <FileLink
+                          key={f.assetId || f.objectId || i}
+                          file={f}
+                          onRetry={onRetry}
+                          retrying={retryingId === f.assetId}
+                        />
+                      ))}
+                    </div>
+                  ),
+                },
+              ]}
+            />
+          )}
+          {(record.rectificationFeedback || record.rectifiedDocument) && (
+            <Descriptions
+              column={1}
+              title="整改反馈"
+              items={[
+                { label: '整改说明', children: record.rectificationFeedback || '—' },
+                {
+                  label: '整改文档',
+                  children: (
+                    <FileLink
+                      file={record.rectifiedDocument}
+                      onRetry={onRetry}
+                      retrying={retryingId === record.rectifiedDocument?.assetId}
+                    />
+                  ),
+                },
+              ]}
+            />
+          )}
+          <details className="rounded-md border border-border bg-muted/20 p-3">
+            <summary className="flex cursor-pointer items-center gap-1.5 text-xs font-medium text-muted-foreground">
+              <ExternalLink className="h-3.5 w-3.5" />
+              推送原始数据
+            </summary>
+            <pre className="mt-2 max-h-64 overflow-auto rounded-sm bg-background p-2 text-[11px] leading-relaxed text-muted-foreground">
+              {rawJson}
+            </pre>
+          </details>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function FileLink({
+  file,
+  onRetry,
+  retrying,
+}: {
+  file: BiddingFileRef | null | undefined;
+  onRetry: (f: BiddingFileRef) => void;
+  retrying: boolean;
+}) {
+  if (!file) return <span className="text-muted-foreground">—</span>;
+  const href = file.assetId ? `/api/files/preview/${file.assetId}` : file.url || '#';
+  return (
+    <div className="flex items-center justify-between gap-2 rounded-sm border border-border bg-background px-2 py-1.5">
+      <a
+        href={href}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex items-center gap-1.5 truncate text-xs text-brand hover:underline"
+      >
+        <Paperclip className="h-3 w-3 shrink-0" />
+        <span className="truncate">{file.name || '附件'}</span>
+        {file.size ? <span className="shrink-0 text-muted-foreground">({file.size})</span> : null}
+      </a>
+      {file.assetId && file.storageStatus === 'failed' && (
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 rounded-sm border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted disabled:opacity-60"
+          onClick={() => onRetry(file)}
+          disabled={retrying}
+        >
+          <RefreshCw className={retrying ? 'h-3 w-3 animate-spin' : 'h-3 w-3'} />
+          重试
+        </button>
+      )}
     </div>
   );
 }
+
+function BiddingEditDrawer({
+  record,
+  completionOptions,
+  onClose,
+  onSubmit,
+}: {
+  record: BiddingScreenshot;
+  completionOptions: string[];
+  onClose: () => void;
+  onSubmit: (patch: Partial<BiddingScreenshot>) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState<Partial<BiddingScreenshot>>({
+    completionStatus: record.completionStatus,
+    deliveryRemark: record.deliveryRemark,
+    isMeetScreenshotRequirement: record.isMeetScreenshotRequirement,
+    salesFeedback: record.salesFeedback,
+    rectificationFeedback: record.rectificationFeedback,
+  });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const submit = async () => {
+    setSaving(true);
+    setErr(null);
+    try {
+      await onSubmit(draft);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : '保存失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[80] flex justify-end" role="dialog" aria-modal="true">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+      <div className="relative flex h-full w-full max-w-[560px] flex-col bg-card shadow-dropdown animate-slide-in-right">
+        <div className="border-b border-border px-5 py-3">
+          <h2 className="text-base font-semibold">编辑招投标截图</h2>
+          <p className="mt-0.5 truncate text-xs text-muted-foreground">{record.projectName}</p>
+        </div>
+        <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="完成情况">
+              <Select
+                value={draft.completionStatus ?? ''}
+                onValueChange={(v) => setDraft({ ...draft, completionStatus: v || null })}
+              >
+                <SelectTrigger className="h-8 rounded-sm"><SelectValue placeholder="请选择" /></SelectTrigger>
+                <SelectContent>
+                  {completionOptions.map((c) => (
+                    <SelectItem key={c} value={c}>{c}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field label="需求达成">
+              <Select
+                value={
+                  draft.isMeetScreenshotRequirement === true ? '1'
+                    : draft.isMeetScreenshotRequirement === false ? '0' : ''
+                }
+                onValueChange={(v) =>
+                  setDraft({
+                    ...draft,
+                    isMeetScreenshotRequirement: v === '1' ? true : v === '0' ? false : null,
+                  })
+                }
+              >
+                <SelectTrigger className="h-8 rounded-sm"><SelectValue placeholder="—" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="1">是</SelectItem>
+                  <SelectItem value="0">否</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+          </div>
+          <Field label="交付备注">
+            <Textarea
+              rows={3}
+              className="rounded-sm text-sm"
+              value={draft.deliveryRemark ?? ''}
+              onChange={(e) => setDraft({ ...draft, deliveryRemark: e.target.value })}
+            />
+          </Field>
+          <Field label="销售反馈">
+            <Textarea
+              rows={3}
+              className="rounded-sm text-sm"
+              value={draft.salesFeedback ?? ''}
+              onChange={(e) => setDraft({ ...draft, salesFeedback: e.target.value })}
+            />
+          </Field>
+          <Field label="整改反馈">
+            <Textarea
+              rows={3}
+              className="rounded-sm text-sm"
+              value={draft.rectificationFeedback ?? ''}
+              onChange={(e) => setDraft({ ...draft, rectificationFeedback: e.target.value })}
+            />
+          </Field>
+          {err && (
+            <div className="rounded-sm border border-status-danger/30 bg-status-danger/10 px-3 py-2 text-xs text-status-danger">
+              {err}
+            </div>
+          )}
+        </div>
+        <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-3">
+          <Button variant="outline" size="sm" className="rounded-sm" onClick={onClose} disabled={saving}>取消</Button>
+          <Button size="sm" className="rounded-sm" onClick={submit} disabled={saving}>
+            {saving ? '保存中…' : '保存修改'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1.5">
+      <Label className="text-xs font-medium text-muted-foreground">{label}</Label>
+      {children}
+    </div>
+  );
+}
+
+void Download;

@@ -3,13 +3,18 @@ import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
 /**
- * 业务列表页外壳：铺满主内容区、统一卡片边框与三段式（工具栏 / 列表体 / 分页）。
+ * 业务列表页外壳：由 AppShell 主区提供 p-4，本组件只负责白底卡片 + 圆角边框 + 淡阴影。
  * 配合 ListToolbar 使用。
  */
 export function ListContainer({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className={cn('w-full p-4 sm:p-6 lg:px-8', className)}>
-      <div className="overflow-hidden rounded-md border border-border bg-card">{children}</div>
+    <div
+      className={cn(
+        'w-full overflow-hidden rounded-md border border-border bg-card shadow-card',
+        className,
+      )}
+    >
+      {children}
     </div>
   );
 }

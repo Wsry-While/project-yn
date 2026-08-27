@@ -66,8 +66,6 @@
 
 :root {
   --radius: 0.25rem;
-
-  /* RuoYi 风格：Element 蓝 #409EFF 主色，浅灰底 #f0f2f5 */
   --background: #f0f2f5;
   --foreground: #303133;
   --card: #ffffff;

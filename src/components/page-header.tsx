@@ -8,15 +8,47 @@ interface PageHeaderProps {
   actions?: React.ReactNode;
   className?: string;
   children?: React.ReactNode;
+  /**
+   * ruoyi: 小标题、无图标色块、无面包屑（顶栏已提供面包屑）
+   * default: 大标题 + 图标色块，保留给仪表盘等驾驶舱页面
+   */
+  variant?: 'ruoyi' | 'default';
 }
 
 /**
- * 信息化风格的页面头部：
- * - 顶部面包屑（小字）
- * - 左侧大标题 + 副标题 + 图标底色块
- * - 右侧 actions 区
+ * RuoYi 风格页面头部：一行小标题 + 副标题 + 右侧 actions。
+ * 兼容旧 default 变体（图标色块 + 面包屑），供 dashboard 等特殊页面使用。
  */
-export function PageHeader({ title, subtitle, icon, breadcrumb, actions, className, children }: PageHeaderProps) {
+export function PageHeader({
+  title,
+  subtitle,
+  icon,
+  breadcrumb,
+  actions,
+  className,
+  children,
+  variant = 'ruoyi',
+}: PageHeaderProps) {
+  if (variant === 'ruoyi') {
+    return (
+      <div
+        className={cn(
+          'flex flex-wrap items-start justify-between gap-2 border-b border-border bg-card px-4 py-3',
+          className,
+        )}
+      >
+        <div className="min-w-0">
+          <h1 className="text-[16px] font-medium leading-6 text-foreground">{title}</h1>
+          {subtitle && (
+            <p className="mt-0.5 text-xs text-muted-foreground">{subtitle}</p>
+          )}
+        </div>
+        {actions && <div className="flex items-center gap-2">{actions}</div>}
+        {children && <div className="w-full">{children}</div>}
+      </div>
+    );
+  }
+
   const isComp = isComponentType(icon);
   const IconNode = isComp ? (icon as React.ComponentType<{ className?: string }>) : null;
   const iconNode = isComp ? null : (icon as React.ReactNode);
