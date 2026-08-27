@@ -162,8 +162,8 @@ export const BiddingDocumentService = {
     emit("step", { phase: "load", message: "读取招标文件…" });
     const record = await this.getRecordById(recordId);
     const fileRef = parseBiddingFile(record.projectBiddingFile);
-    if (!fileRef?.assetId) {
-      throw new Error("未找到项目招标文件（请确认附件已转存完成）");
+    if (!fileRef || (!fileRef.assetId && !fileRef.url)) {
+      throw new Error("未找到项目招标文件（请确认附件已转存完成，或销售提交时已附文件）");
     }
 
     emit("step", { phase: "parse", message: "解析招标文件…" });
