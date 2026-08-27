@@ -286,20 +286,52 @@ async function parseDocumentBuffer(buffer: Buffer, fileName: string): Promise<Pa
 
 /**
  * 在长文档中定位"评标办法/评分标准"章节，只保留相关片段，减少无关 token。
+ * 策略：
+ * 1) 优先匹配评分表中才会出现的强信号词（如"评分因素"、"技术部分评分"、"商务部分评分"、"综合评分法"等）
+ * 2) 其次匹配章节标题（"第四章 磋商方法"、"评标办法"、"评分细则"等）
+ * 3) 最后才是宽泛的"评分标准"——这个词可能在功能描述中出现（如"AI自动评分"），作为兜底
  * 找不到时返回原文（已截断）。
  */
 export function extractScoringSection(text: string): { text: string; matched: boolean } {
-  const patterns = [
-    /评标办法[\s\S]{0,12000}/,
-    /评分标准[\s\S]{0,12000}/,
-    /评分细则[\s\S]{0,12000}/,
-    /评审办法[\s\S]{0,12000}/,
-    /综合评分法[\s\S]{0,12000}/,
-    /评分因素[\s\S]{0,12000}/,
+  // 强信号：评分表 / 评分办法章节才会出现的关键词，权重最高
+  const strongPatterns: RegExp[] = [
+    /评分因素[\s\S]{0,15000}/,
+    /技术部分评分[\s\S]{0,15000}/,
+    /商务部分评分[\s\S]{0,15000}/,
+    /价格部分评分[\s\S]{0,15000}/,
+    /综合评分法[\s\S]{0,15000}/,
+    /评分细则[\s\S]{0,15000}/,
+    /评分表[\s\S]{0,15000}/,
+    /评标办法[\s\S]{0,15000}/,
+    /评审办法[\s\S]{0,15000}/,
+    /评审方法[\s\S]{0,15000}/,
+    /磋商方法[\s\S]{0,15000}/,
   ];
-  for (const re of patterns) {
+  for (const re of strongPatterns) {
     const m = text.match(re);
-    if (m && m[0].trim().length > 30) return { text: m[0], matched: true };
+    if (m && m[0].trim().length > 200) return { text: m[0], matched: true };
   }
+
+  // 弱信号兜底：寻找"评分标准"，但需要附近还有得分/满分等评分表特征词，避免误匹配功能描述
+  const candidate = text.match(/评分标准[\s\S]{0,15000}/);
+  if (candidate && candidate[0].trim().length > 200) {
+    const snippet = candidate[0];
+    const hasScoreTable =
+      /满分\s*\d+\s*分/.test(snippet) ||
+      /得分\s*\d/.test(snippet) ||
+      /评分因素/.test(snippet) ||
+      /技术部分/.test(snippet) ||
+      /商务部分/.test(snippet) ||
+      /价格部分/.test(snippet) ||
+      /扣分/.test(snippet);
+    if (hasScoreTable) return { text: snippet, matched: true };
+  }
+
+  // 最后兜底：找包含"评分"且在表格上下文中的位置
+  const tableCandidate = text.match(/序号[\s\S]{0,200}评分[\s\S]{0,15000}/);
+  if (tableCandidate && tableCandidate[0].length > 500) {
+    return { text: tableCandidate[0], matched: true };
+  }
+
   return { text, matched: false };
 }
