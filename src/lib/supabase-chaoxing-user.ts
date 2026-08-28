@@ -50,25 +50,31 @@ export async function createSupabaseLoginToken(
   // 只放已解析的这几个字段，不要把响应里的其他内容原样塞进来。
   const appMetadata = { ...LEGACY_APP_METADATA_KEYS, chaoxing: userInfo };
 
-  const { data: created } = await admin.auth.admin.createUser({
-    email,
-    email_confirm: true,
-    app_metadata: appMetadata,
-    user_metadata: userMetadata,
-  });
-
+  // generateLink(type=magiclink) 对不存在的邮箱会自动建用户、对已存在邮箱返回登录链接，
+  // 一步完成「建用户 + 取一次性 token」，无需先 createUser（后者对已存在邮箱会 422，
+  // 且在并发/重复登录时容易产生竞态）。随后用 updateUserById 把超星资料写入 metadata。
   const { data: link, error: linkError } = await admin.auth.admin.generateLink({
     type: 'magiclink',
     email,
   });
   if (linkError || !link.properties?.hashed_token || !link.user?.id) {
+    console.error('[chaoxing-login] admin.generateLink 失败:', linkError
+      ? {
+          message: linkError.message,
+          name: (linkError as { name?: string }).name,
+          status: (linkError as { status?: number }).status,
+          code: (linkError as { code?: string }).code,
+          stack: linkError.stack,
+        }
+      : '返回结构缺少 hashed_token/user.id');
     throw new Error(`无法为超星用户生成 Supabase 登录凭据：${linkError?.message || '未知错误'}`);
   }
 
-  const userId = created.user?.id || link.user.id;
+  const userId = link.user.id;
   const { error: updateError } = await admin.auth.admin.updateUserById(userId, {
     app_metadata: { ...link.user.app_metadata, ...appMetadata },
     user_metadata: { ...link.user.user_metadata, ...userMetadata },
+    email_confirm: true,
   });
   if (updateError) throw new Error(`无法同步超星用户资料：${updateError.message}`);
 
