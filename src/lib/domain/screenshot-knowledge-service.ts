@@ -1,15 +1,23 @@
 /**
  * 截图知识库 1.0 学习服务。
  *
- * 扫描全库历史招投标交付图片，逐张做多模态"参数级"视觉理解，
+ * 扫描全库历史招投标交付材料，逐张做多模态"参数级"视觉理解，
  * 把"这张图能证明哪些技术参数"沉淀到 screenshot_parameter_mappings，
  * 并写一条 knowledge_base_versions 版本记录。供截图作业指导书按参数召回参考图。
+ *
+ * 真实交付物形态：销售把多张截图贴在一个 Word 文档里（「XX截图项.docx」），
+ * 因此候选来源有两类：
+ *   1. docx 交付文档（delivery_document）—— 主力，用 mammoth 抽内嵌图片；
+ *   2. 独立图片附件（attachments / delivery_document 是 png/jpg 等）—— 保留兼容。
  */
 import { LLMClient, Config, HeaderUtils } from 'coze-coding-dev-sdk';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { randomUUID } from 'crypto';
 import { ScreenshotExampleService } from './screenshot-example-service';
 import { resolveAssetDownload } from './asset-access';
+import { getChaoxingDirectDownloadUrl } from './chaoxing/file-tool';
 import { getModelForScenario, buildMessages } from './llm-prompts';
+import { extractImagesFromDocx, type ExtractedDocxImage } from './parse/docx-images';
 import type { BiddingScreenshot, BiddingFileRef } from './types';
 
 interface ContentPart {
@@ -38,6 +46,21 @@ export type LearnProgress = (
   type: 'step' | 'delta' | 'done' | 'error' | 'meta',
   payload: unknown,
 ) => void;
+
+interface LearnCandidate {
+  record: BiddingScreenshot;
+  /** 图片显示名 */  name: string;
+  /** 已存在的 assetId（独立图片附件场景） */
+  assetId?: string;
+  /** docx 抽取出的图片 buffer（docx 场景，需上传换 assetId） */
+  extracted?: ExtractedDocxImage;
+  /** docx 源文件名，用于命名 */
+  sourceDocName?: string;
+  /** 这张图在 docx 中前文推断的参数标题 */
+  contextHint?: string;
+}
+
+const DOCX_IMAGE_MAX_BYTES = 12 * 1024 * 1024; // 单张内嵌图上限，超过跳过（防超大位图）
 
 export class ScreenshotKnowledgeService {
   private readonly examples: ScreenshotExampleService;
@@ -70,8 +93,7 @@ export class ScreenshotKnowledgeService {
   }
 
   /**
-   * 全库学习：扫描所有未删除、且含图片型交付附件的招投标记录，逐图理解。
-   * SSE 推送进度，完成后写版本记录。
+   * 全库学习。
    */
   async learnAll(
     actor: { id: string; name: string },
@@ -102,10 +124,10 @@ export class ScreenshotKnowledgeService {
 
     emit('meta', { version, startedAt: startedAt.toISOString() });
 
-    // 2. 扫描候选图片
+    // 2. 扫描候选
     const candidates = await this.collectImageCandidates();
     emit('step', {
-      message: `扫描到 ${candidates.records} 条记录、${candidates.images.length} 张可学习图片，开始逐图理解…`,
+      message: `扫描到 ${candidates.records} 条记录、${candidates.images.length} 张可学习图片（含 docx 抽取），开始逐图理解…`,
     });
 
     const customHeaders = requestHeaders
@@ -121,28 +143,43 @@ export class ScreenshotKnowledgeService {
     for (const img of candidates.images) {
       processed++;
       try {
-        if (!img.assetId) {
+        // 2.1 准备 assetId：独立图片直接用；docx 抽取图需要上传到对象存储
+        let assetId: string | null | undefined = img.assetId;
+        if (!assetId && img.extracted) {
+          assetId = await this.uploadExtractedImage(img);
+        }
+        if (!assetId) {
           failed++;
-          log.push(`[skip] ${img.record.projectName} / ${img.name}: 无 assetId`);
+          log.push(`[skip] ${img.record.projectName} / ${img.name}: 无可用 assetId`);
           continue;
         }
-        const resolved = await resolveAssetDownload(img.assetId);
+
+        // 2.2 取可访问的图片 URL（对象存储签名）
+        const resolved = await resolveAssetDownload(assetId);
         if (!resolved) {
           failed++;
           log.push(`[skip] ${img.record.projectName} / ${img.name}: 附件未就绪`);
           continue;
         }
 
-        const vision = await this.understandImage(client, resolved.signedUrl);
+        // 2.3 多模态视觉理解（带 docx 前文标题作为提示）
+        const vision = await this.understandImage(client, resolved.signedUrl, {
+          contextHint: img.contextHint,
+          projectName: img.record.projectName,
+          school: img.record.projectSchool,
+        });
         if (!vision || vision.parameters.length === 0) {
           log.push(`[warn] ${img.record.projectName} / ${img.name}: 未识别到参数`);
+          emit('delta', {
+            content: `▸ (${processed}/${candidates.images.length}) ${img.name}：未识别到参数\n`,
+          });
           continue;
         }
 
-        // upsert 截图示例
+        // 2.4 upsert 截图示例
         const exampleId = await this.examples.upsertFromVision({
           screenshotId: img.record.id,
-          assetId: img.assetId,
+          assetId,
           systemModule: vision.systemModule,
           pagePath: vision.pagePath,
           description: vision.description,
@@ -150,11 +187,11 @@ export class ScreenshotKnowledgeService {
           usableFor: vision.parameters.map((p) => p.name),
         });
 
-        // 写参数映射
+        // 2.5 写参数映射
         const ids = await this.examples.upsertParameterMappings(
           vision.parameters.map((p) => ({
             exampleId,
-            assetId: img.assetId,
+            assetId,
             sourceRecordId: img.record.id,
             parameterName: p.name,
             systemModule: vision.systemModule,
@@ -218,13 +255,14 @@ export class ScreenshotKnowledgeService {
   }
 
   /**
-   * 收集全库含图片型交付附件的招投标记录（含交付文档与附件）。
+   * 收集全库可学习图片：
+   *  - docx 交付文档：下载并抽取内嵌图片（主力）；
+   *  - 独立图片附件/交付图：直接用 assetId。
    */
   private async collectImageCandidates(): Promise<{
     records: number;
-    images: Array<{ record: BiddingScreenshot; assetId: string; name: string }>;
+    images: LearnCandidate[];
   }> {
-    // 分页拉取所有未删除记录
     const pageSize = 500;
     let from = 0;
     const all: BiddingScreenshot[] = [];
@@ -242,18 +280,175 @@ export class ScreenshotKnowledgeService {
       from += pageSize;
     }
 
-    const images: Array<{ record: BiddingScreenshot; assetId: string; name: string }> = [];
+    const images: LearnCandidate[] = [];
+    const seenAsset = new Set<string>();
+    const seenHash = new Set<string>();
+
     for (const record of all) {
-      const files = [record.deliveryDocument, ...(record.attachments ?? [])]
+      // 1) docx 交付文档 —— 抽内嵌图
+      const dd = record.deliveryDocument;
+      if (dd && isDocx(dd.name)) {
+        try {
+          const extracted = await this.fetchAndExtractDocx(dd, record);
+          for (const img of extracted) {
+            // 跨 docx 内容去重：相同截图（同 hash）只学一次
+            if (seenHash.has(img.contentHash)) continue;
+            seenHash.add(img.contentHash);
+            images.push({
+              record,
+              name: `${dd.name || '截图文档'}#${img.index + 1}`,
+              sourceDocName: dd.name || undefined,
+              extracted: img,
+              contextHint: img.contextHint,
+            });
+          }
+        } catch (err) {
+          console.warn('[kb-learn] docx 抽取失败:', record.projectName, err);
+        }
+      }
+
+      // 2) 独立图片：交付文档本身就是图片，或附件里的图片
+      const standalone = [record.deliveryDocument, ...(record.attachments ?? [])]
         .flat()
         .filter((f): f is NonNullable<BiddingFileRef> => !!f && isImage(f.name, f.type));
-      for (const f of files) {
-        if (f.assetId) {
+      for (const f of standalone) {
+        if (f.assetId && !seenAsset.has(f.assetId)) {
+          seenAsset.add(f.assetId);
           images.push({ record, assetId: f.assetId, name: f.name || '截图' });
         }
       }
     }
+
     return { records: all.length, images };
+  }
+
+  /**
+   * 下载 docx（assetId 走对象存储；否则用 delivery_document.url 超星直链），
+   * 并抽取其中内嵌图片。
+   */
+  private async fetchAndExtractDocx(
+    file: BiddingFileRef,
+    record: BiddingScreenshot,
+  ): Promise<ExtractedDocxImage[]> {
+    let arrayBuffer: ArrayBuffer | null = null;
+
+    if (file.assetId) {
+      const resolved = await resolveAssetDownload(file.assetId);
+      if (resolved) {
+        const r = await fetch(resolved.signedUrl, { redirect: 'follow' });
+        if (r.ok) arrayBuffer = await r.arrayBuffer();
+      }
+    }
+    if (!arrayBuffer) {
+      // 超星直链（storageStatus=direct，无 assetId）。
+      // 裸 url（d0.cldisk.com/download/{objectId}）会被 CDN 403，必须现换签名，
+      // 且下载时必须带 office.chaoxing.com 的 Referer，否则 CDN 边缘拒绝。
+      const objectId = file.objectId || extractObjectIdFromUrl(file.url);
+      if (objectId && /^[a-f0-9]{32}$/i.test(objectId)) {
+        const direct = await getChaoxingDirectDownloadUrl(objectId);
+        if (direct?.url) {
+          const r = await fetch(direct.url, {
+            redirect: 'follow',
+            headers: {
+              'User-Agent': CHAOXING_UA,
+              'Referer': 'https://office.chaoxing.com/',
+            },
+          });
+          if (r.ok) arrayBuffer = await r.arrayBuffer();
+        }
+      } else if (file.url && /^https?:\/\//i.test(file.url)) {
+        const r = await fetch(file.url, {
+          redirect: 'follow',
+          headers: { 'User-Agent': CHAOXING_UA },
+        });
+        if (r.ok) arrayBuffer = await r.arrayBuffer();
+      }
+    }
+    if (!arrayBuffer) return [];
+
+    const images = await extractImagesFromDocx(arrayBuffer, {
+      projectName: record.projectName,
+    });
+    return images.filter((img) => img.buffer.length > 0 && img.buffer.length <= DOCX_IMAGE_MAX_BYTES);
+  }
+
+  /**
+   * 把 docx 抽出的内嵌图片上传到对象存储，写 external_file_assets，返回 assetId。
+   * 按 (source='kb-docx', object_id=contentHash) 幂等，重复学习不重复上传。
+   */
+  private async uploadExtractedImage(img: LearnCandidate): Promise<string | null> {
+    if (!img.extracted) return null;
+    const ex = img.extracted;
+    const objectId = `kb/${ex.contentHash}`;
+
+    // 幂等：已上传过则直接复用
+    const { data: existing } = await this.db
+      .from('external_file_assets')
+      .select('id')
+      .eq('source', 'kb-docx')
+      .eq('object_id', objectId)
+      .limit(1)
+      .maybeSingle();
+    if (existing?.id) return existing.id as string;
+
+    const bucket = process.env.STORAGE_BUCKET || 'bidding-attachments';
+    const ext = ex.ext === 'jpeg' ? 'jpg' : ex.ext;
+    const storageKey = `kb-docx/${ex.contentHash}.${ext}`;
+    const fileName = img.sourceDocName
+      ? `${img.sourceDocName.replace(/\.[^.]+$/, '')}_${ex.index + 1}.${ext}`
+      : `kb-${ex.contentHash}.${ext}`;
+    const contentType = ex.contentType || `image/${ext}`;
+
+    const { error: uploadErr } = await this.db.storage
+      .from(bucket)
+      .upload(
+        storageKey,
+        new Blob([new Uint8Array(ex.buffer)], { type: contentType }),
+        { contentType, upsert: false },
+      );
+    if (uploadErr) {
+      // 已存在（并发/重复）视为成功
+      if (!/Duplicate|already exists/i.test(uploadErr.message)) {
+        throw new Error(`上传抽图失败: ${uploadErr.message}`);
+      }
+    }
+
+    const now = new Date().toISOString();
+    const { data, error: insertErr } = await this.db
+      .from('external_file_assets')
+      .insert({
+        id: randomUUID(),
+        source: 'kb-docx',
+        object_id: objectId,
+        source_url: null,
+        file_name: fileName,
+        suffix: ext,
+        content_type: contentType,
+        byte_size: ex.buffer.length,
+        status: 'stored',
+        bucket,
+        storage_key: storageKey,
+        error_message: null,
+        retry_count: 0,
+        created_at: now,
+        updated_at: now,
+      } as never)
+      .select('id')
+      .single();
+    if (insertErr) {
+      // 唯一冲突时回查
+      if (/duplicate key|unique/i.test(insertErr.message)) {
+        const { data: d } = await this.db
+          .from('external_file_assets')
+          .select('id')
+          .eq('source', 'kb-docx')
+          .eq('object_id', objectId)
+          .maybeSingle();
+        return (d?.id as string) ?? null;
+      }
+      throw new Error(`写抽图元数据失败: ${insertErr.message}`);
+    }
+    return (data as { id: string }).id;
   }
 
   /**
@@ -262,15 +457,22 @@ export class ScreenshotKnowledgeService {
   private async understandImage(
     client: LLMClient,
     signedUrl: string,
+    ctx?: { contextHint?: string; projectName?: string | null; school?: string | null },
   ): Promise<ParamVisionResult | null> {
+    const hintLines = [
+      '请分析这张招投标产品交付截图，识别它能证明哪些具体技术参数/功能点。',
+    ];
+    if (ctx?.contextHint) {
+      hintLines.push(`该截图在交付文档中紧接的标题/参数说明是：「${ctx.contextHint}」，请据此判断它对应的功能点。`);
+    }
+    if (ctx?.projectName) hintLines.push(`所属项目：${ctx.projectName}`);
+    const prompt = hintLines.join('\n');
+
     const contentParts: ContentPart[] = [
-      { type: 'text', text: '请分析这张招投标产品交付截图，识别它能证明哪些具体技术参数/功能点。' },
+      { type: 'text', text: prompt },
       { type: 'image_url', image_url: { url: signedUrl, detail: 'high' } },
     ];
-    const msgs = buildMessages({
-      scenario: 'bidding-vision-param',
-      prompt: '请分析这张招投标产品交付截图，识别它能证明哪些具体技术参数/功能点。',
-    });
+    const msgs = buildMessages({ scenario: 'bidding-vision-param', prompt });
     const messages: VisionMessage[] = [msgs[0], { role: 'user', content: contentParts }];
 
     let raw = '';
@@ -290,6 +492,26 @@ function isImage(name?: string | null, mime?: string | null): boolean {
   const n = (name || '').toLowerCase();
   return /\.(png|jpe?g|webp|bmp|gif)$/.test(n);
 }
+
+function isDocx(name?: string | null): boolean {
+  return /\.(docx)$/i.test(name || '');
+}
+
+function extractObjectIdFromUrl(url?: string | null): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url, 'http://x');
+    const q = u.searchParams.get('objectid') || u.searchParams.get('objectId');
+    if (q && /^[a-f0-9]{32}$/i.test(q)) return q;
+  } catch {
+    /* ignore */
+  }
+  const m = url.match(/([a-f0-9]{32})/i);
+  return m ? m[1] : null;
+}
+
+const CHAOXING_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
 function safeParseParamVision(raw: string): ParamVisionResult | null {
   if (!raw) return null;

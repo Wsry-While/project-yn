@@ -263,11 +263,18 @@ export class ScreenshotExampleService {
 
     if (opts.kbVersion) q = q.eq('kb_version', opts.kbVersion);
 
-    // 优先 parameter_key 精确/前缀匹配
+    // 优先 parameter_key 精确匹配；再用归一化关键词做 parameter_key 子串匹配，
+    // 缓解「知识图谱支持AI生成功能」(item) vs 「AI知识图谱生成」(vision) 的措辞差异。
     const ors: string[] = [];
     if (key) ors.push(`parameter_key.eq.${key}`);
+    const keyHints = keywords
+      .map((k) => normalizeParameterKey(k, null))
+      .filter((k) => k.length >= 2);
+    for (const kh of keyHints.slice(0, 6)) {
+      ors.push(`parameter_key.ilike.%${kh}%`);
+    }
     for (const kw of keywords.filter(Boolean).slice(0, 6)) {
-      const safe = kw.replace(/[,()]/g, ' ').trim();
+      const safe = kw.replace(/[,()（）、，]/g, ' ').trim();
       if (safe.length >= 2) {
         ors.push(`parameter_name.ilike.%${safe}%`);
         ors.push(`vision_note.ilike.%${safe}%`);
