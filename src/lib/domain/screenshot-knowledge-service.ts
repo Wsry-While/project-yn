@@ -258,6 +258,9 @@ export class ScreenshotKnowledgeService {
    * 收集全库可学习图片：
    *  - docx 交付文档：下载并抽取内嵌图片（主力）；
    *  - 独立图片附件/交付图：直接用 assetId。
+   *
+   * 直接 select('*') 拿到的是数据库下划线字段（delivery_document / attachments），
+   * 这里做一次轻量归一，避免依赖业务 mapper。
    */
   private async collectImageCandidates(): Promise<{
     records: number;
@@ -265,16 +268,22 @@ export class ScreenshotKnowledgeService {
   }> {
     const pageSize = 500;
     let from = 0;
-    const all: BiddingScreenshot[] = [];
+    const all: Array<{
+      id: string;
+      project_name: string | null;
+      project_school: string | null;
+      delivery_document: BiddingFileRef | null;
+      attachments: BiddingFileRef[] | null;
+    }> = [];
     while (true) {
       const { data, error } = await this.db
         .from('bidding_screenshots')
-        .select('*')
+        .select('id, project_name, project_school, delivery_document, attachments')
         .is('deleted_at', null)
         .order('created_at', { ascending: false })
         .range(from, from + pageSize - 1);
       if (error) throw error;
-      const rows = (data ?? []) as unknown as BiddingScreenshot[];
+      const rows = (data ?? []) as typeof all;
       all.push(...rows);
       if (rows.length < pageSize) break;
       from += pageSize;
@@ -283,10 +292,22 @@ export class ScreenshotKnowledgeService {
     const images: LearnCandidate[] = [];
     const seenAsset = new Set<string>();
     const seenHash = new Set<string>();
+    // 单次学习的图片上限：全库可能有上千张图，逐张走多模态耗时极长，
+    // 默认取最近 500 张（按 created_at desc 已优先新记录）。可用环境变量调大。
+    const maxImages = Number(process.env.KB_LEARN_MAX_IMAGES ?? 500);
 
-    for (const record of all) {
+    for (const row of all) {
+      // 归一为 BiddingScreenshot 形态供后续复用（id/projectName/projectSchool/deliveryDocument/attachments）
+      const record = {
+        id: row.id,
+        projectName: row.project_name,
+        projectSchool: row.project_school,
+        deliveryDocument: row.delivery_document,
+        attachments: row.attachments ?? [],
+      } as unknown as BiddingScreenshot;
+
       // 1) docx 交付文档 —— 抽内嵌图
-      const dd = record.deliveryDocument;
+      const dd = row.delivery_document;
       if (dd && isDocx(dd.name)) {
         try {
           const extracted = await this.fetchAndExtractDocx(dd, record);
@@ -303,12 +324,12 @@ export class ScreenshotKnowledgeService {
             });
           }
         } catch (err) {
-          console.warn('[kb-learn] docx 抽取失败:', record.projectName, err);
+          console.warn('[kb-learn] docx 抽取失败:', row.project_name, err);
         }
       }
 
       // 2) 独立图片：交付文档本身就是图片，或附件里的图片
-      const standalone = [record.deliveryDocument, ...(record.attachments ?? [])]
+      const standalone = [row.delivery_document, ...(row.attachments ?? [])]
         .flat()
         .filter((f): f is NonNullable<BiddingFileRef> => !!f && isImage(f.name, f.type));
       for (const f of standalone) {
@@ -317,8 +338,11 @@ export class ScreenshotKnowledgeService {
           images.push({ record, assetId: f.assetId, name: f.name || '截图' });
         }
       }
+
+      if (images.length >= maxImages) break;
     }
 
+    if (images.length > maxImages) images.length = maxImages;
     return { records: all.length, images };
   }
 
@@ -365,6 +389,15 @@ export class ScreenshotKnowledgeService {
       }
     }
     if (!arrayBuffer) return [];
+
+    // docx 本质是 zip（PK\x03\x04 开头）。超星偶发返回 HTML 错误页或截断文件，
+    // 先校验魔数，避免 mammoth 抛 "Can't find end of central directory" 噪声错误。
+    const head = new Uint8Array(arrayBuffer, 0, Math.min(4, arrayBuffer.byteLength));
+    const isZip = head[0] === 0x50 && head[1] === 0x4b && (head[2] === 0x03 || head[2] === 0x05);
+    if (!isZip) {
+      console.warn('[kb-learn] docx 不是有效 zip（可能下载到错误页或文件损坏），跳过:', file.name, arrayBuffer.byteLength, 'bytes');
+      return [];
+    }
 
     const images = await extractImagesFromDocx(arrayBuffer, {
       projectName: record.projectName,
