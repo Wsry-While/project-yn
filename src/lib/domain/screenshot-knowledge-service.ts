@@ -143,7 +143,8 @@ export class ScreenshotKnowledgeService {
     for (const img of candidates.images) {
       processed++;
       try {
-        // 2.1 准备 assetId：独立图片直接用；docx 抽取图需要上传到对象存储
+        // 2.1 准备 assetId（用于前端预览/指导书展示）：
+        //     docx 抽取图需要上传到对象存储；独立图片直接用已有 assetId。
         let assetId: string | null | undefined = img.assetId;
         if (!assetId && img.extracted) {
           assetId = await this.uploadExtractedImage(img);
@@ -154,16 +155,36 @@ export class ScreenshotKnowledgeService {
           continue;
         }
 
-        // 2.2 取可访问的图片 URL（对象存储签名）
-        const resolved = await resolveAssetDownload(assetId);
-        if (!resolved) {
+        // 2.2 准备喂给多模态模型的图片字节。
+        //     关键：模型服务端无法回源拉取我方 Storage 签名 URL（火山托管 Supabase
+        //     的下载域名对 LLM 网络不可达，会 HTTP 404），因此统一把图片转成
+        //     base64 data URL 随请求体发送，不依赖模型侧回源。assetId 仅用于前端展示。
+        let imageBytes: ArrayBuffer | Uint8Array | null = img.extracted?.buffer ?? null;
+        let contentType = img.extracted?.contentType ?? 'image/png';
+        if (!imageBytes) {
+          const resolved = await resolveAssetDownload(assetId);
+          if (!resolved) {
+            failed++;
+            log.push(`[skip] ${img.record.projectName} / ${img.name}: 附件未就绪`);
+            continue;
+          }
+          const r = await fetch(resolved.signedUrl, { redirect: 'follow' });
+          if (!r.ok) {
+            failed++;
+            log.push(`[skip] ${img.record.projectName} / ${img.name}: 下载图片失败 HTTP ${r.status}`);
+            continue;
+          }
+          imageBytes = await r.arrayBuffer();
+          contentType = r.headers.get('content-type') || contentType;
+        }
+        if (!imageBytes || imageBytes.byteLength === 0) {
           failed++;
-          log.push(`[skip] ${img.record.projectName} / ${img.name}: 附件未就绪`);
           continue;
         }
 
-        // 2.3 多模态视觉理解（带 docx 前文标题作为提示）
-        const vision = await this.understandImage(client, resolved.signedUrl, {
+        // 2.3 多模态视觉理解（base64 内联，带 docx 前文标题作为提示）。
+        //     对「不可达/404/5xx」等瞬时错误重试一次，避免单图抖动。
+        const vision = await this.understandImageWithRetry(client, imageBytes, contentType, {
           contextHint: img.contextHint,
           projectName: img.record.projectName,
           school: img.record.projectSchool,
@@ -171,7 +192,7 @@ export class ScreenshotKnowledgeService {
         if (!vision || vision.parameters.length === 0) {
           log.push(`[warn] ${img.record.projectName} / ${img.name}: 未识别到参数`);
           emit('delta', {
-            content: `▸ (${processed}/${candidates.images.length}) ${img.name}：未识别到参数\n`,
+            content: `▸ (${processed}/${candidates.images.length}) ${img.name}：未识别到参数，已跳过\n`,
           });
           continue;
         }
@@ -211,7 +232,7 @@ export class ScreenshotKnowledgeService {
         const msg = err instanceof Error ? err.message : String(err);
         log.push(`[error] ${img.record.projectName} / ${img.name}: ${msg}`);
         emit('delta', {
-          content: `▸ (${processed}/${candidates.images.length}) ${img.name} 学习失败：${msg}\n`,
+          content: `▸ (${processed}/${candidates.images.length}) ${img.name} 识别失败，已跳过：${msg}\n`,
         });
       }
 
@@ -485,11 +506,35 @@ export class ScreenshotKnowledgeService {
   }
 
   /**
+   * 对单张图片做参数级视觉理解（带一次瞬时错误重试）。
+   * 图片以 base64 data URL 内联发送，避免模型侧回源拉取 Storage 签名 URL 失败。
+   */
+  private async understandImageWithRetry(
+    client: LLMClient,
+    bytes: ArrayBuffer | Uint8Array,
+    contentType: string,
+    ctx?: { contextHint?: string; projectName?: string | null; school?: string | null },
+  ): Promise<ParamVisionResult | null> {
+    try {
+      return await this.understandImage(client, bytes, contentType, ctx);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // 仅对瞬时/网络类错误重试一次；参数错误等不重试。
+      if (/\b(429|5\d\d|timeout|timed out|ECONNRESET|ECONNREFUSED|ENOTFOUND|socket|reachab|fetch failed|network)/i.test(msg)) {
+        await new Promise((r) => setTimeout(r, 1500));
+        return this.understandImage(client, bytes, contentType, ctx);
+      }
+      throw err;
+    }
+  }
+
+  /**
    * 对单张图片做参数级视觉理解。
    */
   private async understandImage(
     client: LLMClient,
-    signedUrl: string,
+    bytes: ArrayBuffer | Uint8Array,
+    contentType: string,
     ctx?: { contextHint?: string; projectName?: string | null; school?: string | null },
   ): Promise<ParamVisionResult | null> {
     const hintLines = [
@@ -501,9 +546,13 @@ export class ScreenshotKnowledgeService {
     if (ctx?.projectName) hintLines.push(`所属项目：${ctx.projectName}`);
     const prompt = hintLines.join('\n');
 
+    // base64 data URL：随请求体直接发送图片内容，不依赖模型侧回源。
+    const base64 = arrayBufferToBase64(bytes);
+    const dataUrl = `data:${contentType || 'image/png'};base64,${base64}`;
+
     const contentParts: ContentPart[] = [
       { type: 'text', text: prompt },
-      { type: 'image_url', image_url: { url: signedUrl, detail: 'high' } },
+      { type: 'image_url', image_url: { url: dataUrl, detail: 'high' } },
     ];
     const msgs = buildMessages({ scenario: 'bidding-vision-param', prompt });
     const messages: VisionMessage[] = [msgs[0], { role: 'user', content: contentParts }];
@@ -545,6 +594,11 @@ function extractObjectIdFromUrl(url?: string | null): string | null {
 
 const CHAOXING_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+
+/** ArrayBuffer/Uint8Array → base64（Node 端用 Buffer，避免依赖 btoa）。 */
+function arrayBufferToBase64(buf: ArrayBuffer | Uint8Array): string {
+  return Buffer.from(buf as Uint8Array).toString('base64');
+}
 
 function safeParseParamVision(raw: string): ParamVisionResult | null {
   if (!raw) return null;
