@@ -5,7 +5,7 @@ import { showToast } from '@/lib/web/toast-store';
 import { exportCsv, datedName } from '@/lib/web/csv-export';
 import { apiFetch } from '@/lib/web/api-client';
 import { DetailDrawer } from '@/components/crud/detail-drawer';
-import { AttachmentFileLink } from '@/components/attachment-file-link';
+import { AttachmentList } from '@/components/attachment-viewer';
 import { PageHeader } from '@/components/page-header';
 import { Badge, toneFromStatus } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -400,35 +400,25 @@ function DemandDetailModal({
                 {
                   label: `材料（${record.providedMaterials.length}）`,
                   children: record.providedMaterials.length ? (
-                    <div className="space-y-1.5">
-                      {record.providedMaterials.map((f, i) => (
-                        <AttachmentFileLink
-                          key={f.assetId || f.objectId || i}
-                          file={f}
-                          business="demand"
-                          recordId={record.id}
-                          field="providedMaterials"
-                          onTransferred={onTransferred}
-                        />
-                      ))}
-                    </div>
+                    <AttachmentList
+                      files={record.providedMaterials}
+                      business="demand"
+                      externalId={record.id}
+                      field="providedMaterials"
+                      onRetried={onTransferred}
+                    />
                   ) : '—',
                 },
                 {
                   label: `交付文档（${record.deliveryDocs.length}）`,
                   children: record.deliveryDocs.length ? (
-                    <div className="space-y-1.5">
-                      {record.deliveryDocs.map((f, i) => (
-                        <AttachmentFileLink
-                          key={f.assetId || f.objectId || i}
-                          file={f}
-                          business="demand"
-                          recordId={record.id}
-                          field="deliveryDocs"
-                          onTransferred={onTransferred}
-                        />
-                      ))}
-                    </div>
+                    <AttachmentList
+                      files={record.deliveryDocs}
+                      business="demand"
+                      externalId={record.id}
+                      field="deliveryDocs"
+                      onRetried={onTransferred}
+                    />
                   ) : '—',
                 },
               ]}

@@ -5,7 +5,7 @@ import { showToast } from '@/lib/web/toast-store';
 import { exportCsv, datedName } from '@/lib/web/csv-export';
 import { apiFetch } from '@/lib/web/api-client';
 import { DetailDrawer } from '@/components/crud/detail-drawer';
-import { AttachmentFileLink } from '@/components/attachment-file-link';
+import { AttachmentList } from '@/components/attachment-viewer';
 import { PageHeader } from '@/components/page-header';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -423,18 +423,13 @@ function QimingDetailModal({
                 {
                   label: '附件',
                   children: (
-                    <div className="space-y-1.5">
-                      {record.projectMaterials.map((f, i) => (
-                        <AttachmentFileLink
-                          key={f.assetId || f.objectId || i}
-                          file={f}
-                          business="qiming"
-                          recordId={record.id}
-                          field="projectMaterials"
-                          onTransferred={onTransferred}
-                        />
-                      ))}
-                    </div>
+                    <AttachmentList
+                      files={record.projectMaterials}
+                      business="qiming"
+                      externalId={record.id}
+                      field="projectMaterials"
+                      onRetried={onTransferred}
+                    />
                   ),
                 },
               ]}
