@@ -325,6 +325,12 @@ export class ScreenshotExampleService {
       ors.push(`parameter_key.ilike.%${fn}%`);
       ors.push(`parameter_name.ilike.%${fn}%`);
     }
+    // 具体参数名词（主导信号）命中 key/name
+    for (const p of terms.params) {
+      ors.push(`parameter_key.ilike.%${p}%`);
+      ors.push(`parameter_name.ilike.%${p}%`);
+      ors.push(`vision_note.ilike.%${p}%`);
+    }
     // 原始关键词（去掉标点）在 parameter_name 上兜底
     for (const kw of keywords.filter(Boolean).slice(0, 6)) {
       const safe = kw.replace(/[,()（）、，:：]/g, ' ').trim();
@@ -358,52 +364,55 @@ export class ScreenshotExampleService {
     // asset_id 为空（极早期数据）或资产状态可预览的才保留
     const rows = rawRows.filter((r) => !r.asset_id || usableAssets.has(r.asset_id));
 
-    // 3) 相关度打分（模块 AND 功能 双命中才是强相关，压跨模块误匹配）：
-    //    - 库行模块归一到标准名，与查询模块有交集 +3；库行带模块但与查询模块完全不交集 -3（跨模块重名，如别处也有"列表"）。
-    //    - 功能词命中 parameter_key/name 每个 +2，命中 vision_note +0.5。
-    //    - 模块命中且至少 1 个功能词命中 → 双命中额外 +2（防止只靠通用功能词跨模块撞中）。
-    //    - confidence 存 0..1，直接作基线（旧代码 /100 等于没加）；同 kb_version +0.05。
+    // 3) 相关度打分（与图组同一套原则：模块只入围/排除，具体参数名词主导排序）：
+    //    - 库行模块归一后与查询模块交集 +1；库行明确属于别的模块 -4（跨模块排除）。
+    //    - 具体参数名词命中 key/name 每个 +2.5、命中 vision_note +1；弱功能词 key/name +0.5。
+    //    - confidence 存 0..1 直接作基线；同 kb_version +0.05。
+    //    再按「同模块内至少命中 1 个具体参数名词」过滤：评分项能抽出参数名词时，
+    //    只靠泛词/同模块撞中的行剔除（压「同模块不同参数」误匹配）。
     const modSet = new Set(terms.modules);
     const fnSet = terms.functions;
-    const score = (r: ParameterMappingRow): number => {
+    const paramSet = terms.params;
+    const hasQueryParams = paramSet.length > 0;
+    const score = (r: ParameterMappingRow): { score: number; paramHit: boolean } => {
       let s = Number(r.confidence); // 0..1 基线
       const pkey = (r.parameter_key ?? '').toLowerCase();
       const pname = (r.parameter_name ?? '').toLowerCase();
       const note = (r.vision_note ?? '').toLowerCase();
       if (opts.kbVersion && r.kb_version === opts.kbVersion) s += 0.05;
 
-      // 库行模块（system_module + key 前缀）归一到标准模块名
       const rowMods = new Set([
         ...extractModules(r.system_module),
         ...extractModules(pkey.split(':')[0]),
       ]);
-      let modHit = false;
       if (modSet.size > 0) {
-        if (Array.from(modSet).some((m) => rowMods.has(m))) {
-          modHit = true;
-          s += 3;
-        } else if (rowMods.size > 0) {
-          s -= 3; // 跨模块：库里明确属于别的模块
-        }
+        if (Array.from(modSet).some((m) => rowMods.has(m))) s += 1;
+        else if (rowMods.size > 0) s -= 4;
       }
 
-      let fnHit = false;
-      for (const f of fnSet) {
-        if (pkey.includes(f) || pname.includes(f)) {
-          s += 2;
-          fnHit = true;
-        } else if (note.includes(f)) {
-          s += 0.5;
+      let paramHit = false;
+      for (const p of paramSet) {
+        if (pkey.includes(p) || pname.includes(p)) {
+          s += 2.5;
+          paramHit = true;
+        } else if (note.includes(p)) {
+          s += 1;
+          paramHit = true;
         }
       }
-      if (modHit && fnHit) s += 2;
-      return s;
+      for (const f of fnSet) {
+        if (pkey.includes(f) || pname.includes(f)) s += 0.5;
+        else if (note.includes(f)) s += 0.25;
+      }
+      return { score: s, paramHit };
     };
 
     const byAsset = new Map<string, { row: ParameterMappingRow; score: number }>();
     for (const r of rows) {
+      const { score: s, paramHit } = score(r);
+      // 评分项有具体参数名词时，要求命中行也命中 ≥1 个（或库行无法判定模块时放行兜底）
+      if (hasQueryParams && !paramHit) continue;
       const assetKey = r.asset_id ?? r.example_id;
-      const s = score(r);
       const cur = byAsset.get(assetKey);
       if (!cur || s > cur.score) byAsset.set(assetKey, { row: r, score: s });
     }
@@ -441,12 +450,10 @@ export class ScreenshotExampleService {
     opts: { limit?: number; kbVersion?: string; minScore?: number } = {},
   ): Promise<ReferenceGroup | null> {
     const limit = opts.limit ?? 40;
-    // 门槛：新打分尺度下，模块命中(+3)即过；无模块但≥2个功能词(+4)也过；
-    // 单个通用功能词(+2)或仅长句弱命中不过，压跨模块/通用词误匹配。
-    const minScore = opts.minScore ?? 3.5;
     const terms = extractMatchTerms(keywords);
 
-    // 1) 召回候选图组（模块别名/功能词/原始关键词 ilike 小节标题）
+    // 1) 召回候选图组（模块别名 / 具体参数名词 / 原始关键词 ilike 小节标题）。
+    //    宁多勿滥：召回宽、打分阶段再用「同模块 + 具体参数名词」严格收敛。
     const ors: string[] = [];
     for (const mod of terms.modules) {
       for (const alias of MODULE_ALIASES[mod] ?? [mod]) {
@@ -454,6 +461,7 @@ export class ScreenshotExampleService {
         if (a.length >= 2) ors.push(`section_title.ilike.%${a}%`);
       }
     }
+    for (const p of terms.params) ors.push(`section_title.ilike.%${p}%`);
     for (const fn of terms.functions) ors.push(`section_title.ilike.%${fn}%`);
     for (const kw of keywords.filter(Boolean).slice(0, 6)) {
       const safe = kw.replace(/[,()（）、，:：%]/g, ' ').trim();
@@ -477,14 +485,43 @@ export class ScreenshotExampleService {
     }>;
     if (groupRows.length === 0) return null;
 
-    // 2) 打分（模块归一 + 模块 AND 功能 双命中；section_title 是历史真实参数原文，提权）。
-    //    逻辑抽到 scoreGroupTitle，服务端召回与评测脚本共用同一份打分，避免两处漂移。
-    const scoreGroup = (g: GroupRow): number =>
-      scoreGroupTitle(g.section_title ?? '', terms, keywords, opts.kbVersion, g.kb_version);
+    // 2) 打分 + 采用判定。打分用 scoreGroupTitle（模块只入围/排除，具体参数名词主导排序）；
+    //    是否「采用」用 scoreGroupResult：同模块内必须命中 ≥1 个具体参数名词，
+    //    否则只是同一模块下的别的参数（如「样式」需求命中「多形态编辑」组），不采、回退散图。
+    const evaluate = (g: (typeof groupRows)[number]) => {
+      const rawTitle = g.section_title ?? '';
+      const compactTitle = rawTitle
+        .toLowerCase()
+        .replace(/[\s，,。.；;：:、（）()【】\[\]"'“”‘’！!？?/\\\-—_·]/g, '');
+      const titleMods = new Set(extractModules(rawTitle));
+      const modHit =
+        terms.modules.length > 0 && terms.modules.some((m) => titleMods.has(m));
+      const paramHit = terms.params.filter((p) => compactTitle.includes(p)).length;
+      const fnHit = terms.functions.some((f) => compactTitle.includes(f.toLowerCase()));
+      const phraseHit = keywords
+        .filter(Boolean)
+        .slice(0, 6)
+        .some((kw) => {
+          const safe = kw.replace(/[,()（）、，:：%\s▲▲]/g, '').toLowerCase();
+          return safe.length >= 4 && compactTitle.includes(safe);
+        });
+      const score = scoreGroupTitle(rawTitle, terms, keywords, opts.kbVersion, g.kb_version);
+      const adopt =
+        opts.minScore != null
+          ? score >= opts.minScore
+          : scoreGroupResult(score, {
+              modHit,
+              paramHit,
+              hasQueryParams: terms.params.length > 0,
+              fnHit,
+              phraseHit,
+            }).adopt;
+      return { g, score, adopt };
+    };
 
     const scored = groupRows
-      .map((g) => ({ g, score: scoreGroup(g) }))
-      .filter((x) => x.score >= minScore)
+      .map(evaluate)
+      .filter((x) => x.adopt)
       .sort((a, b) => b.score - a.score || b.g.image_count - a.g.image_count);
     if (scored.length === 0) return null;
 
@@ -574,12 +611,40 @@ export function extractModules(text: string | null | undefined): string[] {
   return Array.from(found);
 }
 
-/** 操作步骤类噪声词：图组标题多为「登录后台/点击菜单/找到设置」这类动作句，不是功能点。 */
-const STEP_NOISE = [
+/**
+ * 泛动词/套话/操作步骤停用词。
+ * 「自定义/设置/编辑/管理/配置/支持/选择/切换」这类词几乎每条参数标题里都有
+ * （自定义颜色、自定义背景、自定义编辑、自定义样式……），用它们匹配会把同一模块下
+ * 所有参数拉平，必须停用，不能当功能词参与打分。
+ */
+const FUNC_STOP = new Set([
   '登录', '点击', '打开', '进入', '选择', '找到', '按照', '如图', '所示', '按钮', '菜单',
   '后台', '账号', '密码', '截图', '如下', '下图', '上图', '填写', '输入', '提交', '保存',
   '返回', '查看', '看到', '显示', '对应', '需要', '可以', '进行', '相关', '功能', '模块',
   '内容', '信息', '方式', '地方', '位置', '步骤', '操作', '页面', '系统', '平台', '完成',
+  '支持', '提供', '具备', '拥有', '实现', '可', '能够', '自定义', '设置', '编辑', '管理',
+  '配置', '切换', '展示', '用户', '教师', '学生', '个人', '自主', '手动', '自动',
+  '多种', '多个', '多类型', '多方式', '各种', '不少于', '至少', '根据', '需求', '喜好',
+]);
+
+/**
+ * 具体参数名词表（高区分度）——真正区分「同模块下不同参数」的词。
+ * 如知识图谱模块下：样式/颜色/形态/节点/大纲 是不同参数；这些词命中才代表参数对得上。
+ * 模块名只负责「入围/跨模块排除」，排序主要靠这些具体名词重叠。
+ */
+const PARAM_NOUNS = [
+  '样式', '颜色', '背景色', '背景', '字体', '字号', '文字颜色', '文字大小', '皮肤', '边框',
+  '图谱形态', '形态', '节点', '知识点', '大纲', '标签', '画像', '标注', '导航', '学习地图',
+  '章节', '一键转化', '转化', '资源关联', '关联资源', '跨课程', '图谱模式', '大纲模式',
+  '作业批改', '批改', '答疑', '问答库', '客服', '回复', '答案', '解析', '反馈', '评价',
+  '评分', '文档解析', '网络课程',
+  '达成度', '课程目标', '毕业要求', '培养方案', '方案对比', '版本对比', '达标',
+  '微课', '课件', '导入', '导出', '上传', '下载', '名单',
+  '组卷', '题库', '题目', '乱序', '选项', '听力', '音频', '监考', '人脸', '活体', '防作弊',
+  '自测模式', '探索模式', '时间限制', '题目来源',
+  '水位', '掌握率', '完成率', '雷达', '看板', '预警', '监控', '考勤', '签到', '抢答', '投屏',
+  '听课', '督导', '巡课', '评教', '直播', '录播', '对接',
+  '库存', '盘点', '资产', '报废', '入库', '字典', '权限', '组织架构', '同步', '推送', '移动端',
 ];
 
 /**
@@ -587,18 +652,28 @@ const STEP_NOISE = [
  * - modules：归并到 MODULE_ALIASES 标准名的业务模块（AI助教/ai助教/AI助教-作业批改 → ai助教）。
  * - functions：去掉模块名/套话/操作步骤噪声后，按功能动词边界切出的名词短语（≥3 字、含实义）。
  */
-export function extractMatchTerms(keywords: string[]): { modules: string[]; functions: string[] } {
+export function extractMatchTerms(keywords: string[]): {
+  modules: string[];
+  params: string[];
+  functions: string[];
+} {
   const modules = new Set<string>();
+  const paramSet = new Set<string>();
   const functionSet = new Set<string>();
 
   for (const raw of keywords) {
     if (!raw) continue;
     // 归一化：去标点、空白、常见套话前缀，转小写
     let text = raw
-      .replace(/[\s，,。.；;：:、（）()【】\[\]"'""''！!？?\/\\\-—_·]/g, '')
+      .replace(/[\s，,。.；;：:、（）()【】\[\]"'“”‘’！!？?/\\\-—_·]/g, '')
       .toLowerCase();
     text = text.replace(/^(支持|提供|具备|可|能够|可以|实现|拥有|含|包括|系统|平台)+/g, '');
     text = text.replace(/(功能|情况|能力)$/g, '');
+
+    // ① 具体参数名词：直接在归一化全文扫描（高区分度，主导信号）
+    for (const noun of PARAM_NOUNS) {
+      if (text.includes(noun.toLowerCase())) paramSet.add(noun.toLowerCase());
+    }
 
     for (const [canonical, aliases] of Object.entries(MODULE_ALIASES)) {
       const compactAliases = aliases.map((a) => a.toLowerCase().replace(/\s/g, ''));
@@ -608,15 +683,16 @@ export function extractMatchTerms(keywords: string[]): { modules: string[]; func
       }
     }
 
-    // 剩余按功能动作拆词：在「一键/自定义/智能/多/双/关联/导入/导出/生成/切换/编辑/检索/统计/展示/查看/反馈/解析/上传/下载/关联/标签/画像」等动词边界切分
+    // ③ 剩余短语按功能动作边界切分，去停用词/模块/参数名词后作弱兜底
     const parts = text
-      .split(/\s+|(?=(?:一键|自定义|智能|多类型|多方式|多途径|多种|多个|双模式|双|关联|导入|导出|生成|切换|编辑|检索|搜索|统计|展示|显示|查看|反馈|解析|上传|下载|标签|画像|报告|转化|可视化|导航|标注|属性|背景色|样式|大纲|模型|回复|答案|文档|资料|资源|名单|模式|入口|内容|列表|详情|分布))/g)
+      .split(/\s+|(?=(?:一键|智能|关联|导入|导出|生成|检索|搜索|统计|反馈|解析|标签|画像|转化|可视化|导航|标注|属性|模型|回复|答案|名单|分布|形态|章节|节点|批改|组卷|排课|巡课|考核|监控|预警|推送|同步|对接|盘点|库存|人脸|监考|直播|录播))/g)
       .map((p) => p.trim())
       .filter((p) => p.length >= 3 && p.length <= 12);
     for (const p of parts) {
-      // 过滤含模块词、操作步骤噪声词、纯数字的碎片
+      // 过滤含模块词、停用词、参数名词、纯数字的碎片
       if (extractModules(p).length > 0) continue;
-      if (STEP_NOISE.some((n) => p.includes(n))) continue;
+      if (Array.from(FUNC_STOP).some((n) => p.includes(n))) continue;
+      if (Array.from(paramSet).some((n) => p.includes(n) || n.includes(p))) continue;
       if (/^\d+$/.test(p)) continue;
       functionSet.add(p);
     }
@@ -624,18 +700,20 @@ export function extractMatchTerms(keywords: string[]): { modules: string[]; func
 
   return {
     modules: Array.from(modules),
-    functions: Array.from(functionSet).slice(0, 10),
+    params: Array.from(paramSet).slice(0, 12),
+    functions: Array.from(functionSet).slice(0, 8),
   };
 }
 
 /**
  * 图组标题相关度打分（纯函数，服务端召回与评测脚本共用）。
- * 规则见 searchReferenceGroup：模块归一交集 +3 / 跨模块 -3；功能词 +2；
- * 整句关键词重合长串 +1.5、短串 +1；模块命中且功能/整句也命中再 +2；版本一致 +0.05。
+ * 匹配主轴是「具体参数名词」而非模块名：模块只负责同模块入围(+1)/跨模块排除(-4)；
+ * 具体参数名词命中 +2.5（决定排序）；弱功能词 +0.5；整句长串重合 +1；版本一致 +0.05。
+ * 采用门槛见 scoreGroupResult：同模块需至少命中 1 个具体参数名词，跨模块直接不采。
  */
 export function scoreGroupTitle(
   rawTitle: string,
-  terms: { modules: string[]; functions: string[] },
+  terms: { modules: string[]; params: string[]; functions: string[] },
   keywords: string[],
   kbVersion?: string,
   groupVersion?: string | null,
@@ -646,36 +724,68 @@ export function scoreGroupTitle(
   let s = 0;
   if (kbVersion && groupVersion === kbVersion) s += 0.05;
 
+  // 模块：同模块 +1（入围），标题明确属于别的模块 -4（跨模块重名排除）
   const titleMods = new Set(extractModules(rawTitle));
   let modHit = false;
   if (terms.modules.length > 0) {
     if (terms.modules.some((m) => titleMods.has(m))) {
       modHit = true;
-      s += 3;
+      s += 1;
     } else if (titleMods.size > 0) {
-      s -= 3;
+      s -= 4;
     }
   }
 
+  // 具体参数名词：主导排序信号
+  let paramHit = 0;
+  for (const p of terms.params) {
+    if (title.includes(p.toLowerCase())) {
+      s += 2.5;
+      paramHit += 1;
+    }
+  }
+  // 弱功能短语：仅兜底，低权
   let fnHit = false;
   for (const f of terms.functions) {
     if (title.includes(f.toLowerCase())) {
-      s += 2;
+      s += 0.5;
       fnHit = true;
     }
   }
+  // 整句长串重合（≥4 字，标题原文照抄评分项时）
   let phraseHit = false;
   for (const kw of keywords.filter(Boolean).slice(0, 6)) {
-    const safe = kw.replace(/[,()（）、，:：%\s]/g, '').toLowerCase();
-    if (safe.length >= 3 && title.includes(safe)) {
-      s += 1.5;
-      phraseHit = true;
-    } else if (safe.length === 2 && title.includes(safe)) {
+    const safe = kw.replace(/[,()（）、，:：%\s▲▲]/g, '').toLowerCase();
+    if (safe.length >= 4 && title.includes(safe)) {
       s += 1;
+      phraseHit = true;
     }
   }
-  if (modHit && (fnHit || phraseHit)) s += 2;
   return s;
+}
+
+/**
+ * 判断某图组得分是否达到「采用」门槛（排序分高不代表可用）：
+ * - 跨模块（分数被压到负）直接不采；
+ * - 同模块内必须至少命中 1 个具体参数名词（paramHit）——否则只是同模块下别的参数；
+ * - 若评分项本身抽不出具体参数名词（纯模块级需求），则同模块 + 整句/功能词命中即可。
+ * 返回 { adopt, paramHit }。
+ */
+export function scoreGroupResult(
+  score: number,
+  opts: {
+    modHit: boolean;
+    paramHit: number;
+    hasQueryParams: boolean;
+    fnHit: boolean;
+    phraseHit: boolean;
+  },
+): { adopt: boolean; paramHit: number } {
+  if (score < 0) return { adopt: false, paramHit: opts.paramHit };
+  if (opts.hasQueryParams) {
+    return { adopt: opts.paramHit >= 1, paramHit: opts.paramHit };
+  }
+  return { adopt: opts.modHit && (opts.fnHit || opts.phraseHit), paramHit: opts.paramHit };
 }
 
 /**

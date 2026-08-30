@@ -138,10 +138,16 @@ export const ScreenshotGuideService = {
       // 召回只传评分项标题（+ 必要时原始标题），由召回服务内部拆模块/功能词；
       // 不要把 category（如"技术参数"）当系统模块拼进 parameter_key——视觉库的 key 前缀
       // 是真实业务模块（知识图谱/微课…），用 category 当前缀会导致精确与 ilike 全部落空。
+      // 召回输入：标题 + 评分项详细描述（▲ 正文）。标题常只有「自定义样式设置」这类短句，
+      // 区分参数的具体名词（颜色/字体/大小/形态…）往往在 requirement 正文里，必须一起参与抽词。
+      const recallKeywords = [
+        row.title,
+        row.requirement ? String(row.requirement).slice(0, 220) : '',
+      ].filter(Boolean) as string[];
       let groupTitle: string | null = null;
       let refs: GuideItem['references'] = [];
 
-      const group = await exampleService.searchReferenceGroup([row.title], {
+      const group = await exampleService.searchReferenceGroup(recallKeywords, {
         kbVersion: kbVersion?.version,
       });
       if (group && group.assets.length > 0) {
@@ -157,7 +163,7 @@ export const ScreenshotGuideService = {
           sourceProjectName: group.sourceProjectName,
         }));
       } else {
-        const loose = await exampleService.searchByParameter([row.title], {
+        const loose = await exampleService.searchByParameter(recallKeywords, {
           limit: 3,
           kbVersion: kbVersion?.version,
         });
