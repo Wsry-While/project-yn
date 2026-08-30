@@ -18,7 +18,13 @@ import { resolveAssetDownload } from './asset-access';
 import { getChaoxingDirectDownloadUrl } from './chaoxing/file-tool';
 import { uploadToStorage, getStorageBucket } from './storage/object-storage-tool';
 import { getModelForScenario, buildMessages } from './llm-prompts';
-import { extractImagesFromDocx, type ExtractedDocxImage } from './parse/docx-images';
+import {
+  extractImagesFromDocx,
+  buildImageGroups,
+  normalizeSectionTitle,
+  type ExtractedDocxImage,
+  type DocxImageGroup,
+} from './parse/docx-images';
 import type { BiddingScreenshot, BiddingFileRef } from './types';
 
 interface ContentPart {
@@ -59,6 +65,15 @@ interface LearnCandidate {
   sourceDocName?: string;
   /** 这张图在 docx 中前文推断的参数标题 */
   contextHint?: string;
+}
+
+/** docx 中一条参数小节对应的一整组截图（学习入库前的原始分组） */
+interface RawSectionGroup {
+  recordId: string;
+  sectionTitle: string;
+  sectionTitleNorm: string;
+  /** 组内图片，按文档顺序，存 contentHash + docx 内序号 */
+  items: Array<{ contentHash: string; imageIndex: number }>;
 }
 
 const DOCX_IMAGE_MAX_BYTES = 12 * 1024 * 1024; // 单张内嵌图上限，超过跳过（防超大位图）
@@ -128,7 +143,7 @@ export class ScreenshotKnowledgeService {
     // 2. 扫描候选
     const candidates = await this.collectImageCandidates();
     emit('step', {
-      message: `扫描到 ${candidates.records} 条记录、${candidates.images.length} 张可学习图片（含 docx 抽取），开始逐图理解…`,
+      message: `扫描到 ${candidates.records} 条记录、${candidates.images.length} 张可学习图片、${candidates.groups.length} 个参数图组（含 docx 抽取），开始逐图理解…`,
     });
 
     const customHeaders = requestHeaders
@@ -251,6 +266,17 @@ export class ScreenshotKnowledgeService {
       }
     }
 
+    // 2.6 持久化参数图组（按 contentHash 反查已上传 asset；视觉识别失败不影响成组）。
+    let groupCount = 0;
+    try {
+      groupCount = await this.persistSectionGroups(candidates.groups, version);
+      emit('delta', { content: `\n▸ 参数图组：已沉淀 ${groupCount} 组「一条参数 ↔ 多张截图」关联\n` });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.push(`[error] 图组沉淀失败: ${msg}`);
+      console.error('[kb-learn] 图组沉淀失败:', err);
+    }
+
     // 3. 完成版本记录
     const finishedAt = new Date();
     const { error: finishErr } = await this.db
@@ -287,6 +313,7 @@ export class ScreenshotKnowledgeService {
   private async collectImageCandidates(): Promise<{
     records: number;
     images: LearnCandidate[];
+    groups: RawSectionGroup[];
   }> {
     const pageSize = 500;
     let from = 0;
@@ -312,6 +339,7 @@ export class ScreenshotKnowledgeService {
     }
 
     const images: LearnCandidate[] = [];
+    const groups: RawSectionGroup[] = [];
     const seenAsset = new Set<string>();
     const seenHash = new Set<string>();
     // 单次学习的图片上限：全库可能有上千张图，逐张走多模态耗时极长，
@@ -333,6 +361,18 @@ export class ScreenshotKnowledgeService {
       if (dd && isDocx(dd.name)) {
         try {
           const extracted = await this.fetchAndExtractDocx(dd, record);
+          // 按参数小节（▲ 标题）把连续截图归为一组：一条参数常由多张截图响应
+          // （如「多形态」形态1…8）。分组不参与视觉去重，保证整组完整。
+          const docGroups = buildImageGroups(extracted);
+          for (const g of docGroups) {
+            if (g.images.length === 0) continue;
+            groups.push({
+              recordId: record.id,
+              sectionTitle: g.sectionTitle,
+              sectionTitleNorm: normalizeSectionTitle(g.sectionTitle),
+              items: g.images.map((im) => ({ contentHash: im.contentHash, imageIndex: im.index })),
+            });
+          }
           for (const img of extracted) {
             // 跨 docx 内容去重：相同截图（同 hash）只学一次
             if (seenHash.has(img.contentHash)) continue;
@@ -365,7 +405,7 @@ export class ScreenshotKnowledgeService {
     }
 
     if (images.length > maxImages) images.length = maxImages;
-    return { records: all.length, images };
+    return { records: all.length, images, groups };
   }
 
   /**
@@ -499,6 +539,99 @@ export class ScreenshotKnowledgeService {
       throw new Error(`写抽图元数据失败: ${insertErr.message}`);
     }
     return (data as { id: string }).id;
+  }
+
+  /**
+   * 把 docx 参数小节分组持久化到 screenshot_parameter_groups / screenshot_group_assets。
+   * 组内图片按 contentHash 反查已上传 asset（object_id=`kb/<hash>`）；
+   * 视觉识别是否成功不影响成组——只要图已上传，整组就能被指导书召回。
+   * 按 (record_id, section_title_norm) 幂等，重复学习覆盖组内图片列表。
+   * @returns 成功沉淀的组数
+   */
+  private async persistSectionGroups(groups: RawSectionGroup[], version: string): Promise<number> {
+    if (groups.length === 0) return 0;
+
+    // 一次性收集所有 hash，批量查 asset：object_id = `kb/<hash>`
+    const allHashes = Array.from(new Set(groups.flatMap((g) => g.items.map((i) => i.contentHash))));
+    const hashToAsset = new Map<string, string>();
+    const CHUNK = 300;
+    for (let i = 0; i < allHashes.length; i += CHUNK) {
+      const sliceHashes = allHashes.slice(i, i + CHUNK);
+      const objectIds = sliceHashes.map((h) => `kb/${h}`);
+      const { data, error } = await this.db
+        .from('external_file_assets')
+        .select('id, object_id, status')
+        .in('object_id', objectIds)
+        .in('status', ['stored', 'direct']);
+      if (error) throw error;
+      for (const row of data ?? []) {
+        const oid = row.object_id as string;
+        const hash = oid.startsWith('kb/') ? oid.slice(3) : oid;
+        // 只保留可预览的 asset
+        if (!hashToAsset.has(hash)) hashToAsset.set(hash, row.id as string);
+      }
+    }
+
+    let persisted = 0;
+    for (const g of groups) {
+      // 组内按文档顺序关联 asset，跳过未上传/坏图；同一图片（同 hash/asset）
+      // 在小节内可能重复出现（如复用截图），按 asset 去重并保留首次出现的 seq。
+      const seenMember = new Set<string>();
+      const members = g.items
+        .map((it, seq) => ({ ...it, seq }))
+        .filter((it) => {
+          const assetId = hashToAsset.get(it.contentHash);
+          if (!assetId || seenMember.has(assetId)) return false;
+          seenMember.add(assetId);
+          return true;
+        });
+      // 重新编号 seq，保证 (group_id, seq) 连续唯一
+      members.forEach((m, idx) => {
+        m.seq = idx;
+      });
+      if (members.length === 0) continue;
+
+      // upsert 分组（幂等键 record_id + section_title_norm）
+      const { data: groupRow, error: upsertErr } = await this.db
+        .from('screenshot_parameter_groups')
+        .upsert(
+          {
+            record_id: g.recordId,
+            section_title: g.sectionTitle,
+            section_title_norm: g.sectionTitleNorm,
+            image_count: members.length,
+            kb_version: version,
+            updated_at: new Date().toISOString(),
+          } as never,
+          { onConflict: 'record_id,section_title_norm' },
+        )
+        .select('id')
+        .single();
+      if (upsertErr) {
+        console.warn('[kb-learn] 图组 upsert 失败:', g.sectionTitle, upsertErr.message);
+        continue;
+      }
+      const groupId = groupRow.id as string;
+
+      // 覆盖组内图片（先删后插，保证 seq 与文档顺序一致）
+      await this.db.from('screenshot_group_assets').delete().eq('group_id', groupId);
+      const rows = members.map((m) => ({
+        group_id: groupId,
+        asset_id: hashToAsset.get(m.contentHash)!,
+        content_hash: m.contentHash,
+        image_index: m.imageIndex,
+        seq: m.seq,
+      }));
+      const { error: itemErr } = await this.db
+        .from('screenshot_group_assets')
+        .insert(rows as never);
+      if (itemErr) {
+        console.warn('[kb-learn] 图组图片写入失败:', g.sectionTitle, itemErr.message);
+        continue;
+      }
+      persisted++;
+    }
+    return persisted;
   }
 
   /**

@@ -19,8 +19,22 @@ export interface ExtractedDocxImage {
   ext: 'png' | 'jpg' | 'jpeg' | 'gif' | 'bmp' | 'webp';
   /** 这张图前面最近的标题/参数文字（可能为空） */
   contextHint: string;
+  /**
+   * 这张图所属的参数小节标题（最近一个 ▲ 参数标题的归一化文字）。
+   * 同一条参数（如「多形态」形态1…8）下的连续多张图共享同一个 sectionTitle，
+   * 用于把「一整组截图」关联到同一条参数；找不到小节时为空字符串。
+   */
+  sectionTitle: string;
   /** 图片在文档中出现顺序的稳定 key：recordId + 内容 hash 前 16 位 */
   contentHash: string;
+}
+
+/** docx 内同一参数小节下的一整组截图（按文档出现顺序） */
+export interface DocxImageGroup {
+  /** 参数小节标题（归一化后，作为分组 key） */
+  sectionTitle: string;
+  /** 组内图片，按文档出现顺序排列 */
+  images: ExtractedDocxImage[];
 }
 
 const PLACEHOLDER = (n: number) => `\u27E6IMG_${n}\u27E7`;
@@ -59,6 +73,7 @@ export async function extractImagesFromDocx(
   );
 
   const html = result.value || '';
+  const sectionByIndex = extractSectionHeadings(html);
   const images: ExtractedDocxImage[] = [];
 
   for (let i = 0; i < collected.length; i++) {
@@ -71,11 +86,116 @@ export async function extractImagesFromDocx(
       contentType: c.contentType,
       ext: extFromContentType(c.contentType),
       contextHint: hint || recordContext?.projectName?.trim() || '',
+      sectionTitle: sectionByIndex.get(i) ?? '',
       contentHash: hashBuffer(c.buffer),
     });
   }
 
   return images;
+}
+
+/**
+ * 把抽取出的图片按参数小节聚合成「图组」。
+ * 真实交付文档里，一条参数通常由连续多张截图响应（如「多形态」形态1…8），
+ * 按文档顺序把共享同一 sectionTitle 的连续图片归为一组；无小节标题的图片不归组。
+ */
+export function buildImageGroups(images: ExtractedDocxImage[]): DocxImageGroup[] {
+  const groups: DocxImageGroup[] = [];
+  let current: DocxImageGroup | null = null;
+  for (const img of images) {
+    const title = img.sectionTitle;
+    if (!title) {
+      current = null;
+      continue;
+    }
+    if (current && current.sectionTitle === title) {
+      current.images.push(img);
+    } else {
+      current = { sectionTitle: title, images: [img] };
+      groups.push(current);
+    }
+  }
+  return groups;
+}
+
+/**
+ * 线性扫描带占位符的 HTML，记录每张图片（占位符序号）最近所属的 ▲ 参数小节标题。
+ * 用 ▲（以及 ★●＊* 编号）作为小节起点锚点，逐个占位符继承当前小节。
+ */
+function extractSectionHeadings(html: string): Map<number, string> {
+  const sectionByIndex = new Map<number, string>();
+  let currentHeading = '';
+  // 按顺序切分出「文本片段」和「图片占位符」
+  const tokens = html.split(/(⟦IMG_\d+⟧)/g);
+  for (const token of tokens) {
+    const m = /^⟦IMG_(\d+)⟧$/.exec(token.trim());
+    if (m) {
+      if (currentHeading) sectionByIndex.set(Number(m[1]), currentHeading);
+      continue;
+    }
+    // 文本片段：取其中最后一个 ▲ 小节标题（一个片段可能含多段）
+    const lines = tokenToLines(token);
+    for (const line of lines) {
+      const heading = parseSectionHeading(line);
+      if (heading) currentHeading = heading;
+    }
+  }
+  return sectionByIndex;
+}
+
+/** 把一段 HTML 文本拆成去标签后的纯文本行 */
+function tokenToLines(segment: string): string[] {
+  const text = segment
+    .replace(/<img\b[^>]*>?/gi, ' ')
+    .replace(/⟦IMG_\d+⟧/g, ' ')
+    .replace(/<\/(h[1-6]|p|div|li|tr|strong|b)>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"');
+  return text
+    .split('\n')
+    .map((l) => l.replace(/\s+/g, ' ').trim())
+    .filter((l) => l.length > 0);
+}
+
+/**
+ * 从一行文本里解析出参数小节标题：含 ▲ 等锚点，或像参数功能描述的短行。
+ * 返回归一化后的标题；不构成小节标题则返回空串。
+ */
+function parseSectionHeading(line: string): string {
+  const candidate = line.trim();
+  if (!candidate) return '';
+  // 以 ▲ 锚点开头（或含 ▲ 取其后文字）
+  let raw = candidate;
+  const triIndex = candidate.search(/[▲△★●＊]/);
+  if (triIndex >= 0) {
+    raw = candidate.slice(triIndex + 1);
+  } else if (!looksLikeTitle(candidate)) {
+    return '';
+  }
+  // 去掉前导编号/引号/空白
+  raw = raw
+    .replace(/^[（(]?[0-9一二三四五六七八九十]+[）)、.．\s]+/, '')
+    .replace(/^[\s"'“”‘’]+/, '')
+    .trim();
+  if (!raw) return '';
+  // 截到第一个「（提供截图」说明或句末标点
+  raw = raw.split(/（提供|\(提供|。/)[0].trim();
+  // 归一化分组 key：去掉所有空白与常见标点差异，用于判同
+  if (raw.length < 4) return '';
+  return raw.slice(0, 120);
+}
+
+/** 归一化小节标题为分组 key（去空白/标点） */
+export function normalizeSectionTitle(title: string): string {
+  return title
+    .replace(/[\s，。、；：“”‘’"'（）()【】\[\].,;:!?！？·—-]/g, '')
+    .toLowerCase();
 }
 
 function extFromContentType(ct: string): ExtractedDocxImage['ext'] {

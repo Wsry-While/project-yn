@@ -22,7 +22,7 @@ export interface GuideItem {
   score?: number | null;
   /** 该项是否必须截图（一般参数可跳过） */
   mustCapture: boolean;
-  /** 匹配到的参考截图（最多 3 张） */
+  /** 匹配到的参考截图。简单参数为单张功能截图；一条参数由多张截图响应时为整组（按文档顺序） */
   references: Array<{
     assetId: string;
     storagePath: string | null;
@@ -33,6 +33,8 @@ export interface GuideItem {
     sourceRecordId: string | null;
     sourceProjectName: string | null;
   }>;
+  /** 参考图来源的参数小节标题（整组匹配时有值，表示这组图共同响应同一条参数） */
+  referenceGroupTitle?: string | null;
   /** LLM 生成的作业说明：到哪个模块/菜单、截什么、怎么证明满足要求 */
   instruction: string;
   /** 建议的截图文件名/编号 */
@@ -126,18 +128,42 @@ export const ScreenshotGuideService = {
 
     onProgress?.('match', `正在为 ${screenshotRows.length} 个参数匹配知识库参考图`, 10);
 
-    // 3. 对每项召回参考图（category 作为 systemModule 提示，提升跨模块区分度）
+    // 3. 对每项召回参考图。
+    //    优先召回「整组截图」——真实交付里一条参数常由同一文档同一小节下的连续多张
+    //    截图响应（如「多形态」形态1…8）；找不到合格图组时回退到散图 Top3。
     const items: GuideItem[] = [];
     for (let i = 0; i < screenshotRows.length; i++) {
       const row = screenshotRows[i];
       const systemModule = row.category || null;
-      // 召回只传评分项标题（+ 必要时原始标题），由 searchByParameter 内部拆模块/功能词；
+      // 召回只传评分项标题（+ 必要时原始标题），由召回服务内部拆模块/功能词；
       // 不要把 category（如"技术参数"）当系统模块拼进 parameter_key——视觉库的 key 前缀
       // 是真实业务模块（知识图谱/微课…），用 category 当前缀会导致精确与 ilike 全部落空。
-      const refs = await exampleService.searchByParameter([row.title], {
-        limit: 3,
+      let groupTitle: string | null = null;
+      let refs: GuideItem['references'] = [];
+
+      const group = await exampleService.searchReferenceGroup([row.title], {
         kbVersion: kbVersion?.version,
       });
+      if (group && group.assets.length > 0) {
+        groupTitle = group.sectionTitle;
+        refs = group.assets.map((a, idx) => ({
+          assetId: a.assetId,
+          storagePath: null,
+          exampleId: `group-${group.groupId}-${idx}`,
+          visionNote: `图组第 ${a.seq + 1} 张（共 ${group.assets.length} 张）：${group.sectionTitle}`,
+          evidenceElements: [],
+          confidence: null,
+          sourceRecordId: group.sourceRecordId,
+          sourceProjectName: group.sourceProjectName,
+        }));
+      } else {
+        const loose = await exampleService.searchByParameter([row.title], {
+          limit: 3,
+          kbVersion: kbVersion?.version,
+        });
+        refs = loose.map((r) => mapReference(r));
+      }
+
       items.push({
         itemId: row.id,
         seq: row.item_no || row.order_index + 1 || i + 1,
@@ -146,7 +172,8 @@ export const ScreenshotGuideService = {
         requirement: row.requirement || row.title,
         score: row.score_value != null ? Number(row.score_value) : null,
         mustCapture: row.item_type !== 'general',
-        references: refs.map((r) => mapReference(r)),
+        references: refs,
+        referenceGroupTitle: groupTitle,
         instruction: '',
         suggestedFileName: buildFileName(row, i + 1),
         status: 'pending',

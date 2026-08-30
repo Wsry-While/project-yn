@@ -73,6 +73,43 @@ interface ParameterMappingRow extends Record<string, unknown> {
   created_at: string;
 }
 
+/** 一条参数对应的整组参考截图（来自同一交付文档同一 ▲ 小节，按文档顺序） */
+export interface ReferenceGroup {
+  groupId: string;
+  /** 参数小节标题（历史交付文档中的原句） */
+  sectionTitle: string;
+  /** 组内图片数量 */
+  imageCount: number;
+  /** 相关度得分 */
+  score: number;
+  /** 来源记录快照 */
+  sourceRecordId: string | null;
+  sourceProjectName: string | null;
+  sourceSchool: string | null;
+  /** 组内图片，按文档顺序排列 */
+  assets: Array<{
+    assetId: string;
+    seq: number;
+    visionNote: string | null;
+  }>;
+}
+
+interface GroupRow {
+  id: string;
+  record_id: string;
+  section_title: string;
+  image_count: number;
+  kb_version: string | null;
+  project_name?: string | null;
+  project_school?: string | null;
+}
+
+interface GroupAssetRow {
+  group_id: string;
+  asset_id: string;
+  seq: number;
+}
+
 const STALE_DAYS = 30;
 
 export class ScreenshotExampleService {
@@ -363,6 +400,109 @@ export class ScreenshotExampleService {
         createdAt: r.created_at,
         storagePath: null,
       }));
+  }
+
+  /**
+   * 按参数召回「整组参考截图」。
+   *
+   * 真实交付里一条参数通常由同一文档同一 ▲ 小节下的连续多张截图响应（如「多形态」
+   * 形态1…8）。学习时已按小节把这些图沉淀为 screenshot_parameter_groups，这里把评分项
+   * 标题拆词后与小节标题做相关度打分，返回最匹配的一整组图（按文档 seq 顺序）。
+   * 找不到合格图组时返回 null，由调用方回退到散图 searchByParameter。
+   */
+  async searchReferenceGroup(
+    keywords: string[],
+    opts: { limit?: number; kbVersion?: string; minScore?: number } = {},
+  ): Promise<ReferenceGroup | null> {
+    const limit = opts.limit ?? 40;
+    const minScore = opts.minScore ?? 2;
+    const terms = extractMatchTerms(keywords);
+
+    // 1) 召回候选图组（按小节标题 ilike 模块词/功能词/原始关键词）
+    const ors: string[] = [];
+    for (const mod of terms.modules) ors.push(`section_title.ilike.%${mod}%`);
+    for (const fn of terms.functions) ors.push(`section_title.ilike.%${fn}%`);
+    for (const kw of keywords.filter(Boolean).slice(0, 6)) {
+      const safe = kw.replace(/[,()（）、，:：%]/g, ' ').trim();
+      if (safe.length >= 2) ors.push(`section_title.ilike.%${safe}%`);
+    }
+    if (ors.length === 0) return null;
+
+    let q = this.db
+      .from('screenshot_parameter_groups')
+      .select(
+        'id,record_id,section_title,image_count,kb_version,bidding_screenshots(project_name,project_school)',
+      )
+      .order('image_count', { ascending: false })
+      .limit(limit);
+    q = q.or(ors.join(','));
+
+    const { data, error } = await q;
+    if (error) throw error;
+    const groupRows = (data ?? []) as unknown as Array<GroupRow & {
+      bidding_screenshots?: { project_name?: string; project_school?: string } | null;
+    }>;
+    if (groupRows.length === 0) return null;
+
+    // 2) 打分：模块词命中 +2、功能词命中 +2、原始关键词子串 +1
+    const scoreGroup = (g: GroupRow): number => {
+      const title = (g.section_title ?? '').toLowerCase();
+      let s = 0;
+      if (opts.kbVersion && g.kb_version === opts.kbVersion) s += 0.05;
+      for (const m of terms.modules) if (title.includes(m)) s += 2;
+      for (const f of terms.functions) if (title.includes(f)) s += 2;
+      for (const kw of keywords.filter(Boolean).slice(0, 6)) {
+        const safe = kw.replace(/[,()（）、，:：%]/g, '').toLowerCase();
+        if (safe.length >= 2 && title.includes(safe)) s += 1;
+      }
+      return s;
+    };
+
+    const scored = groupRows
+      .map((g) => ({ g, score: scoreGroup(g) }))
+      .filter((x) => x.score >= minScore)
+      .sort((a, b) => b.score - a.score || b.g.image_count - a.g.image_count);
+    if (scored.length === 0) return null;
+
+    // 3) 取最佳组，加载组内图片（按 seq），并过滤坏资产
+    const best = scored[0].g;
+    const { data: itemRows, error: itemErr } = await this.db
+      .from('screenshot_group_assets')
+      .select('group_id,asset_id,seq')
+      .eq('group_id', best.id)
+      .order('seq', { ascending: true });
+    if (itemErr) throw itemErr;
+    const items = (itemRows ?? []) as GroupAssetRow[];
+
+    const assetIds = Array.from(new Set(items.map((i) => i.asset_id)));
+    const usable = new Set<string>();
+    if (assetIds.length) {
+      const { data: assets, error: assetErr } = await this.db
+        .from('external_file_assets')
+        .select('id,status')
+        .in('id', assetIds);
+      if (assetErr) throw assetErr;
+      for (const a of assets as Array<{ id: string; status: string }>) {
+        if (a.status === 'stored' || a.status === 'direct') usable.add(a.id);
+      }
+    }
+
+    const orderedAssets = items
+      .filter((i) => usable.has(i.asset_id))
+      .map((i) => ({ assetId: i.asset_id, seq: i.seq, visionNote: null }));
+    if (orderedAssets.length === 0) return null;
+
+    const biz = best.bidding_screenshots ?? null;
+    return {
+      groupId: best.id,
+      sectionTitle: best.section_title,
+      imageCount: best.image_count,
+      score: scored[0].score,
+      sourceRecordId: best.record_id,
+      sourceProjectName: biz?.project_name ?? null,
+      sourceSchool: biz?.project_school ?? null,
+      assets: orderedAssets,
+    };
   }
 }
 

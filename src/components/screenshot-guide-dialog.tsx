@@ -13,6 +13,7 @@ import {
   Pencil,
   Eye,
   Ban,
+  Layers,
 } from 'lucide-react';
 import { apiFetchSSE } from '@/lib/web/api-client';
 import { showToast } from '@/lib/web/toast-store';
@@ -40,6 +41,8 @@ export interface GuideItem {
   score: number | null;
   mustCapture: boolean;
   references: GuideReference[];
+  /** 整组匹配时的参数小节标题（这组图共同响应同一条参数） */
+  referenceGroupTitle?: string | null;
   instruction: string;
   suggestedFileName: string;
   status: 'pending' | 'ready' | 'na';
@@ -365,7 +368,25 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
                           <span className="text-xs">请按通用规范截图或标记「待补充」</span>
                         </div>
                       ) : (
-                        <ReferenceViewer reference={activeItem.references[refIndex]} />
+                        <div className="space-y-3">
+                          {activeItem.referenceGroupTitle && activeItem.references.length > 1 && (
+                            <div className="flex items-start gap-2 rounded-md border border-brand/20 bg-brand/5 p-2.5 text-xs">
+                              <Layers className="mt-0.5 h-4 w-4 shrink-0 text-brand" />
+                              <div className="min-w-0">
+                                <p className="font-medium text-brand">
+                                  整组截图 · 该参数由 {activeItem.references.length} 张截图共同响应
+                                </p>
+                                <p className="mt-0.5 break-all text-muted-foreground">
+                                  {activeItem.referenceGroupTitle}
+                                </p>
+                                <p className="mt-0.5 text-muted-foreground">
+                                  请按顺序截取形态/界面的全部截图，完整证明该参数。
+                                </p>
+                              </div>
+                            </div>
+                          )}
+                          <ReferenceViewer reference={activeItem.references[refIndex]} />
+                        </div>
                       )}
                     </div>
                   </div>
@@ -460,7 +481,9 @@ function ReferenceViewer({ reference }: { reference: GuideReference }) {
       </a>
       {reference.visionNote && (
         <figcaption className="text-sm text-muted-foreground">
-          <span className="font-medium text-foreground">识别要点：</span>
+          {reference.visionNote.startsWith('图组第') ? null : (
+            <span className="font-medium text-foreground">识别要点：</span>
+          )}
           {reference.visionNote}
         </figcaption>
       )}
