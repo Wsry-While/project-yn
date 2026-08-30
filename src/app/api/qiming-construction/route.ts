@@ -18,6 +18,8 @@ export async function GET(request: NextRequest) {
     const school = sp.get('school')?.trim() || undefined;
     const limit = Math.min(Number(sp.get('limit') ?? '100') || 100, 2000);
     const offset = Number(sp.get('offset') ?? '0') || 0;
+    const sortBy = sp.get('sortBy')?.trim() || undefined;
+    const sortDir = sp.get('sortDir')?.trim() || undefined;
 
     const db = getAdminSupabase();
     const service = new QimingConstructionService(db);
@@ -26,6 +28,8 @@ export async function GET(request: NextRequest) {
       year,
       salesManager,
       school,
+      sortBy,
+      sortDir,
       limit,
       offset,
     });

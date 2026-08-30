@@ -2,6 +2,18 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { QimingConstruction, QimingConstructionInput } from './types';
 import { mapQimingConstruction, type QimingConstructionRow } from './qiming-construction-mapper';
 import { sanitizeRichText } from './sanitize';
+import { parseSort } from './sort';
+
+/** 启明星建设可排序列（前端 sortBy key → 数据库列），白名单防注入 */
+const QIMING_SORTABLE: Record<string, string> = {
+  project: 'project_name',
+  school: 'school',
+  year: 'project_year',
+  sales: 'sales_manager',
+  contract: 'is_sign_contract',
+  delivery: 'project_delivery_time',
+  synced: 'synced_at',
+};
 
 export class QimingConstructionService {
   constructor(private readonly db: SupabaseClient) {}
@@ -14,6 +26,8 @@ export class QimingConstructionService {
     includeDeleted?: boolean;
     limit?: number;
     offset?: number;
+    sortBy?: string;
+    sortDir?: string;
   } = {}): Promise<{ rows: QimingConstruction[]; total: number }> {
     const limit = Math.min(filter.limit ?? 100, 500);
     const offset = filter.offset ?? 0;
@@ -36,9 +50,14 @@ export class QimingConstructionService {
       q = q.or(orQuery);
     }
 
-    const { data, error, count } = await q
-      .order('project_delivery_time', { ascending: true, nullsFirst: false })
-      .range(offset, offset + limit - 1);
+    // 列头排序：白名单命中用指定列；否则默认交付时间升序（紧急在前）
+    const sort = parseSort(filter.sortBy, filter.sortDir, QIMING_SORTABLE);
+    if (sort) {
+      q = q.order(sort.column, { ascending: sort.ascending, nullsFirst: false });
+    } else {
+      q = q.order('project_delivery_time', { ascending: true, nullsFirst: false });
+    }
+    const { data, error, count } = await q.range(offset, offset + limit - 1);
 
     if (error) throw new Error(`查询启明星建设失败: ${error.message}`);
     return {

@@ -2,6 +2,18 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ProjectDemand, ProjectDemandInput } from './types';
 import { mapProjectDemand, type ProjectDemandRow } from './project-demand-mapper';
 import { sanitizeRichText } from './sanitize';
+import { parseSort } from './sort';
+
+/** 项目建设申请可排序列（前端 sortBy key → 数据库列），白名单防注入 */
+const DEMAND_SORTABLE: Record<string, string> = {
+  company: 'company',
+  demandType: 'demand_type',
+  year: 'project_year',
+  sales: 'sales_manager',
+  requiredDate: 'required_finish_date',
+  completion: 'completion_status',
+  synced: 'synced_at',
+};
 
 export class ProjectDemandService {
   constructor(private readonly db: SupabaseClient) {}
@@ -14,6 +26,8 @@ export class ProjectDemandService {
     includeDeleted?: boolean;
     limit?: number;
     offset?: number;
+    sortBy?: string;
+    sortDir?: string;
   } = {}): Promise<{ rows: ProjectDemand[]; total: number }> {
     const limit = Math.min(filter.limit ?? 100, 500);
     const offset = filter.offset ?? 0;
@@ -33,9 +47,14 @@ export class ProjectDemandService {
       ].join(',');
       q = q.or(orQuery);
     }
-    const { data, error, count } = await q
-      .order('required_finish_date', { ascending: true })
-      .range(offset, offset + limit - 1);
+    // 列头排序：白名单命中用指定列；否则默认要求完成日期升序（紧急在前）
+    const sort = parseSort(filter.sortBy, filter.sortDir, DEMAND_SORTABLE);
+    if (sort) {
+      q = q.order(sort.column, { ascending: sort.ascending, nullsFirst: false });
+    } else {
+      q = q.order('required_finish_date', { ascending: true });
+    }
+    const { data, error, count } = await q.range(offset, offset + limit - 1);
 
     if (error) throw new Error(`查询项目建设申请失败: ${error.message}`);
     return { rows: (data as ProjectDemandRow[] | null)?.map(mapProjectDemand) ?? [], total: count ?? 0 };

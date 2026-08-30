@@ -14,6 +14,8 @@ export async function GET(request: NextRequest) {
       completionStatus: p.get('completionStatus') ?? undefined,
       salesManager: p.get('salesManager') ?? undefined,
       overdue: p.get('overdue') === '1',
+      sortBy: p.get('sortBy') ?? undefined,
+      sortDir: p.get('sortDir') ?? undefined,
       limit: p.get('limit') ? Number(p.get('limit')) : 100,
       offset: p.get('offset') ? Number(p.get('offset')) : 0,
     });

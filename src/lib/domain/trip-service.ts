@@ -3,6 +3,18 @@ import type { TripApprovalStatus, TripContact, TripRequest, TripRichText } from 
 import { mapTrip, type TripRow } from '@/lib/domain/mappers';
 import { sanitizeRichText } from '@/lib/domain/sanitize';
 import { OptionDictionaryService } from '@/lib/domain/trip-option-service';
+import { parseSort } from '@/lib/domain/sort';
+
+/** 项目外出可排序列（前端 sortBy key → 数据库列），白名单防注入 */
+const TRIP_SORTABLE: Record<string, string> = {
+  school: 'school_name',
+  supportType: 'support_type',
+  tripDate: 'trip_date',
+  sales: 'sales_manager_name',
+  year: 'year',
+  score: 'overall_score',
+  synced: 'synced_at',
+};
 
 export interface TripListFilter {
   search?: string;
@@ -11,6 +23,8 @@ export interface TripListFilter {
   includeDeleted?: boolean;
   limit?: number;
   offset?: number;
+  sortBy?: string;
+  sortDir?: string;
 }
 
 export interface TripExternalInput {
@@ -93,9 +107,15 @@ export class TripService {
   async list(filter: TripListFilter = {}): Promise<{ rows: TripRequest[]; total: number }> {
     let q = this.db
       .from('trip_requests')
-      .select('*', { count: 'exact' })
-      .order('trip_date', { ascending: false })
-      .order('synced_at', { ascending: false });
+      .select('*', { count: 'exact' });
+
+    // 列头排序：白名单命中则用指定列；否则默认按外出日期、同步时间倒序
+    const sort = parseSort(filter.sortBy, filter.sortDir, TRIP_SORTABLE);
+    if (sort) {
+      q = q.order(sort.column, { ascending: sort.ascending, nullsFirst: false });
+    } else {
+      q = q.order('trip_date', { ascending: false }).order('synced_at', { ascending: false });
+    }
 
     if (!filter.includeDeleted) q = q.is('deleted_at', null);
     if (filter.supportType) q = q.eq('support_type', filter.supportType);

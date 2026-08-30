@@ -17,6 +17,8 @@ export async function GET(request: NextRequest) {
       search: p.get('search') ?? undefined,
       supportType: p.get('supportType') ?? undefined,
       year: p.get('year') ? Number(p.get('year')) : undefined,
+      sortBy: p.get('sortBy') ?? undefined,
+      sortDir: p.get('sortDir') ?? undefined,
       limit: p.get('limit') ? Number(p.get('limit')) : 100,
       offset: p.get('offset') ? Number(p.get('offset')) : 0,
     });

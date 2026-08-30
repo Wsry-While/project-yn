@@ -1,6 +1,19 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { BiddingFileRef, BiddingScreenshot } from '@/lib/domain/types';
 import { mapBiddingScreenshot, type BiddingScreenshotRow } from '@/lib/domain/mappers';
+import { parseSort } from '@/lib/domain/sort';
+
+/** 招投标截图可排序列（前端 sortBy key → 数据库列），白名单防注入 */
+const BIDDING_SORTABLE: Record<string, string> = {
+  project: 'project_name',
+  school: 'project_school',
+  sales: 'sales_manager',
+  submissionDate: 'submission_date',
+  dueDate: 'due_delivery_date',
+  reservedDays: 'reserved_days',
+  completion: 'completion_status',
+  synced: 'synced_at',
+};
 
 export interface BiddingScreenshotListFilter {
   search?: string;
@@ -10,6 +23,8 @@ export interface BiddingScreenshotListFilter {
   includeDeleted?: boolean;
   limit?: number;
   offset?: number;
+  sortBy?: string;
+  sortDir?: string;
 }
 
 export interface BiddingScreenshotInput {
@@ -59,9 +74,15 @@ export class BiddingScreenshotService {
   async list(filter: BiddingScreenshotListFilter = {}): Promise<{ rows: BiddingScreenshot[]; total: number }> {
     let q = this.db
       .from('bidding_screenshots')
-      .select('*', { count: 'exact' })
-      .order('due_delivery_date', { ascending: true, nullsFirst: false })
-      .order('submission_date', { ascending: false });
+      .select('*', { count: 'exact' });
+
+    // 列头排序：白名单命中用指定列；否则默认交付日期升序（紧急在前）+提交日期倒序
+    const sort = parseSort(filter.sortBy, filter.sortDir, BIDDING_SORTABLE);
+    if (sort) {
+      q = q.order(sort.column, { ascending: sort.ascending, nullsFirst: false });
+    } else {
+      q = q.order('due_delivery_date', { ascending: true, nullsFirst: false }).order('submission_date', { ascending: false });
+    }
 
     if (!filter.includeDeleted) q = q.is('deleted_at', null);
     if (filter.completionStatus) q = q.eq('completion_status', filter.completionStatus);

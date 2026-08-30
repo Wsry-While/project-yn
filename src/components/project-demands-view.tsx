@@ -35,6 +35,7 @@ import { ListToolbar } from '@/components/list-toolbar';
 import { EmptyState } from '@/components/crud/empty-state';
 import { Descriptions } from '@/components/crud/descriptions';
 import { Can } from '@/components/crud/can';
+import { SortableTableHead } from '@/components/crud/sortable-table-head';
 
 interface DemandFilters extends Record<string, string> {
   search: string;
@@ -52,6 +53,7 @@ export function ProjectDemandsView() {
     pageSize: 20,
     initialFilters: { search: '', year: '', salesManager: '', completionStatus: '' },
     errorMessage: '加载项目建设申请失败',
+    defaultSort: { by: 'requiredDate', dir: 'asc' },
   });
 
   useEffect(() => {
@@ -201,11 +203,26 @@ export function ProjectDemandsView() {
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-muted/60">
-            <TableHead className="min-w-[260px]">单位 / 需求</TableHead>
-            <TableHead className="w-[120px]">年度 / 类型</TableHead>
-            <TableHead className="w-[160px]">销售 / 项目经理</TableHead>
-            <TableHead className="w-[120px]">要求完成</TableHead>
-            <TableHead className="w-[120px]">完成情况</TableHead>
+            <SortableTableHead
+              sortKey="company"
+              sort={list.sort}
+              onSort={list.setSortBy}
+              className="min-w-[260px]"
+            >
+              单位 / 需求
+            </SortableTableHead>
+            <SortableTableHead sortKey="year" sort={list.sort} onSort={list.setSortBy} className="w-[120px]">
+              年度 / 类型
+            </SortableTableHead>
+            <SortableTableHead sortKey="sales" sort={list.sort} onSort={list.setSortBy} className="w-[160px]">
+              销售 / 项目经理
+            </SortableTableHead>
+            <SortableTableHead sortKey="requiredDate" sort={list.sort} onSort={list.setSortBy} className="w-[120px]">
+              要求完成
+            </SortableTableHead>
+            <SortableTableHead sortKey="completion" sort={list.sort} onSort={list.setSortBy} className="w-[120px]">
+              完成情况
+            </SortableTableHead>
             <TableHead className="w-[100px] text-right">附件</TableHead>
             <TableHead className="w-[80px] text-right">操作</TableHead>
           </TableRow>

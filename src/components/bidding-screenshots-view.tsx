@@ -41,6 +41,7 @@ import { ListToolbar } from '@/components/list-toolbar';
 import { EmptyState } from '@/components/crud/empty-state';
 import { Descriptions } from '@/components/crud/descriptions';
 import { Can } from '@/components/crud/can';
+import { SortableTableHead } from '@/components/crud/sortable-table-head';
 import { BiddingDocumentPanel } from '@/components/bidding-document-panel';
 import { AttachmentLink, AttachmentList } from '@/components/attachment-viewer';
 
@@ -60,6 +61,7 @@ export function BiddingScreenshotsView() {
     pageSize: 20,
     initialFilters: { search: '', completionStatus: '', salesManager: '', overdue: '' },
     errorMessage: '加载招投标截图记录失败',
+    defaultSort: { by: 'dueDate', dir: 'asc' },
   });
 
   useEffect(() => {
@@ -201,11 +203,31 @@ export function BiddingScreenshotsView() {
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-muted/60">
-            <TableHead className="min-w-[240px]">项目</TableHead>
-            <TableHead className="w-[160px]">销售 / 经理</TableHead>
-            <TableHead className="w-[120px]">提交 / 交付</TableHead>
-            <TableHead className="w-[100px]">预留天数</TableHead>
-            <TableHead className="w-[120px]">完成情况</TableHead>
+            <SortableTableHead
+              sortKey="project"
+              sort={list.sort}
+              onSort={list.setSortBy}
+              className="min-w-[240px]"
+            >
+              项目
+            </SortableTableHead>
+            <SortableTableHead sortKey="sales" sort={list.sort} onSort={list.setSortBy} className="w-[160px]">
+              销售 / 经理
+            </SortableTableHead>
+            <SortableTableHead sortKey="dueDate" sort={list.sort} onSort={list.setSortBy} className="w-[120px]">
+              提交 / 交付
+            </SortableTableHead>
+            <SortableTableHead
+              sortKey="reservedDays"
+              sort={list.sort}
+              onSort={list.setSortBy}
+              className="w-[100px]"
+            >
+              预留天数
+            </SortableTableHead>
+            <SortableTableHead sortKey="completion" sort={list.sort} onSort={list.setSortBy} className="w-[120px]">
+              完成情况
+            </SortableTableHead>
             <TableHead className="w-[110px]">文档进度</TableHead>
             <TableHead className="w-[100px] text-right">附件</TableHead>
             <TableHead className="w-[80px] text-right">操作</TableHead>

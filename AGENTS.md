@@ -259,6 +259,7 @@
 - 大模型请求必须使用 `apiFetchSSE` 增量渲染，配合 `LlmLoadingMask` 做局部 loading，**禁止全屏遮罩**。
 - 用户关键操作通过 `logActivity()` 写入本地队列并批量上报到 `/api/activity`。
 - 全局快捷键：⌘/Ctrl+1~7 切换视图，⌘N 新建任务，Esc 关闭弹窗，逻辑集中在 `src/lib/web/hotkeys.ts`。
+- 四大只读列表（项目外出 `/trips`、招投标截图 `/bidding-screenshots`、项目建设申请 `/project-demands`、启明星建设 `/qiming-construction`）均为服务端分页 + 服务端排序：列头排序控件统一用 `src/components/crud/sortable-table-head.tsx` 的 `SortableTableHead`（点击循环 降序→升序→取消，图标 ChevronsUpDown/ArrowUp/ArrowDown）；排序状态由 `useServerPaginatedList` 的 `defaultSort`/`sort`/`setSortBy` 管理，query 透传 `sortBy=<语义key>&sortDir=asc|desc`；后端各服务用独立 `*_SORTABLE` 白名单（key→数据库列名）+ `src/lib/domain/sort.ts` 的 `parseSort()` 防 order() 列注入，白名单外字段忽略并回退默认排序（`nullsFirst:false`）。新增可排序列时务必同时在后端 `*_SORTABLE` 白名单和前端 `SortableTableHead sortKey` 上用同一语义 key。
 
 ## UI 设计与组件规范
 

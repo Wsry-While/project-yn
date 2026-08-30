@@ -46,6 +46,7 @@ import { ListToolbar } from '@/components/list-toolbar';
 import { EmptyState } from '@/components/crud/empty-state';
 import { Descriptions } from '@/components/crud/descriptions';
 import { Can } from '@/components/crud/can';
+import { SortableTableHead } from '@/components/crud/sortable-table-head';
 import { cn } from '@/lib/utils';
 
 interface TripFilters extends Record<string, string> {
@@ -65,6 +66,7 @@ export function TripsView() {
     pageSize: 20,
     initialFilters: { search: '', supportType: '', year: '' },
     errorMessage: '加载项目外出记录失败',
+    defaultSort: { by: 'tripDate', dir: 'desc' },
   });
 
   const refresh = () => {
@@ -212,12 +214,33 @@ export function TripsView() {
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-muted/60">
-            <TableHead className="min-w-[260px]">学校 / 事宜</TableHead>
-            <TableHead className="w-[140px]">类型</TableHead>
-            <TableHead className="w-[180px]">外出时间</TableHead>
-            <TableHead className="w-[160px]">销售 / 项目经理</TableHead>
+            <SortableTableHead
+              sortKey="school"
+              sort={list.sort}
+              onSort={list.setSortBy}
+              className="min-w-[260px]"
+            >
+              学校 / 事宜
+            </SortableTableHead>
+            <SortableTableHead sortKey="supportType" sort={list.sort} onSort={list.setSortBy} className="w-[140px]">
+              类型
+            </SortableTableHead>
+            <SortableTableHead sortKey="tripDate" sort={list.sort} onSort={list.setSortBy} className="w-[180px]">
+              外出时间
+            </SortableTableHead>
+            <SortableTableHead sortKey="sales" sort={list.sort} onSort={list.setSortBy} className="w-[160px]">
+              销售 / 项目经理
+            </SortableTableHead>
             <TableHead className="w-[100px]">状态</TableHead>
-            <TableHead className="w-[120px] text-right">同步时间</TableHead>
+            <SortableTableHead
+              sortKey="synced"
+              sort={list.sort}
+              onSort={list.setSortBy}
+              align="right"
+              className="w-[120px]"
+            >
+              同步时间
+            </SortableTableHead>
             <TableHead className="w-[80px] text-right">操作</TableHead>
           </TableRow>
         </TableHeader>
