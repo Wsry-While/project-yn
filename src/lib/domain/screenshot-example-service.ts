@@ -268,7 +268,7 @@ export class ScreenshotExampleService {
       )
       .order('confidence', { ascending: false })
       .order('created_at', { ascending: false })
-      .limit(limit * 10);
+      .limit(limit * 20);
 
     // 注意：不按 kb_version 硬过滤（见方法注释）。
 
@@ -294,7 +294,27 @@ export class ScreenshotExampleService {
 
     const { data, error } = await q;
     if (error) throw error;
-    const rows = (data ?? []) as unknown as ParameterMappingRow[];
+    const rawRows = (data ?? []) as unknown as ParameterMappingRow[];
+
+    // 2.5) 过滤掉预览不可用的坏资产（stored/direct 之外，如原始文件缺失的 failed）。
+    //      mapping.asset_id 指向 external_file_assets；批量查状态，坏的直接剔除，
+    //      避免指导书默认第一张参考图就是「预览不可用」。
+    const assetIds = Array.from(
+      new Set(rawRows.map((r) => r.asset_id).filter((x): x is string => !!x)),
+    );
+    const usableAssets = new Set<string>();
+    if (assetIds.length) {
+      const { data: assets, error: assetErr } = await this.db
+        .from('external_file_assets')
+        .select('id,status')
+        .in('id', assetIds);
+      if (assetErr) throw assetErr;
+      for (const a of assets as Array<{ id: string; status: string }>) {
+        if (a.status === 'stored' || a.status === 'direct') usableAssets.add(a.id);
+      }
+    }
+    // asset_id 为空（极早期数据）或资产状态可预览的才保留
+    const rows = rawRows.filter((r) => !r.asset_id || usableAssets.has(r.asset_id));
 
     // 3) 相关度打分：模块命中 +2，功能词命中 parameter_key/name 每个 +2，
     //    命中 vision_note +0.5；同 asset 保留得分最高者，最后按 (得分, confidence) 排序。

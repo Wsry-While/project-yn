@@ -16,6 +16,7 @@ import { randomUUID } from 'crypto';
 import { ScreenshotExampleService } from './screenshot-example-service';
 import { resolveAssetDownload } from './asset-access';
 import { getChaoxingDirectDownloadUrl } from './chaoxing/file-tool';
+import { uploadToStorage, getStorageBucket } from './storage/object-storage-tool';
 import { getModelForScenario, buildMessages } from './llm-prompts';
 import { extractImagesFromDocx, type ExtractedDocxImage } from './parse/docx-images';
 import type { BiddingScreenshot, BiddingFileRef } from './types';
@@ -445,27 +446,21 @@ export class ScreenshotKnowledgeService {
       .maybeSingle();
     if (existing?.id) return existing.id as string;
 
-    const bucket = process.env.STORAGE_BUCKET || 'bidding-attachments';
     const ext = ex.ext === 'jpeg' ? 'jpg' : ex.ext;
-    const storageKey = `kb-docx/${ex.contentHash}.${ext}`;
     const fileName = img.sourceDocName
       ? `${img.sourceDocName.replace(/\.[^.]+$/, '')}_${ex.index + 1}.${ext}`
       : `kb-${ex.contentHash}.${ext}`;
     const contentType = ex.contentType || `image/${ext}`;
 
-    const { error: uploadErr } = await this.db.storage
-      .from(bucket)
-      .upload(
-        storageKey,
-        new Blob([new Uint8Array(ex.buffer)], { type: contentType }),
-        { contentType, upsert: false },
-      );
-    if (uploadErr) {
-      // 已存在（并发/重复）视为成功
-      if (!/Duplicate|already exists/i.test(uploadErr.message)) {
-        throw new Error(`上传抽图失败: ${uploadErr.message}`);
-      }
-    }
+    // 必须走与业务附件一致的 Coze 内置 S3（uploadToStorage + createSignedDownloadUrl）。
+    // 早期版本误用 supabase.storage.from('bidding-attachments').upload() 传到 Supabase Storage，
+    // 但下载签名走 S3（coze-coding-project.tos.coze.site/coze_storage_…），两边 key 不互通，
+    // 预览/下载回源全部 NoSuchKey 404。
+    const uploaded = await uploadToStorage({
+      key: `kb-docx/${ex.contentHash}.${ext}`,
+      body: Buffer.from(ex.buffer),
+      contentType,
+    });
 
     const now = new Date().toISOString();
     const { data, error: insertErr } = await this.db
@@ -480,8 +475,9 @@ export class ScreenshotKnowledgeService {
         content_type: contentType,
         byte_size: ex.buffer.length,
         status: 'stored',
-        bucket,
-        storage_key: storageKey,
+        bucket: uploaded.bucket || getStorageBucket(),
+        storage_key: uploaded.key,
+        stored_url: `/${uploaded.bucket}/${uploaded.key}`,
         error_message: null,
         retry_count: 0,
         created_at: now,
