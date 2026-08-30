@@ -3,7 +3,6 @@ import { LLMClient, Config } from 'coze-coding-dev-sdk';
 import { getModelForScenario } from './llm-prompts';
 import {
   ScreenshotExampleService,
-  normalizeParameterKey,
   type ParameterMapping,
 } from './screenshot-example-service';
 import { ScreenshotKnowledgeService } from './screenshot-knowledge-service';
@@ -69,9 +68,9 @@ interface ScoreItemRow {
 /**
  * 截图作业指导书生成服务。
  *
- * 流程：读取已确认文档的评分项 → 过滤需截图项 → 对每项用 normalizeParameterKey
- * 召回知识库参考图 → 把参数要求+参考图证据喂给 LLM，生成「到哪个菜单/截什么/
- * 如何证明」的可执行作业说明。
+ * 流程：读取已确认文档的评分项 → 过滤需截图项 → 对每项按标题拆词
+ * 召回知识库参考图（跨版本）→ 把参数要求+参考图证据喂给 LLM，生成「到哪个菜单/
+ * 截什么/如何证明」的可执行作业说明。
  */
 export const ScreenshotGuideService = {
   /**
@@ -132,8 +131,10 @@ export const ScreenshotGuideService = {
     for (let i = 0; i < screenshotRows.length; i++) {
       const row = screenshotRows[i];
       const systemModule = row.category || null;
-      const paramKey = normalizeParameterKey(row.title, systemModule);
-      const refs = await exampleService.searchByParameter([paramKey, row.title], {
+      // 召回只传评分项标题（+ 必要时原始标题），由 searchByParameter 内部拆模块/功能词；
+      // 不要把 category（如"技术参数"）当系统模块拼进 parameter_key——视觉库的 key 前缀
+      // 是真实业务模块（知识图谱/微课…），用 category 当前缀会导致精确与 ilike 全部落空。
+      const refs = await exampleService.searchByParameter([row.title], {
         limit: 3,
         kbVersion: kbVersion?.version,
       });

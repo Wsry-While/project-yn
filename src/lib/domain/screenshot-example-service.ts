@@ -242,15 +242,24 @@ export class ScreenshotExampleService {
   }
 
   /**
-   * 按参数名/关键词召回参考图映射（Top N），按 confidence 排序。
-   * 同时做 parameter_key 精确匹配 + 关键词 ilike 模糊匹配。
+   * 按参数名/关键词召回参考图映射（Top N），按相关度 + confidence 排序。
+   *
+   * 召回不强制按 kb_version 过滤：知识库版本是每次「全库学习」滚动生成的，
+   * 评分项生成时拿到的 latestReady 版本号与 mappings 里实际写入的版本经常错位
+   * （历史 404 时代的 ready 版本下一条映射都没有），按版本硬过滤会直接 0 命中。
+   * 这里跨所有版本召回，让最新、最高置信度的映射自然排在前面。opts.kbVersion
+   * 仅作为同分时的优先版本（可空）。
    */
   async searchByParameter(
     keywords: string[],
     opts: { limit?: number; kbVersion?: string } = {},
   ): Promise<ParameterMapping[]> {
     const limit = opts.limit ?? 5;
-    const key = normalizeParameterKey(keywords.join(' '), null);
+
+    // 1) 把评分项标题/关键词拆成「系统模块词 + 功能词」，用于 ilike 召回。
+    //    评分项形如「知识图谱支持课程章节一键转化」，视觉库 parameter_key 形如
+    //    「知识图谱:课程章节一键转化生成知识图谱」，整句匹配不上，拆成功能短语才能命中。
+    const terms = extractMatchTerms(keywords);
 
     let q = this.db
       .from('screenshot_parameter_mappings')
@@ -259,25 +268,26 @@ export class ScreenshotExampleService {
       )
       .order('confidence', { ascending: false })
       .order('created_at', { ascending: false })
-      .limit(limit * 3);
+      .limit(limit * 10);
 
-    if (opts.kbVersion) q = q.eq('kb_version', opts.kbVersion);
+    // 注意：不按 kb_version 硬过滤（见方法注释）。
 
-    // 优先 parameter_key 精确匹配；再用归一化关键词做 parameter_key 子串匹配，
-    // 缓解「知识图谱支持AI生成功能」(item) vs 「AI知识图谱生成」(vision) 的措辞差异。
+    // 2) 组装 OR 召回条件：模块词命中 system_module/parameter_key 前缀，
+    //    功能词命中 parameter_key/parameter_name；vision_note 权重最低，用最短的词兜底。
     const ors: string[] = [];
-    if (key) ors.push(`parameter_key.eq.${key}`);
-    const keyHints = keywords
-      .map((k) => normalizeParameterKey(k, null))
-      .filter((k) => k.length >= 2);
-    for (const kh of keyHints.slice(0, 6)) {
-      ors.push(`parameter_key.ilike.%${kh}%`);
+    for (const mod of terms.modules) {
+      ors.push(`system_module.ilike.%${mod}%`);
+      ors.push(`parameter_key.ilike.${mod}:%`);
     }
+    for (const fn of terms.functions) {
+      ors.push(`parameter_key.ilike.%${fn}%`);
+      ors.push(`parameter_name.ilike.%${fn}%`);
+    }
+    // 原始关键词（去掉标点）在 parameter_name 上兜底
     for (const kw of keywords.filter(Boolean).slice(0, 6)) {
-      const safe = kw.replace(/[,()（）、，]/g, ' ').trim();
-      if (safe.length >= 2) {
+      const safe = kw.replace(/[,()（）、，:：]/g, ' ').trim();
+      if (safe.length >= 2 && !terms.functions.includes(safe.toLowerCase())) {
         ors.push(`parameter_name.ilike.%${safe}%`);
-        ors.push(`vision_note.ilike.%${safe}%`);
       }
     }
     if (ors.length) q = q.or(ors.join(','));
@@ -286,31 +296,103 @@ export class ScreenshotExampleService {
     if (error) throw error;
     const rows = (data ?? []) as unknown as ParameterMappingRow[];
 
-    // 去重：同一 asset 只保留 confidence 最高的一条
-    const byAsset = new Map<string, ParameterMapping>();
+    // 3) 相关度打分：模块命中 +2，功能词命中 parameter_key/name 每个 +2，
+    //    命中 vision_note +0.5；同 asset 保留得分最高者，最后按 (得分, confidence) 排序。
+    const modSet = terms.modules;
+    const fnSet = terms.functions;
+    const score = (r: ParameterMappingRow): number => {
+      let s = Number(r.confidence) / 100; // 0..1 基线
+      const pkey = (r.parameter_key ?? '').toLowerCase();
+      const pname = (r.parameter_name ?? '').toLowerCase();
+      const mod = (r.system_module ?? '').toLowerCase();
+      const note = (r.vision_note ?? '').toLowerCase();
+      if (opts.kbVersion && r.kb_version === opts.kbVersion) s += 0.05;
+      for (const m of modSet) {
+        if (mod.includes(m) || pkey.startsWith(`${m}:`)) s += 2;
+      }
+      for (const f of fnSet) {
+        if (pkey.includes(f) || pname.includes(f)) s += 2;
+        else if (note.includes(f)) s += 0.5;
+      }
+      return s;
+    };
+
+    const byAsset = new Map<string, { row: ParameterMappingRow; score: number }>();
     for (const r of rows) {
       const assetKey = r.asset_id ?? r.example_id;
+      const s = score(r);
       const cur = byAsset.get(assetKey);
-      if (!cur || Number(r.confidence) > cur.confidence) {
-        byAsset.set(assetKey, {
-          id: r.id,
-          exampleId: r.example_id,
-          assetId: r.asset_id,
-          sourceRecordId: r.source_record_id,
-          parameterKey: r.parameter_key,
-          parameterName: r.parameter_name,
-          systemModule: r.system_module,
-          visionNote: r.vision_note,
-          evidenceElements: r.evidence_elements ?? [],
-          confidence: Number(r.confidence),
-          kbVersion: r.kb_version,
-          createdAt: r.created_at,
-          storagePath: null,
-        });
+      if (!cur || s > cur.score) byAsset.set(assetKey, { row: r, score: s });
+    }
+
+    return Array.from(byAsset.values())
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map(({ row: r }) => ({
+        id: r.id,
+        exampleId: r.example_id,
+        assetId: r.asset_id,
+        sourceRecordId: r.source_record_id,
+        parameterKey: r.parameter_key,
+        parameterName: r.parameter_name,
+        systemModule: r.system_module,
+        visionNote: r.vision_note,
+        evidenceElements: r.evidence_elements ?? [],
+        confidence: Number(r.confidence),
+        kbVersion: r.kb_version,
+        createdAt: r.created_at,
+        storagePath: null,
+      }));
+  }
+}
+
+/**
+ * 从评分项标题/关键词里抽取「系统模块词」和「功能词」。
+ * - modules：知识图谱/问题图谱/微课/AI教案/学情分析/实践/文献检测/达成度 等业务模块名。
+ * - functions：去掉模块名和「支持/提供/具备/功能」等套话后，按功能语义拆出的短语。
+ */
+const MODULE_HINTS = [
+  '知识图谱', '知识森林', '问题图谱', '课程图谱', '微课', 'ai教案', '教案',
+  'ai学情分析', '学情分析', 'ai实践', '实践', '文献检测', '课程达成度', '达成度',
+  '数据统计', '资源管理', '业务问答', '问答', '助教', '移动端', '自测', '报告',
+];
+
+function extractMatchTerms(keywords: string[]): { modules: string[]; functions: string[] } {
+  const modules = new Set<string>();
+  const functionSet = new Set<string>();
+
+  for (const raw of keywords) {
+    if (!raw) continue;
+    // 归一化：去标点、空白、常见套话前缀，转小写
+    let text = raw
+      .replace(/[\s，,。.；;：:、（）()【】\[\]"'""''！!？?\/\\\-—_·]/g, '')
+      .toLowerCase();
+    text = text.replace(/^(支持|提供|具备|可|能够|可以|实现|拥有|含|包括|系统|平台)+/g, '');
+    text = text.replace(/(功能|情况|能力)$/g, '');
+
+    for (const m of MODULE_HINTS) {
+      if (text.includes(m)) {
+        modules.add(m);
+        text = text.split(m).join(' ');
       }
     }
-    return Array.from(byAsset.values()).slice(0, limit);
+
+    // 剩余按功能动作拆词：在「一键/自定义/智能/多/双/关联/导入/导出/生成/切换/编辑/检索/统计/展示/查看/反馈/解析/上传/下载/关联/标签/画像」等动词边界切分
+    const parts = text
+      .split(/\s+|(?=(?:一键|自定义|智能|多类型|多方式|多途径|多种|多个|双模式|双|关联|导入|导出|生成|切换|编辑|检索|搜索|统计|展示|显示|查看|反馈|解析|上传|下载|标签|画像|报告|转化|可视化|导航|标注|属性|背景色|样式|大纲|模型|回复|答案|文档|资料|资源|名单|模式|入口|内容|列表|详情|分布))/g)
+      .map((p) => p.trim())
+      .filter((p) => p.length >= 2 && p.length <= 12);
+    for (const p of parts) {
+      // 过滤纯模块名/纯套话
+      if (MODULE_HINTS.includes(p)) continue;
+      functionSet.add(p);
+    }
   }
+
+  return {
+    modules: Array.from(modules),
+    functions: Array.from(functionSet).slice(0, 10),
+  };
 }
 
 /**
