@@ -484,7 +484,10 @@ export class ScreenshotExampleService {
       candidateCount?: number;
     } = {},
   ): Promise<ReferenceGroup[]> {
-    const limit = opts.limit ?? 120;
+    // 召回池必须够大：全库图组随补齐增多（~470 组），宽 or 预过滤可能命中 200+ 组，
+    // 小而准的专门参数组（往往只 2~4 张图）若被 limit 截断，会在打分前丢失、错误回退散图。
+    // 打分在内存进行，400 组开销可控；order 见下——不按图数排序截断。
+    const limit = opts.limit ?? 400;
     const candidateCount = opts.candidateCount ?? 4;
     const terms = extractMatchTerms(keywords);
 
@@ -511,8 +514,11 @@ export class ScreenshotExampleService {
       .select(
         'id,record_id,section_title,image_count,kb_version,bidding_screenshots(project_name,project_school)',
       )
-      .order('image_count', { ascending: false })
       .limit(limit);
+    // 注意：召回候选不要按 image_count desc 排序再截断。专门参数组往往只有 2~4 张图，
+    // 而全库图组数随补齐增多（500 上限内 ~160 组 → 全库 ~470 组），按图数倒序 limit 会让
+    // 小而准的组在打分前被几十个大杂烩大组挤出（曾导致「一键转化」2 张专门组漏召回、回退散图）。
+    // 这里只做关键词召回（or ilike）+ limit 兜底防超大结果集，排序完全交给打分阶段。
     q = q.or(ors.join(','));
 
     const { data, error } = await q;

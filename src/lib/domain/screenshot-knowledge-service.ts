@@ -269,7 +269,14 @@ export class ScreenshotKnowledgeService {
     // 2.6 持久化参数图组（按 contentHash 反查已上传 asset；视觉识别失败不影响成组）。
     let groupCount = 0;
     try {
-      groupCount = await this.persistSectionGroups(candidates.groups, version);
+      const groupResult = await this.persistSectionGroups(candidates.groups, version);
+      groupCount = groupResult.persisted;
+      for (const inc of groupResult.incomplete) {
+        log.push(`[incomplete-group] ${inc.title}: 原文 ${inc.expected} 张，已入组 ${inc.got} 张（有图上传失败）`);
+      }
+      if (groupResult.incomplete.length > 0) {
+        console.warn('[kb-learn] 存在缺图图组:', groupResult.incomplete.length, '个，可运行 repairGroupAssets 补图');
+      }
       emit('delta', { content: `\n▸ 参数图组：已沉淀 ${groupCount} 组「一条参数 ↔ 多张截图」关联\n` });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -310,7 +317,10 @@ export class ScreenshotKnowledgeService {
    * 直接 select('*') 拿到的是数据库下划线字段（delivery_document / attachments），
    * 这里做一次轻量归一，避免依赖业务 mapper。
    */
-  private async collectImageCandidates(): Promise<{
+  private async collectImageCandidates(opts?: {
+    /** 跳过 500 张视觉学习上限：全库图组修复需要覆盖每份 docx 的全部图片 */
+    skipImageCap?: boolean;
+  }): Promise<{
     records: number;
     images: LearnCandidate[];
     groups: RawSectionGroup[];
@@ -344,7 +354,9 @@ export class ScreenshotKnowledgeService {
     const seenHash = new Set<string>();
     // 单次学习的图片上限：全库可能有上千张图，逐张走多模态耗时极长，
     // 默认取最近 500 张（按 created_at desc 已优先新记录）。可用环境变量调大。
-    const maxImages = Number(process.env.KB_LEARN_MAX_IMAGES ?? 500);
+    // skipImageCap（图组修复）不跑视觉，需要覆盖全部图片，故不设上限。
+    const skipCap = opts?.skipImageCap === true;
+    const maxImages = skipCap ? Number.POSITIVE_INFINITY : Number(process.env.KB_LEARN_MAX_IMAGES ?? 500);
 
     for (const row of all) {
       // 归一为 BiddingScreenshot 形态供后续复用（id/projectName/projectSchool/deliveryDocument/attachments）
@@ -476,15 +488,19 @@ export class ScreenshotKnowledgeService {
     const ex = img.extracted;
     const objectId = `kb/${ex.contentHash}`;
 
-    // 幂等：已上传过则直接复用
-    const { data: existing } = await this.db
+    // 幂等：已存在资产行时，stored/direct 直接复用；failed/pending 说明历史上传失败，
+    // 必须重新上传并原地修复——否则重学会一直复用失败行，图永远进不了组（曾导致
+    // 整组截图只显示 1 张：同组另外 2 张上传失败后再也没重传）。
+    const { data: existingRow } = await this.db
       .from('external_file_assets')
-      .select('id')
+      .select('id,status')
       .eq('source', 'kb-docx')
       .eq('object_id', objectId)
       .limit(1)
       .maybeSingle();
-    if (existing?.id) return existing.id as string;
+    if (existingRow?.id && (existingRow.status === 'stored' || existingRow.status === 'direct')) {
+      return existingRow.id as string;
+    }
 
     const ext = ex.ext === 'jpeg' ? 'jpg' : ex.ext;
     const fileName = img.sourceDocName
@@ -503,26 +519,36 @@ export class ScreenshotKnowledgeService {
     });
 
     const now = new Date().toISOString();
+    const fields: Record<string, unknown> = {
+      source: 'kb-docx',
+      object_id: objectId,
+      source_url: null,
+      file_name: fileName,
+      suffix: ext,
+      content_type: contentType,
+      byte_size: ex.buffer.length,
+      status: 'stored',
+      bucket: uploaded.bucket || getStorageBucket(),
+      storage_key: uploaded.key,
+      stored_url: `/${uploaded.bucket}/${uploaded.key}`,
+      error_message: null,
+      updated_at: now,
+    };
+
+    // 已有失败行：原地更新修复（保留 id，组/历史引用不失效）
+    if (existingRow?.id) {
+      const { error: updErr } = await this.db
+        .from('external_file_assets')
+        .update({ ...fields, retry_count: 0, last_retried_at: now } as never)
+        .eq('id', existingRow.id);
+      if (updErr) throw new Error(`修复抽图资产失败: ${updErr.message}`);
+      return existingRow.id as string;
+    }
+
+    // 全新插入
     const { data, error: insertErr } = await this.db
       .from('external_file_assets')
-      .insert({
-        id: randomUUID(),
-        source: 'kb-docx',
-        object_id: objectId,
-        source_url: null,
-        file_name: fileName,
-        suffix: ext,
-        content_type: contentType,
-        byte_size: ex.buffer.length,
-        status: 'stored',
-        bucket: uploaded.bucket || getStorageBucket(),
-        storage_key: uploaded.key,
-        stored_url: `/${uploaded.bucket}/${uploaded.key}`,
-        error_message: null,
-        retry_count: 0,
-        created_at: now,
-        updated_at: now,
-      } as never)
+      .insert({ ...fields, id: randomUUID(), retry_count: 0, created_at: now } as never)
       .select('id')
       .single();
     if (insertErr) {
@@ -548,8 +574,82 @@ export class ScreenshotKnowledgeService {
    * 按 (record_id, section_title_norm) 幂等，重复学习覆盖组内图片列表。
    * @returns 成功沉淀的组数
    */
-  private async persistSectionGroups(groups: RawSectionGroup[], version: string): Promise<number> {
-    if (groups.length === 0) return 0;
+  /**
+   * 全库图组修复（不跑多模态视觉，成本低）。
+   *
+   * 解决的问题：历史上部分 docx 内嵌图上传到对象存储失败（external_file_assets.status=failed），
+   * persistSectionGroups 只收 stored/direct 资产，导致这些图被静默丢弃——原本应多张支撑的
+   * 参数图组只剩 1 张（如「支持AI生成图谱」原文 3 张连续截图，指导书只显示 1 张）。
+   *
+   * 流程（全库、幂等、不写单条特例）：
+   * 1. 全量重抽每份交付 docx 内嵌图并重建参数图组（跳过 500 张视觉上限）；
+   * 2. 逐张 uploadExtractedImage——stored/direct 直接复用，failed/pending 重新上传并原地修复；
+   * 3. persistSectionGroups 重建图组关联，修好的图此时进组。
+   *
+   * 可在全库学习后单独运行，也可由脚本/管理接口触发。
+   */
+  async repairGroupAssets(emit?: LearnProgress): Promise<{
+    records: number;
+    imagesProcessed: number;
+    groupsFound: number;
+    groupsPersisted: number;
+    incompleteGroups: Array<{ recordId: string; title: string; expected: number; got: number }>;
+    version: string;
+  }> {
+    const latest = await this.getLatestVersion();
+    const version = latest?.version ?? `1.${formatVersionTs(new Date())}`;
+
+    emit?.('step', { message: '全库扫描交付文档，重抽内嵌图并重建参数图组…' });
+    const candidates = await this.collectImageCandidates({ skipImageCap: true });
+
+    // 逐张确保资产可用：stored 复用，failed/pending 触发重传自愈
+    let imagesProcessed = 0;
+    for (const img of candidates.images) {
+      if (!img.extracted) continue; // 独立图片本就有 assetId，无需处理
+      try {
+        await this.uploadExtractedImage(img);
+      } catch (err) {
+        console.warn('[kb-repair] 图片重传失败:', img.name, err);
+      }
+      imagesProcessed++;
+      if (imagesProcessed % 50 === 0) {
+        emit?.('step', { message: `已处理 ${imagesProcessed} 张抽图…` });
+      }
+    }
+
+    emit?.('step', {
+      message: `重建 ${candidates.groups.length} 个参数图组的图片关联…`,
+    });
+    const groupResult = await this.persistSectionGroups(candidates.groups, version);
+
+    const stillIncomplete = groupResult.incomplete.filter((inc) => inc.got < inc.expected);
+    if (stillIncomplete.length > 0) {
+      for (const inc of stillIncomplete.slice(0, 50)) {
+        console.warn(
+          `[kb-repair] 图组仍缺图: ${inc.title}（原文 ${inc.expected} 张，已入组 ${inc.got} 张）record=${inc.recordId}`,
+        );
+      }
+      emit?.('step', {
+        message: `仍有 ${stillIncomplete.length} 个图组缺图（图片重传失败，多为超大/损坏图），已记录日志`,
+      });
+    }
+
+    return {
+      records: candidates.records,
+      imagesProcessed,
+      groupsFound: candidates.groups.length,
+      groupsPersisted: groupResult.persisted,
+      incompleteGroups: stillIncomplete,
+      version,
+    };
+  }
+
+  private async persistSectionGroups(
+    groups: RawSectionGroup[],
+    version: string,
+  ): Promise<{ persisted: number; incomplete: Array<{ recordId: string; title: string; expected: number; got: number }> }> {
+    const result = { persisted: 0, incomplete: [] as Array<{ recordId: string; title: string; expected: number; got: number }> };
+    if (groups.length === 0) return result;
 
     // 一次性收集所有 hash，批量查 asset：object_id = `kb/<hash>`
     const allHashes = Array.from(new Set(groups.flatMap((g) => g.items.map((i) => i.contentHash))));
@@ -589,7 +689,13 @@ export class ScreenshotKnowledgeService {
       members.forEach((m, idx) => {
         m.seq = idx;
       });
-      if (members.length === 0) continue;
+      // 原始小节内去重后的图片数（应入组的数量）。若大于 members.length，说明有图仍未
+      // 上传成功（failed/pending），记录到 incomplete 供修复流程暴露，避免静默缺图。
+      const expected = new Set(g.items.map((i) => i.contentHash)).size;
+      if (members.length === 0) {
+        result.incomplete.push({ recordId: g.recordId, title: g.sectionTitle, expected, got: 0 });
+        continue;
+      }
 
       // upsert 分组（幂等键 record_id + section_title_norm）
       const { data: groupRow, error: upsertErr } = await this.db
@@ -629,9 +735,12 @@ export class ScreenshotKnowledgeService {
         console.warn('[kb-learn] 图组图片写入失败:', g.sectionTitle, itemErr.message);
         continue;
       }
-      persisted++;
+      result.persisted++;
+      if (members.length < expected) {
+        result.incomplete.push({ recordId: g.recordId, title: g.sectionTitle, expected, got: members.length });
+      }
     }
-    return persisted;
+    return result;
   }
 
   /**

@@ -8,6 +8,36 @@ import {
 } from './screenshot-example-service';
 import { ScreenshotKnowledgeService } from './screenshot-knowledge-service';
 
+/** 指导书里的一张参考截图（已归一，图组/散图共用） */
+export interface GuideReference {
+  assetId: string;
+  storagePath: string | null;
+  exampleId: string;
+  visionNote: string | null;
+  evidenceElements: string[] | null;
+  confidence: number | null;
+  sourceRecordId: string | null;
+  sourceProjectName: string | null;
+}
+
+/**
+ * 统一参考来源候选。一条参数可匹配到多个「参考来源」，前端用同一个选择器让用户
+ * 勾选最贴合的一个，切换后 references 用该来源替换。
+ * - kind='group'：整组截图（同一交付文档同一 ▲ 小节下的连续多张截图，最贴合真实交付）；
+ * - kind='loose'：散图参考（跨参数的历史示例 Top N，兜底）。
+ */
+export interface ReferenceSource {
+  /** 唯一标识：`group:<groupId>` 或 `loose:loose` */
+  id: string;
+  kind: 'group' | 'loose';
+  /** 来源标题：图组为参数小节原句，散图为兜底文案 */
+  title: string;
+  imageCount: number;
+  sourceProjectName: string | null;
+  /** 该来源包含的参考截图（切换来源时直接使用） */
+  refs: GuideReference[];
+}
+
 /** 截图指导书中的一个截图项 */
 export interface GuideItem {
   itemId: string;
@@ -23,27 +53,18 @@ export interface GuideItem {
   score?: number | null;
   /** 该项是否必须截图（一般参数可跳过） */
   mustCapture: boolean;
-  /** 匹配到的参考截图。简单参数为单张功能截图；一条参数由多张截图响应时为整组（按文档顺序） */
-  references: Array<{
-    assetId: string;
-    storagePath: string | null;
-    exampleId: string;
-    visionNote: string | null;
-    evidenceElements: string[] | null;
-    confidence: number | null;
-    sourceRecordId: string | null;
-    sourceProjectName: string | null;
-  }>;
-  /** 参考图来源的参数小节标题（整组匹配时有值，表示这组图共同响应同一条参数） */
+  /** 匹配到的参考截图（当前选中来源的截图；简单参数为单张，整组参数为多张，按文档顺序） */
+  references: GuideReference[];
+  /** 参考图来源的参数小节标题（整组匹配时有值，散图回退为 null） */
   referenceGroupTitle?: string | null;
   /**
-   * 候选图组（A 方案）：自动召回不一定能把「专门参数组」排到最前，这里下发按相关度
-   * 排序的多个合格图组，前端让用户一键勾选最贴合的一组；切换后 references 用选中组替换。
-   * references 默认取 candidates[0]；散图回退时此字段为空。
+   * 统一参考来源候选池：自动召回不一定把「专门参数组」排最前，这里下发全部可选来源
+   * （合格图组 + 散图兜底），references 默认取最匹配的一个；用户可在前端切换。
+   * 只要匹配到参考图就下发，前端用统一选择器呈现（多来源时可切换）。
    */
-  candidateGroups?: ReferenceGroup[];
-  /** 当前选中的候选组 id（默认第一组；用户切换后由前端更新，导出时据此取图） */
-  selectedGroupId?: string | null;
+  referenceSources?: ReferenceSource[];
+  /** 当前选中的参考来源 id（默认最匹配项；用户切换后由前端更新，导出据此取图） */
+  selectedSourceId?: string | null;
   /** LLM 生成的作业说明：到哪个模块/菜单、截什么、怎么证明满足要求 */
   instruction: string;
   /** 建议的截图文件名/编号 */
@@ -155,27 +176,51 @@ export const ScreenshotGuideService = {
       ].filter(Boolean) as string[];
       let groupTitle: string | null = null;
       let refs: GuideItem['references'] = [];
-      let candidateGroups: ReferenceGroup[] = [];
-      let selectedGroupId: string | null = null;
 
-      // 多候选召回（A 方案）：返回按相关度排序的前 N 个合格图组，默认用第一组，
-      // 其余作为候选下发给前端，由用户勾选最贴合的一组。
-      candidateGroups = await exampleService.searchReferenceGroups(recallKeywords, {
-        kbVersion: kbVersion?.version,
-        candidateCount: 4,
-      });
-      const bestGroup = candidateGroups[0];
-      if (bestGroup && bestGroup.assets.length > 0) {
-        groupTitle = bestGroup.sectionTitle;
-        selectedGroupId = bestGroup.groupId;
-        refs = mapGroupReferences(bestGroup);
-      } else {
-        candidateGroups = [];
-        const loose = await exampleService.searchByParameter(recallKeywords, {
-          limit: 3,
+      // 统一来源召回（通用模式）：
+      //   ① 整组截图：同一交付文档同一 ▲ 小节下的连续多张截图，最贴合真实交付；
+      //   ② 散图兜底：跨参数历史示例 Top N（无合格图组、或用户想挑单张时）。
+      // 两者都进 referenceSources 候选池，默认选中最匹配的（有图组取 Top1，否则散图），
+      // 前端用统一选择器呈现，不区分图组/散图、不依赖命中数量。
+      const [groups, loose] = await Promise.all([
+        exampleService.searchReferenceGroups(recallKeywords, {
           kbVersion: kbVersion?.version,
+          candidateCount: 4,
+        }),
+        exampleService.searchByParameter(recallKeywords, {
+          limit: 4,
+          kbVersion: kbVersion?.version,
+        }),
+      ]);
+
+      const sources: ReferenceSource[] = [];
+      for (const g of groups) {
+        if (!g.assets.length) continue;
+        sources.push({
+          id: `group:${g.groupId}`,
+          kind: 'group',
+          title: g.sectionTitle,
+          imageCount: g.assets.length,
+          sourceProjectName: g.sourceProjectName,
+          refs: mapGroupReferences(g),
         });
-        refs = loose.map((r) => mapReference(r));
+      }
+      if (loose.length > 0) {
+        const looseRefs = loose.map((r) => mapReference(r));
+        sources.push({
+          id: 'loose:loose',
+          kind: 'loose',
+          title: '历史散图参考（跨参数 Top 匹配）',
+          imageCount: looseRefs.length,
+          sourceProjectName: null,
+          refs: looseRefs,
+        });
+      }
+
+      const defaultSource = sources[0];
+      if (defaultSource) {
+        refs = defaultSource.refs;
+        if (defaultSource.kind === 'group') groupTitle = defaultSource.title;
       }
 
       items.push({
@@ -188,8 +233,8 @@ export const ScreenshotGuideService = {
         mustCapture: row.item_type !== 'general',
         references: refs,
         referenceGroupTitle: groupTitle,
-        candidateGroups: candidateGroups.length > 1 ? candidateGroups : undefined,
-        selectedGroupId,
+        referenceSources: sources.length > 0 ? sources : undefined,
+        selectedSourceId: defaultSource?.id ?? null,
         instruction: '',
         suggestedFileName: buildFileName(row, i + 1),
         status: 'pending',
@@ -238,7 +283,7 @@ export const ScreenshotGuideService = {
   },
 };
 
-function mapReference(r: ParameterMapping): GuideItem['references'][number] {
+function mapReference(r: ParameterMapping): GuideReference {
   return {
     assetId: r.assetId ?? r.exampleId,
     storagePath: r.storagePath ?? null,
@@ -247,12 +292,12 @@ function mapReference(r: ParameterMapping): GuideItem['references'][number] {
     evidenceElements: r.evidenceElements ?? [],
     confidence: r.confidence,
     sourceRecordId: r.sourceRecordId,
-    sourceProjectName: null,
+    sourceProjectName: r.example?.projectName ?? null,
   };
 }
 
-/** 把一个候选图组转成指导书 references（按文档 seq 顺序） */
-function mapGroupReferences(group: ReferenceGroup): GuideItem['references'] {
+/** 把一个图组转成指导书 references（按文档 seq 顺序） */
+function mapGroupReferences(group: ReferenceGroup): GuideReference[] {
   return group.assets.map((a, idx) => ({
     assetId: a.assetId,
     storagePath: null,

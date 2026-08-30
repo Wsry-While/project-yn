@@ -33,16 +33,19 @@ export interface GuideReference {
   sourceProjectName?: string | null;
 }
 
-/** 候选图组（A 方案：自动 Top1 不准时，用户可在多组里勾选最贴合的一组） */
-export interface CandidateGroup {
-  groupId: string;
-  sectionTitle: string;
+/**
+ * 统一参考来源候选（通用模式）：一条参数可能匹配到多个参考来源，前端用同一个
+ * 选择器让用户勾选最贴合的一个。
+ * - kind='group'：整组截图（同一交付文档同一 ▲ 小节连续多张，最贴合真实交付）；
+ * - kind='loose'：散图参考（跨参数历史示例 Top N，兜底）。
+ */
+export interface ReferenceSource {
+  id: string;
+  kind: 'group' | 'loose';
+  title: string;
   imageCount: number;
-  score: number;
-  sourceRecordId: string | null;
   sourceProjectName: string | null;
-  sourceSchool: string | null;
-  assets: Array<{ assetId: string; seq: number; visionNote: string | null }>;
+  refs: GuideReference[];
 }
 
 export interface GuideItem {
@@ -56,10 +59,10 @@ export interface GuideItem {
   references: GuideReference[];
   /** 整组匹配时的参数小节标题（这组图共同响应同一条参数） */
   referenceGroupTitle?: string | null;
-  /** 候选图组（>1 组时前端展示切换） */
-  candidateGroups?: CandidateGroup[];
-  /** 当前选中的候选组 id */
-  selectedGroupId?: string | null;
+  /** 统一参考来源候选池（图组 + 散图兜底）；多来源时前端展示切换 */
+  referenceSources?: ReferenceSource[];
+  /** 当前选中的参考来源 id */
+  selectedSourceId?: string | null;
   instruction: string;
   suggestedFileName: string;
   status: 'pending' | 'ready' | 'na';
@@ -202,31 +205,21 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
   };
 
   /**
-   * 切换候选用图组（A 方案）：自动召回的 Top1 不一定是专门参数组，
-   * 用户可在多组候选里勾选最贴合的一组；切换即替换 references 与组标题，
-   * 导出 Word 时用的就是当前选中组（guide state 即导出数据源）。
+   * 切换参考来源（通用模式）：自动召回的默认来源不一定最贴合，用户可在统一候选池
+   * （整组截图 + 散图兜底）里勾选；切换即替换 references 与组标题，导出 Word 用的
+   * 就是当前选中来源（guide state 即导出数据源）。
    */
-  const switchGroup = (item: GuideItem, groupId: string) => {
-    const groups = item.candidateGroups ?? [];
-    const group = groups.find((g) => g.groupId === groupId);
-    if (!group) return;
-    const references: GuideReference[] = group.assets.map((a, idx) => ({
-      assetId: a.assetId,
-      storagePath: null,
-      exampleId: `group-${group.groupId}-${idx}`,
-      visionNote: `图组第 ${a.seq + 1} 张（共 ${group.assets.length} 张）：${group.sectionTitle}`,
-      evidenceElements: [],
-      confidence: null,
-      sourceRecordId: group.sourceRecordId,
-      sourceProjectName: group.sourceProjectName,
-    }));
+  const selectSource = (item: GuideItem, sourceId: string) => {
+    const sources = item.referenceSources ?? [];
+    const source = sources.find((s) => s.id === sourceId);
+    if (!source) return;
     updateItem(item.itemId, {
-      references,
-      referenceGroupTitle: group.sectionTitle,
-      selectedGroupId: group.groupId,
+      references: source.refs,
+      referenceGroupTitle: source.kind === 'group' ? source.title : null,
+      selectedSourceId: source.id,
     });
     setRefIndex(0);
-    showToast(`已切换参考图组：${group.sectionTitle.slice(0, 20)}…`, { kind: 'success' });
+    showToast(`已切换参考来源：${source.title.slice(0, 20)}…`, { kind: 'success' });
   };
 
   const readyCount = guide?.items.filter((i) => i.status === 'ready').length ?? 0;
@@ -431,21 +424,21 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
                             </div>
                           )}
 
-                          {/* 候选图组切换：自动匹配不一定命中专门参数组，用户可勾选最贴合的一组 */}
-                          {activeItem.candidateGroups && activeItem.candidateGroups.length > 1 && (
+                          {/* 统一参考来源选择器：整组截图 + 散图兜底，自动匹配首个，可手动切换 */}
+                          {activeItem.referenceSources && activeItem.referenceSources.length > 1 && (
                             <div className="rounded-md border border-border bg-muted/30 p-2.5">
                               <p className="mb-1.5 flex items-center gap-1 text-xs font-medium text-muted-foreground">
                                 <Layers className="h-3.5 w-3.5" />
-                                候选参考图组（{activeItem.candidateGroups.length} 组，自动匹配首个，可手动勾选）
+                                参考来源（{activeItem.referenceSources.length} 个，自动匹配首个，可手动切换）
                               </p>
                               <div className="space-y-1">
-                                {activeItem.candidateGroups.map((g, gi) => {
-                                  const selected = g.groupId === activeItem.selectedGroupId;
+                                {activeItem.referenceSources.map((s, si) => {
+                                  const selected = s.id === activeItem.selectedSourceId;
                                   return (
                                     <button
-                                      key={g.groupId}
+                                      key={s.id}
                                       type="button"
-                                      onClick={() => switchGroup(activeItem, g.groupId)}
+                                      onClick={() => selectSource(activeItem, s.id)}
                                       className={cn(
                                         'flex w-full items-start gap-2 rounded border px-2 py-1.5 text-left text-xs transition',
                                         selected
@@ -463,12 +456,22 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
                                       </span>
                                       <span className="min-w-0 flex-1">
                                         <span className="line-clamp-2 break-all leading-snug">
-                                          <span className="font-mono text-muted-foreground">#{gi + 1}</span>{' '}
-                                          {g.sectionTitle}
+                                          <span className="font-mono text-muted-foreground">#{si + 1}</span>{' '}
+                                          <span
+                                            className={cn(
+                                              'mr-1 rounded px-1 py-px text-[10px]',
+                                              s.kind === 'group'
+                                                ? 'bg-brand/15 text-brand'
+                                                : 'bg-muted text-muted-foreground',
+                                            )}
+                                          >
+                                            {s.kind === 'group' ? '整组' : '散图'}
+                                          </span>
+                                          {s.title}
                                         </span>
                                         <span className="mt-0.5 block text-muted-foreground">
-                                          {g.assets.length} 张
-                                          {g.sourceProjectName ? ` · ${g.sourceProjectName}` : ''}
+                                          {s.imageCount} 张
+                                          {s.sourceProjectName ? ` · ${s.sourceProjectName}` : ''}
                                         </span>
                                       </span>
                                     </button>
