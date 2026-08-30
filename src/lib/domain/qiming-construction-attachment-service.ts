@@ -13,6 +13,7 @@ import {
   ChaoxingFileError,
   assertValidObjectId,
   probeChaoxingFileSize,
+  resolveObjectId,
   STORAGE_MAX_FILE_BYTES,
 } from './chaoxing/file-tool';
 import {
@@ -113,15 +114,27 @@ async function transferOne(asset: AssetRow, externalId: string, field: string): 
 }
 
 export async function processQimingAttachments(record: QimingConstruction): Promise<void> {
-  const attachments = (record.projectMaterials ?? [])
-    .filter((f): f is BiddingFileRef => !!f && !!f.objectId)
-    .map((f) => ({ field: 'materials', file: f }));
+  // 顶层 objectId 可能为空，objectid 藏在 url 里；先解析出 objectId，无法解析的非超星文件跳过。
+  const attachments: Array<{ field: 'materials'; file: BiddingFileRef }> = [];
+  for (const f of record.projectMaterials ?? []) {
+    if (!f) continue;
+    const objectId = resolveObjectId(f);
+    if (objectId) attachments.push({ field: 'materials', file: { ...f, objectId } });
+  }
   if (attachments.length === 0) return;
 
   const assetByObjectId = new Map<string, AssetRow>();
   let nextFiles: BiddingFileRef[] = [...(record.projectMaterials ?? [])];
-  const updateFile = (objectId: string, updater: (f: BiddingFileRef) => BiddingFileRef) => {
-    nextFiles = nextFiles.map((f) => (f.objectId === objectId ? updater(f) : f));
+  // 原始推送顶层 objectId 可能为空，按 objectId → url → name 匹配，回写时注入解析出的 objectId。
+  const sameFile = (f: BiddingFileRef, resolved: BiddingFileRef): boolean =>
+    (!!resolved.objectId && f.objectId === resolved.objectId) ||
+    (!!resolved.url && f.url === resolved.url) ||
+    (!resolved.url && !!f.name && f.name === resolved.name);
+  const updateFile = (resolved: BiddingFileRef, updater: (f: BiddingFileRef) => BiddingFileRef) => {
+    nextFiles = nextFiles.map((f) => {
+      if (!sameFile(f, resolved)) return f;
+      return updater(resolved.objectId ? { ...f, objectId: resolved.objectId } : f);
+    });
   };
 
   for (const { file } of attachments) {
@@ -130,7 +143,7 @@ export async function processQimingAttachments(record: QimingConstruction): Prom
     const asset = await ensureAssetRow(file, sourceUrl);
     if (!asset) continue;
     assetByObjectId.set(file.objectId, asset);
-    updateFile(file.objectId, (f) => ({
+    updateFile(file, (f) => ({
       ...f,
       assetId: asset.id,
       storageStatus: (f.storageStatus ?? 'pending') as BiddingFileStorageStatus,
@@ -144,7 +157,7 @@ export async function processQimingAttachments(record: QimingConstruction): Prom
     const asset = assetByObjectId.get(file.objectId);
     if (!asset) continue;
     if (asset.status === 'stored' && asset.bucket && asset.storage_key) {
-      updateFile(file.objectId, (f) => ({
+      updateFile(file, (f) => ({
         ...f,
         assetId: asset.id,
         bucket: asset.bucket,
@@ -166,7 +179,7 @@ export async function processQimingAttachments(record: QimingConstruction): Prom
         fetched_at: new Date().toISOString(),
         error_message: null,
       });
-      updateFile(file.objectId, (f) => ({
+      updateFile(file, (f) => ({
         ...f,
         assetId: asset.id,
         bucket,
@@ -180,11 +193,11 @@ export async function processQimingAttachments(record: QimingConstruction): Prom
       if (isStorageFileTooLargeError(err) || (err instanceof ChaoxingFileError && err.code === 'too_large')) {
         const note = '超大文件，走超星直链下载';
         await markAssetStatus(asset.id, { status: 'direct', error_message: note, fetched_at: new Date().toISOString() });
-        updateFile(file.objectId, (f) => ({ ...f, assetId: asset.id, storageStatus: 'direct', storageError: note }));
+        updateFile(file, (f) => ({ ...f, assetId: asset.id, storageStatus: 'direct', storageError: note }));
         continue;
       }
       await markAssetStatus(asset.id, { status: 'failed', error_message: message, retry_count: asset.retry_count + 1 });
-      updateFile(file.objectId, (f) => ({ ...f, assetId: asset.id, storageStatus: 'failed', storageError: message }));
+      updateFile(file, (f) => ({ ...f, assetId: asset.id, storageStatus: 'failed', storageError: message }));
     }
   }
 
@@ -210,8 +223,14 @@ export async function retryQimingAsset(assetId: string): Promise<{ ok: boolean; 
 export async function retransferQimingFile(
   record: QimingConstruction,
   objectId: string,
+  fileUrl?: string | null,
 ): Promise<{ ok: boolean; status?: string; assetId?: string; error?: string }> {
-  const current = (record.projectMaterials ?? []).find((f) => f.objectId === objectId) ?? null;
+  const files = record.projectMaterials ?? [];
+  // 顶层 objectId 可能为空（objectid 藏在 url 里），按 objectId → url 兜底匹配。
+  const current =
+    files.find((f) => f.objectId === objectId) ??
+    files.find((f) => !!fileUrl && f.url === fileUrl) ??
+    null;
   const result = await ensureAndTransferByObjectId(objectId, {
     externalId: record.externalId || record.id,
     field: 'qiming-projectMaterials',
@@ -224,9 +243,12 @@ export async function retransferQimingFile(
 
   const db = getSupabaseAdminClient();
   const successMeta = result.ok ? await getAssetMetaFromAccess(result.assetId) : null;
-  const next = (record.projectMaterials ?? []).map((f) => {
-    if (f.objectId !== objectId) return f;
-    const base = { ...f, assetId: result.assetId };
+  const matches = (f: BiddingFileRef): boolean =>
+    f.objectId === objectId || (!!fileUrl && f.url === fileUrl);
+  const next = files.map((f) => {
+    if (!matches(f)) return f;
+    // 回写时把从 url 解析出的 objectId 一并落库
+    const base = { ...f, objectId: f.objectId || objectId, assetId: result.assetId };
     if (result.status === 'direct') {
       return { ...base, storageStatus: 'direct' as BiddingFileStorageStatus, storageError: result.error ?? '超大文件，走超星直链下载' };
     }

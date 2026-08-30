@@ -19,6 +19,7 @@ import {
   ChaoxingFileError,
   assertValidObjectId,
   probeChaoxingFileSize,
+  resolveObjectId,
   STORAGE_MAX_FILE_BYTES,
 } from './chaoxing/file-tool';
 import {
@@ -62,23 +63,36 @@ function log(level: 'info' | 'warn' | 'error', message: string, extra?: Record<s
   else console.log(JSON.stringify(line));
 }
 
+/**
+ * 归一化文件引用的 objectId：顶层有就用，否则从 url 的 objectid= 参数解析。
+ * 返回一份带回填 objectId 的副本；实在拿不到合法 objectId 才返回 null。
+ */
+function withResolvedObjectId(file: BiddingFileRef): BiddingFileRef | null {
+  const oid = resolveObjectId(file);
+  if (!oid) return null;
+  return oid === file.objectId ? file : { ...file, objectId: oid };
+}
+
 function collectAttachments(record: BiddingScreenshot): Array<{ field: AttachmentField; file: BiddingFileRef }> {
   const out: Array<{ field: AttachmentField; file: BiddingFileRef }> = [];
   for (const field of ATTACHMENT_FIELDS) {
     const value = record[field];
     if (!value) continue;
     if (Array.isArray(value)) {
-      for (const file of value) {
-        if (file?.objectId) out.push({ field, file });
+      for (const f of value) {
+        const resolved = f ? withResolvedObjectId(f) : null;
+        if (resolved) out.push({ field, file: resolved });
       }
-    } else if (value.objectId) {
-      out.push({ field, file: value });
+    } else {
+      const resolved = withResolvedObjectId(value);
+      if (resolved) out.push({ field, file: resolved });
     }
   }
   return out;
 }
 
 async function ensureAssetRow(file: BiddingFileRef, sourceUrl: string): Promise<AssetRow | null> {
+  // 调用方（collectAttachments）已通过 resolveObjectId 保证 file.objectId 合法。
   if (!file.objectId) return null;
   try {
     assertValidObjectId(file.objectId);
@@ -186,6 +200,7 @@ async function transferOne(asset: AssetRow, externalId: string, field: string): 
 function applyStorageResult(file: BiddingFileRef, assetId: string, bucket: string, key: string): BiddingFileRef {
   return {
     ...file,
+    objectId: file.objectId,
     assetId,
     bucket,
     storageKey: key,
@@ -198,6 +213,7 @@ function applyStorageResult(file: BiddingFileRef, assetId: string, bucket: strin
 function applyStorageFailure(file: BiddingFileRef, errorMessage: string): BiddingFileRef {
   return {
     ...file,
+    objectId: file.objectId,
     storageStatus: 'failed',
     storageError: errorMessage,
   };
@@ -210,6 +226,7 @@ function applyStorageFailure(file: BiddingFileRef, errorMessage: string): Biddin
 function applyDirectDownload(file: BiddingFileRef, note: string): BiddingFileRef {
   return {
     ...file,
+    objectId: file.objectId,
     storageStatus: 'direct' satisfies BiddingFileStorageStatus,
     storageError: note,
   };
@@ -218,6 +235,7 @@ function applyDirectDownload(file: BiddingFileRef, note: string): BiddingFileRef
 function applyPending(file: BiddingFileRef, assetId: string): BiddingFileRef {
   return {
     ...file,
+    objectId: file.objectId,
     assetId,
     storageStatus: file.storageStatus ?? 'pending',
   };
@@ -268,14 +286,28 @@ export async function processBiddingAttachments(record: BiddingScreenshot): Prom
     rectifiedDocument: record.rectifiedDocument,
   };
 
-  const updateField = (field: AttachmentField, objectId: string, updater: (f: BiddingFileRef) => BiddingFileRef) => {
+  // 用归一化后的文件（含从 url 解析出的 objectId）定位 nextFiles 里的对应条目：
+  // 原始推送可能顶层 objectId 为空，仅靠 objectId 匹配会漏掉这类文件，因此按
+  // objectId → url → name 逐级匹配；回写时把解析出的 objectId 一并落库。
+  const sameFile = (f: BiddingFileRef, resolved: BiddingFileRef): boolean =>
+    (!!resolved.objectId && f.objectId === resolved.objectId) ||
+    (!!resolved.url && f.url === resolved.url) ||
+    (!resolved.url && !!f.name && f.name === resolved.name);
+
+  const updateField = (
+    field: AttachmentField,
+    resolved: BiddingFileRef,
+    updater: (f: BiddingFileRef) => BiddingFileRef,
+  ) => {
+    const inject = (f: BiddingFileRef): BiddingFileRef =>
+      updater(resolved.objectId ? { ...f, objectId: resolved.objectId } : f);
     if (field === 'attachments') {
-      nextFiles.attachments = nextFiles.attachments.map((f) => (f.objectId === objectId ? updater(f) : f));
+      nextFiles.attachments = nextFiles.attachments.map((f) => (sameFile(f, resolved) ? inject(f) : f));
       return;
     }
     const current = nextFiles[field];
-    if (current && !Array.isArray(current) && current.objectId === objectId) {
-      nextFiles[field] = updater(current);
+    if (current && !Array.isArray(current) && sameFile(current, resolved)) {
+      nextFiles[field] = inject(current);
     }
   };
 
@@ -284,7 +316,7 @@ export async function processBiddingAttachments(record: BiddingScreenshot): Prom
     const asset = await ensureAssetRow(file, sourceUrl);
     if (!asset || !file.objectId) continue;
     assetByObjectId.set(file.objectId, asset);
-    updateField(field, file.objectId, (f) => applyPending(f, asset.id));
+    updateField(field, file, (f) => applyPending(f, asset.id));
   }
   await persistBusinessRecord(record, nextFiles);
 
@@ -294,7 +326,7 @@ export async function processBiddingAttachments(record: BiddingScreenshot): Prom
     const asset = assetByObjectId.get(file.objectId);
     if (!asset) continue;
     if (asset.status === 'stored' && asset.bucket && asset.storage_key) {
-      updateField(field, file.objectId, (f) => applyStorageResult(f, asset.id, asset.bucket!, asset.storage_key!));
+      updateField(field, file, (f) => applyStorageResult(f, asset.id, asset.bucket!, asset.storage_key!));
       continue;
     }
 
@@ -310,19 +342,20 @@ export async function processBiddingAttachments(record: BiddingScreenshot): Prom
         fetched_at: new Date().toISOString(),
         error_message: null,
       });
-      updateField(field, file.objectId, (f) => applyStorageResult(f, asset.id, bucket, key));
+      updateField(field, file, (f) => applyStorageResult(f, asset.id, bucket, key));
       log('info', 'attachment transferred', { objectId: file.objectId, bucket, key });
     } catch (err) {
       const message = err instanceof ChaoxingFileError ? `${err.code}: ${err.message}` : (err as Error).message;
       if (isStorageFileTooLargeError(err) || (err instanceof ChaoxingFileError && err.code === 'too_large')) {
-        // 下载成功但对象存储拒绝超大文件：降级为超星直链
+        // 下载成功但对象存储拒绝超大文件：降级为超星直链（仍建 asset，标记 direct，
+        // 前端凭 assetId 走我方预览代理，由后端实时换签名流式转发）。
         const directNote = '超大文件，走超星直链下载';
         await markAssetStatus(asset.id, {
           status: 'direct',
           error_message: directNote,
           fetched_at: new Date().toISOString(),
         });
-        updateField(field, file.objectId, (f) => applyDirectDownload(f, directNote));
+        updateField(field, file, (f) => applyDirectDownload({ ...f, assetId: asset.id }, directNote));
         log('info', 'attachment too large, fallback to direct download', { objectId: file.objectId });
         continue;
       }
@@ -331,7 +364,7 @@ export async function processBiddingAttachments(record: BiddingScreenshot): Prom
         error_message: message,
         retry_count: asset.retry_count + 1,
       });
-      updateField(field, file.objectId, (f) => applyStorageFailure(f, message));
+      updateField(field, file, (f) => applyStorageFailure({ ...f, assetId: asset.id }, message));
       log('warn', 'attachment transfer failed', { objectId: file.objectId, error: message });
     }
   }
@@ -356,11 +389,19 @@ export async function retransferBiddingFile(
   record: BiddingScreenshot,
   field: AttachmentField,
   objectId: string,
+  fileUrl?: string | null,
 ): Promise<{ ok: boolean; status?: string; assetId?: string; error?: string }> {
+  const matches = (f: BiddingFileRef | null | undefined): f is BiddingFileRef => {
+    if (!f) return false;
+    if (f.objectId && f.objectId === objectId) return true;
+    // 顶层 objectId 为空时，按 url（含解析出 objectid 的超星链接）兜底定位
+    if (fileUrl && f.url && f.url === fileUrl) return true;
+    return false;
+  };
   const current =
     field === 'attachments'
-      ? (record.attachments ?? []).find((f) => f.objectId === objectId) ?? null
-      : (record[field] as BiddingFileRef | null)?.objectId === objectId
+      ? (record.attachments ?? []).find(matches) ?? null
+      : matches(record[field] as BiddingFileRef | null)
         ? (record[field] as BiddingFileRef | null)
         : null;
   const result = await ensureAndTransferByObjectId(objectId, {
@@ -375,25 +416,22 @@ export async function retransferBiddingFile(
 
   const patch: Partial<Pick<BiddingScreenshot, (typeof ATTACHMENT_FIELDS)[number]>> = {};
   const applyTo = async (f: BiddingFileRef): Promise<BiddingFileRef> => {
+    // 回写时把从 url 解析出的 objectId 一并落库，后续即可按 objectId 正常关联。
+    const base: BiddingFileRef = { ...f, objectId: f.objectId || objectId, assetId: result.assetId! };
     if (result.status === 'direct') {
-      return applyDirectDownload({ ...f, assetId: result.assetId }, result.error ?? '超大文件，走超星直链下载');
+      return applyDirectDownload(base, result.error ?? '超大文件，走超星直链下载');
     }
     if (!result.ok) {
-      return applyStorageFailure({ ...f, assetId: result.assetId }, result.error ?? '转存失败');
+      return applyStorageFailure(base, result.error ?? '转存失败');
     }
     // 成功转存：从 asset 行读取 bucket/key 回写，保证与对象存储一致。
     const meta = result.assetId ? await getAssetMeta(result.assetId) : null;
-    return applyStorageResult(
-      { ...f, assetId: result.assetId },
-      result.assetId!,
-      meta?.bucket ?? '',
-      meta?.storageKey ?? '',
-    );
+    return applyStorageResult(base, result.assetId!, meta?.bucket ?? '', meta?.storageKey ?? '');
   };
 
   if (field === 'attachments') {
     patch.attachments = await Promise.all(
-      (record.attachments ?? []).map((f) => (f.objectId === objectId ? applyTo(f) : Promise.resolve(f))),
+      (record.attachments ?? []).map((f) => (matches(f) ? applyTo(f) : Promise.resolve(f))),
     );
   } else {
     const scalar = record[field] as BiddingFileRef | null;

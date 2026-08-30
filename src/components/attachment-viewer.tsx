@@ -85,12 +85,23 @@ export function AttachmentLink({
 
   // 提前用 useCallback 固定引用，避免在 `if (!file) return` 之后调用 Hook。
   const handleAcquire = useCallback(async () => {
-    if (!file?.objectId || !business || !externalId || !field) return;
+    if (!file || !business || !externalId || !field) return;
+    // 顶层 objectId 或 url 里的 objectid 二者居一即可（后端 resolveObjectId 兜底）。
+    const hasTopOid = /^[a-f0-9]{32}$/i.test(file.objectId || '');
+    const hasUrlOid =
+      /objectid=[a-f0-9]{32}/i.test(file.url || '') || /chaoxing\.com|cldisk\.com|chaoxing\.cn/i.test(file.url || '');
+    if (!hasTopOid && !hasUrlOid) return;
     setAcquiring(true);
     try {
       const result = await apiFetch<{ ok: boolean; status?: string; error?: string }>('/api/files/transfer', {
         method: 'POST',
-        body: JSON.stringify({ business, recordId: externalId, field, objectId: file.objectId }),
+        body: JSON.stringify({
+          business,
+          recordId: externalId,
+          field,
+          objectId: file.objectId || undefined,
+          url: file.url || undefined,
+        }),
       });
       if (result.ok) {
         showToast(result.status === 'direct' ? '文件较大，已切换为超星直链' : '附件已获取，正在刷新', {
@@ -111,7 +122,12 @@ export function AttachmentLink({
 
   const name = file.name || fallbackLabel;
   const hasAsset = !!file.assetId;
-  const hasObjectId = !!file.objectId;
+  const url = file.url || '';
+  // 超星文件：顶层 objectId，或 url 指向超星域名/带 objectid 参数。
+  // 不能仅凭 url 里任意 32 位 hex 判断（第三方外链文件名 hash 也会命中）。
+  const isChaoxingUrl =
+    /objectid=[a-f0-9]{32}/i.test(url) || /chaoxing\.com|cldisk\.com|chaoxing\.cn/i.test(url);
+  const hasObjectId = !!file.objectId || isChaoxingUrl;
   const failed = file.storageStatus === 'failed';
   const pending = file.storageStatus === 'pending' || file.storageStatus === 'fetching';
   // 是否已转存到本系统：stored/direct 都算可预览（direct 为超大文件降级）。

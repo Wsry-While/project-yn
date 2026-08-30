@@ -133,6 +133,49 @@ export function BiddingScreenshotsView() {
     }
   };
 
+  /**
+   * 获取/转存附件：对「尚未建 asset」的历史附件（含顶层无 objectId、仅 url 带 objectid 的情况），
+   * 调 transfer 接口由后端从 objectId/url 解析并下载转存到对象存储，完成后刷新走我方预览代理，
+   * 不再直接打开超星原始链接。
+   */
+  const acquireAttachment = async (
+    file: BiddingFileRef,
+    ctx: { recordId: string; field: 'projectBiddingFile' | 'deliveryDocument' | 'attachments' | 'rectifiedDocument' },
+  ) => {
+    if (file.assetId) return;
+    const key = file.objectId || file.url || file.name || 'pending';
+    setRetrying(key);
+    try {
+      const res = await apiFetch<{ ok: boolean; status?: string; assetId?: string; error?: string }>(
+        '/api/files/transfer',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            business: 'bidding',
+            recordId: ctx.recordId,
+            field: ctx.field,
+            objectId: file.objectId || undefined,
+            url: file.url || undefined,
+          }),
+        },
+      );
+      if (!res.ok) {
+        showToast(res.error || '转存失败，请稍后重试', { kind: 'error' });
+        return;
+      }
+      showToast(res.status === 'direct' ? '文件较大，已切换为我方代理直链' : '附件已转存，正在打开…', {
+        kind: 'success',
+      });
+      list.refresh();
+      // 转存/降级完成后用我方代理打开预览
+      if (res.assetId) window.open(`/api/files/preview/${res.assetId}`, '_blank', 'noopener,noreferrer');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : '获取附件失败', { kind: 'error' });
+    } finally {
+      setRetrying(null);
+    }
+  };
+
   const saveEdit = async (patch: Partial<BiddingScreenshot>) => {
     if (!editing) return;
     const updated = await apiFetch<BiddingScreenshot>(`/api/bidding-screenshots/${editing.id}`, {
@@ -313,6 +356,7 @@ export function BiddingScreenshotsView() {
         onClose={() => setDetail(null)}
         onEdit={() => { if (detail) { setEditing(detail); setDetail(null); } }}
         onRetry={retryAttachment}
+        onAcquire={acquireAttachment}
         retryingId={retrying}
       />
       {editing && (
@@ -332,12 +376,17 @@ function BiddingDetailModal({
   onClose,
   onEdit,
   onRetry,
+  onAcquire,
   retryingId,
 }: {
   record: BiddingScreenshot | null;
   onClose: () => void;
   onEdit: () => void;
   onRetry: (f: BiddingFileRef) => void;
+  onAcquire: (
+    f: BiddingFileRef,
+    ctx: { recordId: string; field: 'projectBiddingFile' | 'deliveryDocument' | 'attachments' | 'rectifiedDocument' },
+  ) => void;
   retryingId: string | null;
 }) {
   const rawJson = useMemo(() => {
@@ -418,7 +467,8 @@ function BiddingDetailModal({
                   <FileLink
                     file={record.projectBiddingFile}
                     onRetry={onRetry}
-                    retrying={retryingId === record.projectBiddingFile?.assetId}
+                    onAcquire={(f) => onAcquire(f, { recordId: record.id, field: 'projectBiddingFile' })}
+                    retrying={retryingId === (record.projectBiddingFile?.assetId || record.projectBiddingFile?.objectId || record.projectBiddingFile?.url)}
                   />
                 ),
               },
@@ -443,7 +493,7 @@ function BiddingDetailModal({
             column={1}
             title="交付信息"
             items={[
-              { label: '交付文档', children: <FileLink file={record.deliveryDocument} onRetry={onRetry} retrying={retryingId === record.deliveryDocument?.assetId} /> },
+              { label: '交付文档', children: <FileLink file={record.deliveryDocument} onRetry={onRetry} onAcquire={(f) => onAcquire(f, { recordId: record.id, field: 'deliveryDocument' })} retrying={retryingId === (record.deliveryDocument?.assetId || record.deliveryDocument?.objectId || record.deliveryDocument?.url)} /> },
               { label: '交付信息备注', children: record.deliveryRemark || '—' },
               { label: '销售反馈意见', children: record.salesFeedback || '—' },
             ]}
@@ -459,10 +509,11 @@ function BiddingDetailModal({
                     <div className="space-y-1.5">
                       {record.attachments.map((f, i) => (
                         <FileLink
-                          key={f.assetId || f.objectId || i}
+                          key={f.assetId || f.objectId || f.url || i}
                           file={f}
                           onRetry={onRetry}
-                          retrying={retryingId === f.assetId}
+                          onAcquire={(file) => onAcquire(file, { recordId: record.id, field: 'attachments' })}
+                          retrying={retryingId === (f.assetId || f.objectId || f.url)}
                         />
                       ))}
                     </div>
@@ -483,7 +534,8 @@ function BiddingDetailModal({
                     <FileLink
                       file={record.rectifiedDocument}
                       onRetry={onRetry}
-                      retrying={retryingId === record.rectifiedDocument?.assetId}
+                      onAcquire={(f) => onAcquire(f, { recordId: record.id, field: 'rectifiedDocument' })}
+                      retrying={retryingId === (record.rectifiedDocument?.assetId || record.rectifiedDocument?.objectId || record.rectifiedDocument?.url)}
                     />
                   ),
                 },
@@ -592,35 +644,86 @@ function DocumentProgressCell({
 function FileLink({
   file,
   onRetry,
+  onAcquire,
   retrying,
 }: {
   file: BiddingFileRef | null | undefined;
   onRetry: (f: BiddingFileRef) => void;
+  onAcquire?: (f: BiddingFileRef) => void;
   retrying: boolean;
 }) {
   if (!file) return <span className="text-muted-foreground">—</span>;
-  const href = file.assetId ? `/api/files/preview/${file.assetId}` : file.url || '#';
+
+  // 是否已转存到本系统（stored/direct 都有 assetId，走我方代理）
+  const hasAsset = !!file.assetId;
+  // 是否为超星文件：顶层合法 32 位 objectId，或 url 指向超星域名 / 带 objectid 参数。
+  // 注意：不能仅凭 url 里任意 32 位 hex 判断——第三方外链（如政府 pdf 文件名 hash）也会命中。
+  const url = file.url || '';
+  const hasTopOid = /^[a-f0-9]{32}$/i.test(file.objectId || '');
+  const isChaoxingUrl =
+    /objectid=[a-f0-9]{32}/i.test(url) || /chaoxing\.com|cldisk\.com|chaoxing\.cn/i.test(url);
+  const isExternalLink = !hasAsset && !hasTopOid && !isChaoxingUrl && !!url;
+  // 能否通过 objectId/url 触发转存（仅超星文件）
+  const canAcquire = !hasAsset && (hasTopOid || isChaoxingUrl);
+  const isFailed = file.storageStatus === 'failed';
+
+  // 已转存：走我方预览代理；超星未转存：不直接打开超星原始 url；第三方外链：新开标签打开原地址。
+  const href = hasAsset ? `/api/files/preview/${file.assetId}` : isExternalLink ? url : '#';
+
   return (
     <div className="flex items-center justify-between gap-2 rounded-sm border border-border bg-background px-2 py-1.5">
-      <a
-        href={href}
-        target="_blank"
-        rel="noreferrer"
-        className="inline-flex items-center gap-1.5 truncate text-xs text-brand hover:underline"
-      >
-        <Paperclip className="h-3 w-3 shrink-0" />
-        <span className="truncate">{file.name || '附件'}</span>
-        {file.size ? <span className="shrink-0 text-muted-foreground">({file.size})</span> : null}
-      </a>
-      {file.assetId && file.storageStatus === 'failed' && (
+      {hasAsset ? (
+        <a
+          href={href}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex min-w-0 items-center gap-1.5 text-xs text-brand hover:underline"
+        >
+          <Paperclip className="h-3 w-3 shrink-0" />
+          <span className="truncate">{file.name || '附件'}</span>
+          {file.size ? <span className="shrink-0 text-muted-foreground">({file.size})</span> : null}
+        </a>
+      ) : isExternalLink ? (
+        <a
+          href={href}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground hover:text-brand hover:underline"
+          title="第三方原始链接"
+        >
+          <Paperclip className="h-3 w-3 shrink-0" />
+          <span className="truncate">{file.name || '附件'}</span>
+          <ExternalLink className="h-3 w-3 shrink-0" />
+        </a>
+      ) : (
+        <span className="inline-flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+          <Paperclip className="h-3 w-3 shrink-0" />
+          <span className="truncate">{file.name || '附件'}</span>
+          {file.size ? <span className="shrink-0">({file.size})</span> : null}
+        </span>
+      )}
+
+      {isFailed && hasAsset && (
         <button
           type="button"
-          className="inline-flex items-center gap-1 rounded-sm border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted disabled:opacity-60"
+          className="inline-flex shrink-0 items-center gap-1 rounded-sm border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted disabled:opacity-60"
           onClick={() => onRetry(file)}
           disabled={retrying}
         >
           <RefreshCw className={retrying ? 'h-3 w-3 animate-spin' : 'h-3 w-3'} />
           重试
+        </button>
+      )}
+      {!hasAsset && canAcquire && onAcquire && (
+        <button
+          type="button"
+          className="inline-flex shrink-0 items-center gap-1 rounded-sm border border-border px-1.5 py-0.5 text-[11px] text-brand hover:bg-muted disabled:opacity-60"
+          onClick={() => onAcquire(file)}
+          disabled={retrying}
+          title="从超星拉取并转存到本系统后预览"
+        >
+          {retrying ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+          {retrying ? '转存中…' : '获取'}
         </button>
       )}
     </div>

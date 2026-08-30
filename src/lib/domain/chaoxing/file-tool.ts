@@ -75,6 +75,35 @@ export function assertValidObjectId(objectId: string): void {
   }
 }
 
+/**
+ * 从超星文件 URL 中解析 32 位 objectId。
+ *
+ * 部分 fileupload 推送顶层 `objectId` 为空，真正的 id 藏在 url 的 query 里
+ * （如 `https://office.chaoxing.com/front/open/data/export/download?objectid=<32hex>&…`）。
+ * 先查 objectid/objectId 参数，再回退整串匹配，命中 32 位 hex 才返回，否则 null。
+ */
+export function extractObjectIdFromUrl(url?: string | null): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url, 'http://x');
+    const q = u.searchParams.get('objectid') || u.searchParams.get('objectId');
+    if (q && OBJECT_ID_RE.test(q)) return q.toLowerCase();
+  } catch {
+    // 不是合法 URL，走下面的整串匹配
+  }
+  const m = url.match(/([a-f0-9]{32})/i);
+  return m ? m[1].toLowerCase() : null;
+}
+
+/**
+ * 归一化超星文件引用的 objectId：顶层有就用，否则尝试从 url 解析。
+ * 返回合法的 32 位 objectId，拿不到返回 null。
+ */
+export function resolveObjectId(file: { objectId?: string | null; url?: string | null }): string | null {
+  if (file.objectId && OBJECT_ID_RE.test(file.objectId)) return file.objectId.toLowerCase();
+  return extractObjectIdFromUrl(file.url);
+}
+
 /** 从 Content-Disposition 解析文件名。 */
 function parseFileName(contentDisposition: string | null, fallback: string | null): string | null {
   if (!contentDisposition) return fallback;

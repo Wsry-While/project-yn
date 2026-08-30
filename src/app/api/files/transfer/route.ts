@@ -7,6 +7,7 @@ import { QimingConstructionService } from '@/lib/domain/qiming-construction-serv
 import { retransferBiddingFile } from '@/lib/domain/bidding-attachment-service';
 import { retransferDemandFile } from '@/lib/domain/project-demand-attachment-service';
 import { retransferQimingFile } from '@/lib/domain/qiming-construction-attachment-service';
+import { extractObjectIdFromUrl } from '@/lib/domain/chaoxing/file-tool';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -16,15 +17,19 @@ interface TransferBody {
   recordId?: string;
   field?: string;
   objectId?: string;
+  /** 顶层 objectId 为空时，可传超星 url，后端从中解析 objectid */
+  url?: string;
 }
 
 const BIDDING_FIELDS = ['projectBiddingFile', 'deliveryDocument', 'attachments', 'rectifiedDocument'];
 const DEMAND_FIELDS = ['providedMaterials', 'deliveryDocs'];
 
 /**
- * 对「只有超星 objectId、尚未建 asset/转存」的历史附件，手动触发一次转存并回写业务表。
+ * 对「只有超星 objectId（或仅 url 里带 objectid）、尚未建 asset/转存」的历史附件，
+ * 手动触发一次转存并回写业务表。
  *
- * body: { business: 'bidding'|'demand'|'qiming', recordId, field, objectId }
+ * body: { business: 'bidding'|'demand'|'qiming', recordId, field, objectId?, url? }
+ * - objectId 可空，传 url 时后端从 `?objectid=` 解析；两者都没有返回 invalid_param
  * - bidding：field 取值 projectBiddingFile/deliveryDocument/attachments/rectifiedDocument
  * - demand：field 取值 providedMaterials/deliveryDocs
  * - qiming：固定 project_materials，field 可省略
@@ -44,14 +49,18 @@ export async function POST(request: NextRequest) {
 
     const business = body.business;
     const recordId = (body.recordId || '').trim();
-    const objectId = (body.objectId || '').trim();
+    const fileUrl = (body.url || '').trim();
+    // objectId 优先取显式传入，否则尝试从 url 的 objectid= 参数解析
+    const objectId = (body.objectId || '').trim() || extractObjectIdFromUrl(fileUrl) || '';
     const field = (body.field || '').trim();
 
     if (!business || !['bidding', 'demand', 'qiming'].includes(business)) {
       return fail('invalid_param', 'business 非法', 400);
     }
     if (!/^[0-9a-f-]{36}$/i.test(recordId)) return fail('invalid_param', 'recordId 非法', 400);
-    if (!/^[a-f0-9]{32}$/i.test(objectId)) return fail('invalid_param', 'objectId 非法', 400);
+    if (!/^[a-f0-9]{32}$/i.test(objectId)) {
+      return fail('invalid_param', 'objectId 缺失或非法（顶层与 url 中均未找到合法 objectId）', 400);
+    }
 
     const db = getAdminSupabase();
 
@@ -64,6 +73,7 @@ export async function POST(request: NextRequest) {
         record,
         field as 'projectBiddingFile' | 'deliveryDocument' | 'attachments' | 'rectifiedDocument',
         objectId,
+        fileUrl || null,
       );
       if (!result.ok) return ok({ ok: false, status: result.status, error: result.error });
       return ok({ ok: true, status: result.status, assetId: result.assetId });
@@ -78,6 +88,7 @@ export async function POST(request: NextRequest) {
         record,
         field as 'providedMaterials' | 'deliveryDocs',
         objectId,
+        fileUrl || null,
       );
       if (!result.ok) return ok({ ok: false, status: result.status, error: result.error });
       return ok({ ok: true, status: result.status, assetId: result.assetId });
@@ -87,7 +98,7 @@ export async function POST(request: NextRequest) {
     const service = new QimingConstructionService(db);
     const record = await service.getById(recordId);
     if (!record) return fail('not_found', '启明星记录不存在', 404);
-    const result = await retransferQimingFile(record, objectId);
+    const result = await retransferQimingFile(record, objectId, fileUrl || null);
     if (!result.ok) return ok({ ok: false, status: result.status, error: result.error });
     return ok({ ok: true, status: result.status, assetId: result.assetId });
   });

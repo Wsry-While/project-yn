@@ -5,6 +5,7 @@ import { showToast } from '@/lib/web/toast-store';
 import { exportCsv, datedName } from '@/lib/web/csv-export';
 import { apiFetch } from '@/lib/web/api-client';
 import { DetailDrawer } from '@/components/crud/detail-drawer';
+import { AttachmentFileLink } from '@/components/attachment-file-link';
 import { PageHeader } from '@/components/page-header';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -27,7 +28,7 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import type { BiddingFileRef, QimingConstruction } from '@/lib/domain/types';
+import type { QimingConstruction } from '@/lib/domain/types';
 import { useServerPaginatedList } from '@/hooks/use-server-paginated-list';
 import { ListContainer } from '@/components/list-container';
 import { ListToolbar } from '@/components/list-toolbar';
@@ -294,6 +295,7 @@ export function QimingConstructionView() {
         record={detail}
         onClose={() => setDetail(null)}
         onEdit={() => { if (detail) { setEditing(detail); setDetail(null); } }}
+        onTransferred={list.refresh}
       />
       {editing && (
         <QimingEditDrawer
@@ -310,10 +312,12 @@ function QimingDetailModal({
   record,
   onClose,
   onEdit,
+  onTransferred,
 }: {
   record: QimingConstruction | null;
   onClose: () => void;
   onEdit: () => void;
+  onTransferred?: () => void;
 }) {
   const rawJson = useMemo(() => {
     if (!record) return '';
@@ -421,7 +425,14 @@ function QimingDetailModal({
                   children: (
                     <div className="space-y-1.5">
                       {record.projectMaterials.map((f, i) => (
-                        <FileLink key={f.assetId || f.objectId || i} file={f} />
+                        <AttachmentFileLink
+                          key={f.assetId || f.objectId || i}
+                          file={f}
+                          business="qiming"
+                          recordId={record.id}
+                          field="projectMaterials"
+                          onTransferred={onTransferred}
+                        />
                       ))}
                     </div>
                   ),
@@ -441,23 +452,6 @@ function QimingDetailModal({
         </div>
       )}
     </DetailDrawer>
-  );
-}
-
-function FileLink({ file }: { file: BiddingFileRef | null | undefined }) {
-  if (!file) return <span className="text-muted-foreground">—</span>;
-  const href = file.assetId ? `/api/files/preview/${file.assetId}` : file.url || '#';
-  return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      className="flex items-center gap-1.5 rounded-sm border border-border bg-background px-2 py-1.5 text-xs text-brand hover:bg-muted/40"
-    >
-      <Paperclip className="h-3 w-3 shrink-0" />
-      <span className="truncate">{file.name || '附件'}</span>
-      {file.size ? <span className="shrink-0 text-muted-foreground">({file.size})</span> : null}
-    </a>
   );
 }
 
