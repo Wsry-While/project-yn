@@ -4,6 +4,7 @@ import { getModelForScenario } from './llm-prompts';
 import {
   ScreenshotExampleService,
   type ParameterMapping,
+  type ReferenceGroup,
 } from './screenshot-example-service';
 import { ScreenshotKnowledgeService } from './screenshot-knowledge-service';
 
@@ -35,6 +36,14 @@ export interface GuideItem {
   }>;
   /** 参考图来源的参数小节标题（整组匹配时有值，表示这组图共同响应同一条参数） */
   referenceGroupTitle?: string | null;
+  /**
+   * 候选图组（A 方案）：自动召回不一定能把「专门参数组」排到最前，这里下发按相关度
+   * 排序的多个合格图组，前端让用户一键勾选最贴合的一组；切换后 references 用选中组替换。
+   * references 默认取 candidates[0]；散图回退时此字段为空。
+   */
+  candidateGroups?: ReferenceGroup[];
+  /** 当前选中的候选组 id（默认第一组；用户切换后由前端更新，导出时据此取图） */
+  selectedGroupId?: string | null;
   /** LLM 生成的作业说明：到哪个模块/菜单、截什么、怎么证明满足要求 */
   instruction: string;
   /** 建议的截图文件名/编号 */
@@ -146,23 +155,22 @@ export const ScreenshotGuideService = {
       ].filter(Boolean) as string[];
       let groupTitle: string | null = null;
       let refs: GuideItem['references'] = [];
+      let candidateGroups: ReferenceGroup[] = [];
+      let selectedGroupId: string | null = null;
 
-      const group = await exampleService.searchReferenceGroup(recallKeywords, {
+      // 多候选召回（A 方案）：返回按相关度排序的前 N 个合格图组，默认用第一组，
+      // 其余作为候选下发给前端，由用户勾选最贴合的一组。
+      candidateGroups = await exampleService.searchReferenceGroups(recallKeywords, {
         kbVersion: kbVersion?.version,
+        candidateCount: 4,
       });
-      if (group && group.assets.length > 0) {
-        groupTitle = group.sectionTitle;
-        refs = group.assets.map((a, idx) => ({
-          assetId: a.assetId,
-          storagePath: null,
-          exampleId: `group-${group.groupId}-${idx}`,
-          visionNote: `图组第 ${a.seq + 1} 张（共 ${group.assets.length} 张）：${group.sectionTitle}`,
-          evidenceElements: [],
-          confidence: null,
-          sourceRecordId: group.sourceRecordId,
-          sourceProjectName: group.sourceProjectName,
-        }));
+      const bestGroup = candidateGroups[0];
+      if (bestGroup && bestGroup.assets.length > 0) {
+        groupTitle = bestGroup.sectionTitle;
+        selectedGroupId = bestGroup.groupId;
+        refs = mapGroupReferences(bestGroup);
       } else {
+        candidateGroups = [];
         const loose = await exampleService.searchByParameter(recallKeywords, {
           limit: 3,
           kbVersion: kbVersion?.version,
@@ -180,6 +188,8 @@ export const ScreenshotGuideService = {
         mustCapture: row.item_type !== 'general',
         references: refs,
         referenceGroupTitle: groupTitle,
+        candidateGroups: candidateGroups.length > 1 ? candidateGroups : undefined,
+        selectedGroupId,
         instruction: '',
         suggestedFileName: buildFileName(row, i + 1),
         status: 'pending',
@@ -239,6 +249,20 @@ function mapReference(r: ParameterMapping): GuideItem['references'][number] {
     sourceRecordId: r.sourceRecordId,
     sourceProjectName: null,
   };
+}
+
+/** 把一个候选图组转成指导书 references（按文档 seq 顺序） */
+function mapGroupReferences(group: ReferenceGroup): GuideItem['references'] {
+  return group.assets.map((a, idx) => ({
+    assetId: a.assetId,
+    storagePath: null,
+    exampleId: `group-${group.groupId}-${idx}`,
+    visionNote: `图组第 ${a.seq + 1} 张（共 ${group.assets.length} 张）：${group.sectionTitle}`,
+    evidenceElements: [],
+    confidence: null,
+    sourceRecordId: group.sourceRecordId,
+    sourceProjectName: group.sourceProjectName,
+  }));
 }
 
 function buildFileName(row: ScoreItemRow, idx: number): string {

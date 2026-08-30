@@ -30,6 +30,19 @@ export interface GuideReference {
   evidenceElements: string[] | null;
   confidence: number | null;
   sourceRecordId: string | null;
+  sourceProjectName?: string | null;
+}
+
+/** 候选图组（A 方案：自动 Top1 不准时，用户可在多组里勾选最贴合的一组） */
+export interface CandidateGroup {
+  groupId: string;
+  sectionTitle: string;
+  imageCount: number;
+  score: number;
+  sourceRecordId: string | null;
+  sourceProjectName: string | null;
+  sourceSchool: string | null;
+  assets: Array<{ assetId: string; seq: number; visionNote: string | null }>;
 }
 
 export interface GuideItem {
@@ -43,6 +56,10 @@ export interface GuideItem {
   references: GuideReference[];
   /** 整组匹配时的参数小节标题（这组图共同响应同一条参数） */
   referenceGroupTitle?: string | null;
+  /** 候选图组（>1 组时前端展示切换） */
+  candidateGroups?: CandidateGroup[];
+  /** 当前选中的候选组 id */
+  selectedGroupId?: string | null;
   instruction: string;
   suggestedFileName: string;
   status: 'pending' | 'ready' | 'na';
@@ -182,6 +199,34 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
     if (!activeItem) return;
     updateItem(activeItem.itemId, { instruction: draft });
     setEditing(false);
+  };
+
+  /**
+   * 切换候选用图组（A 方案）：自动召回的 Top1 不一定是专门参数组，
+   * 用户可在多组候选里勾选最贴合的一组；切换即替换 references 与组标题，
+   * 导出 Word 时用的就是当前选中组（guide state 即导出数据源）。
+   */
+  const switchGroup = (item: GuideItem, groupId: string) => {
+    const groups = item.candidateGroups ?? [];
+    const group = groups.find((g) => g.groupId === groupId);
+    if (!group) return;
+    const references: GuideReference[] = group.assets.map((a, idx) => ({
+      assetId: a.assetId,
+      storagePath: null,
+      exampleId: `group-${group.groupId}-${idx}`,
+      visionNote: `图组第 ${a.seq + 1} 张（共 ${group.assets.length} 张）：${group.sectionTitle}`,
+      evidenceElements: [],
+      confidence: null,
+      sourceRecordId: group.sourceRecordId,
+      sourceProjectName: group.sourceProjectName,
+    }));
+    updateItem(item.itemId, {
+      references,
+      referenceGroupTitle: group.sectionTitle,
+      selectedGroupId: group.groupId,
+    });
+    setRefIndex(0);
+    showToast(`已切换参考图组：${group.sectionTitle.slice(0, 20)}…`, { kind: 'success' });
   };
 
   const readyCount = guide?.items.filter((i) => i.status === 'ready').length ?? 0;
@@ -385,6 +430,54 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
                               </div>
                             </div>
                           )}
+
+                          {/* 候选图组切换：自动匹配不一定命中专门参数组，用户可勾选最贴合的一组 */}
+                          {activeItem.candidateGroups && activeItem.candidateGroups.length > 1 && (
+                            <div className="rounded-md border border-border bg-muted/30 p-2.5">
+                              <p className="mb-1.5 flex items-center gap-1 text-xs font-medium text-muted-foreground">
+                                <Layers className="h-3.5 w-3.5" />
+                                候选参考图组（{activeItem.candidateGroups.length} 组，自动匹配首个，可手动勾选）
+                              </p>
+                              <div className="space-y-1">
+                                {activeItem.candidateGroups.map((g, gi) => {
+                                  const selected = g.groupId === activeItem.selectedGroupId;
+                                  return (
+                                    <button
+                                      key={g.groupId}
+                                      type="button"
+                                      onClick={() => switchGroup(activeItem, g.groupId)}
+                                      className={cn(
+                                        'flex w-full items-start gap-2 rounded border px-2 py-1.5 text-left text-xs transition',
+                                        selected
+                                          ? 'border-brand bg-brand/10 text-foreground'
+                                          : 'border-border bg-card hover:border-brand/40 hover:bg-accent',
+                                      )}
+                                    >
+                                      <span
+                                        className={cn(
+                                          'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border',
+                                          selected ? 'border-brand bg-brand text-white' : 'border-muted-foreground/40',
+                                        )}
+                                      >
+                                        {selected && <CheckCircle2 className="h-3 w-3" />}
+                                      </span>
+                                      <span className="min-w-0 flex-1">
+                                        <span className="line-clamp-2 break-all leading-snug">
+                                          <span className="font-mono text-muted-foreground">#{gi + 1}</span>{' '}
+                                          {g.sectionTitle}
+                                        </span>
+                                        <span className="mt-0.5 block text-muted-foreground">
+                                          {g.assets.length} 张
+                                          {g.sourceProjectName ? ` · ${g.sourceProjectName}` : ''}
+                                        </span>
+                                      </span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+
                           <ReferenceViewer reference={activeItem.references[refIndex]} />
                         </div>
                       )}

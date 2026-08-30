@@ -113,6 +113,16 @@ async function main() {
       mustContain: ['转化'],
       mustNotContain: ['形态', '样式'],
     },
+    {
+      // 用户反馈：颜色定制需求曾召回「学习地图/标红/水位/自由绘制」大杂烩总览组
+      name: '自定义颜色设定（不得召回大杂烩总览组）',
+      keywords: [
+        '支持知识图谱自定义颜色设定，可根据具体要求进行图谱知识点颜色的设定',
+        '同时支持图谱知识点自定义文字颜色及大小设置',
+      ],
+      mustContain: ['颜色'],
+      mustNotContain: ['学习地图', '标红', '水位', '自由绘制'],
+    },
   ];
   for (const c of cases) {
     const res = await svc.searchReferenceGroup(c.keywords);
@@ -124,6 +134,33 @@ async function main() {
     console.log(`      召回: ${t.slice(0, 46) || '（回退散图/null）'}`);
     if (!okContain) console.log(`      缺少应含词: ${c.mustContain.filter((k) => !t.includes(k)).join(',')}`);
     if (!okNot) console.log(`      命中应排除词: ${c.mustNotContain.filter((k) => t.includes(k)).join(',')}`);
+  }
+
+  // —— D. 多候选召回（A 方案）：自动 Top1 不准时，正确图组应出现在候选列表里供人工勾选 ——
+  console.log('\n──── D. 多候选图组（searchReferenceGroups，供用户勾选）────');
+  const multiCases: Array<{ name: string; keywords: string[]; mustContainOne: string[]; topMustNot: string[] }> = [
+    {
+      name: '自定义颜色设定',
+      keywords: [
+        '支持知识图谱自定义颜色设定，可根据具体要求进行图谱知识点颜色的设定',
+        '同时支持图谱知识点自定义文字颜色及大小设置',
+      ],
+      // 候选里至少应有一组是颜色/样式专门组
+      mustContainOne: ['颜色', '样式'],
+      // Top1 不应是大杂烩总览组
+      topMustNot: ['学习地图', '水位', '自由绘制'],
+    },
+  ];
+  for (const c of multiCases) {
+    const groups = await svc.searchReferenceGroups(c.keywords, { candidateCount: 5 });
+    const titles = groups.map((g) => g.sectionTitle ?? '');
+    const top1Title = titles[0] ?? '';
+    const okTop = c.topMustNot.every((k) => !top1Title.includes(k));
+    const okCandidate = groups.some((g) => c.mustContainOne.some((k) => (g.sectionTitle ?? '').includes(k)));
+    console.log(`${okTop && okCandidate ? 'PASS' : 'FAIL'}  ${c.name}（候选 ${groups.length} 组）`);
+    titles.slice(0, 5).forEach((t, i) => console.log(`      [${i + 1}] ${t.slice(0, 44)}`));
+    if (!okTop) console.log('      Top1 仍为大杂烩总览组');
+    if (!okCandidate) console.log(`      候选中缺少含 ${c.mustContainOne.join('/')} 的专门组`);
   }
 }
 

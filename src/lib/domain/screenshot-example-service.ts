@@ -331,6 +331,10 @@ export class ScreenshotExampleService {
       ors.push(`parameter_name.ilike.%${p}%`);
       ors.push(`vision_note.ilike.%${p}%`);
     }
+    // 弱领域词仅用于拉宽召回，打分阶段不计入 paramHit
+    for (const w of terms.weak) {
+      ors.push(`parameter_name.ilike.%${w}%`);
+    }
     // 原始关键词（去掉标点）在 parameter_name 上兜底
     for (const kw of keywords.filter(Boolean).slice(0, 6)) {
       const safe = kw.replace(/[,()（）、，:：]/g, ' ').trim();
@@ -445,11 +449,43 @@ export class ScreenshotExampleService {
    * 标题拆词后与小节标题做相关度打分，返回最匹配的一整组图（按文档 seq 顺序）。
    * 找不到合格图组时返回 null，由调用方回退到散图 searchByParameter。
    */
+  /**
+   * 按参数召回「整组参考截图」——单组（最佳）版，兼容既有调用。
+   * 内部复用 searchReferenceGroups，返回 Top1。
+   */
   async searchReferenceGroup(
     keywords: string[],
     opts: { limit?: number; kbVersion?: string; minScore?: number } = {},
   ): Promise<ReferenceGroup | null> {
-    const limit = opts.limit ?? 40;
+    const groups = await this.searchReferenceGroups(keywords, {
+      limit: opts.limit,
+      kbVersion: opts.kbVersion,
+      minScore: opts.minScore,
+      candidateCount: 1,
+    });
+    return groups[0] ?? null;
+  }
+
+  /**
+   * 按参数召回「整组参考截图」——多候选版（A 方案）。
+   *
+   * 真实交付里一条参数通常由同一文档同一 ▲ 小节下的连续多张截图响应；但自动打分
+   * 不一定能把「专门参数组」排到最前（总览/门户类大杂烩组什么词都沾）。因此这里
+   * 不只返回 Top1，而是返回按相关度排序的前 N 个合格候选组（默认 4 个），供前端
+   * 展示候选列表、由用户一键勾选最贴合的一组，选择结果用于指导书导出。
+   * 无合格图组时返回空数组，由调用方回退到散图 searchByParameter。
+   */
+  async searchReferenceGroups(
+    keywords: string[],
+    opts: {
+      limit?: number;
+      kbVersion?: string;
+      minScore?: number;
+      candidateCount?: number;
+    } = {},
+  ): Promise<ReferenceGroup[]> {
+    const limit = opts.limit ?? 120;
+    const candidateCount = opts.candidateCount ?? 4;
     const terms = extractMatchTerms(keywords);
 
     // 1) 召回候选图组（模块别名 / 具体参数名词 / 原始关键词 ilike 小节标题）。
@@ -462,12 +498,13 @@ export class ScreenshotExampleService {
       }
     }
     for (const p of terms.params) ors.push(`section_title.ilike.%${p}%`);
+    for (const w of terms.weak) ors.push(`section_title.ilike.%${w}%`);
     for (const fn of terms.functions) ors.push(`section_title.ilike.%${fn}%`);
     for (const kw of keywords.filter(Boolean).slice(0, 6)) {
       const safe = kw.replace(/[,()（）、，:：%]/g, ' ').trim();
       if (safe.length >= 2) ors.push(`section_title.ilike.%${safe}%`);
     }
-    if (ors.length === 0) return null;
+    if (ors.length === 0) return [];
 
     let q = this.db
       .from('screenshot_parameter_groups')
@@ -483,7 +520,7 @@ export class ScreenshotExampleService {
     const groupRows = (data ?? []) as unknown as Array<GroupRow & {
       bidding_screenshots?: { project_name?: string; project_school?: string } | null;
     }>;
-    if (groupRows.length === 0) return null;
+    if (groupRows.length === 0) return [];
 
     // 2) 打分 + 采用判定。打分用 scoreGroupTitle（模块只入围/排除，具体参数名词主导排序）；
     //    是否「采用」用 scoreGroupResult：同模块内必须命中 ≥1 个具体参数名词，
@@ -497,6 +534,7 @@ export class ScreenshotExampleService {
       const modHit =
         terms.modules.length > 0 && terms.modules.some((m) => titleMods.has(m));
       const paramHit = terms.params.filter((p) => compactTitle.includes(p)).length;
+      const hitParams = terms.params.filter((p) => compactTitle.includes(p));
       const fnHit = terms.functions.some((f) => compactTitle.includes(f.toLowerCase()));
       const phraseHit = keywords
         .filter(Boolean)
@@ -516,21 +554,22 @@ export class ScreenshotExampleService {
               fnHit,
               phraseHit,
             }).adopt;
-      return { g, score, adopt };
+      return { g, score, adopt, hitParams };
     };
 
     const scored = groupRows
       .map(evaluate)
       .filter((x) => x.adopt)
       .sort((a, b) => b.score - a.score || b.g.image_count - a.g.image_count);
-    if (scored.length === 0) return null;
+    if (scored.length === 0) return [];
 
-    // 3) 取最佳组，加载组内图片（按 seq），并过滤坏资产
-    const best = scored[0].g;
+    // 3) 取前 N 个候选组，批量加载组内图片（按 seq），并过滤坏资产。
+    const tops = scored.slice(0, candidateCount);
+    const topGroupIds = tops.map((x) => x.g.id);
     const { data: itemRows, error: itemErr } = await this.db
       .from('screenshot_group_assets')
       .select('group_id,asset_id,seq')
-      .eq('group_id', best.id)
+      .in('group_id', topGroupIds)
       .order('seq', { ascending: true });
     if (itemErr) throw itemErr;
     const items = (itemRows ?? []) as GroupAssetRow[];
@@ -548,22 +587,27 @@ export class ScreenshotExampleService {
       }
     }
 
-    const orderedAssets = items
-      .filter((i) => usable.has(i.asset_id))
-      .map((i) => ({ assetId: i.asset_id, seq: i.seq, visionNote: null }));
-    if (orderedAssets.length === 0) return null;
-
-    const biz = best.bidding_screenshots ?? null;
-    return {
-      groupId: best.id,
-      sectionTitle: best.section_title,
-      imageCount: best.image_count,
-      score: scored[0].score,
-      sourceRecordId: best.record_id,
-      sourceProjectName: biz?.project_name ?? null,
-      sourceSchool: biz?.project_school ?? null,
-      assets: orderedAssets,
-    };
+    const results: ReferenceGroup[] = [];
+    for (const x of tops) {
+      const g = x.g;
+      const orderedAssets = items
+        .filter((i) => i.group_id === g.id && usable.has(i.asset_id))
+        .map((i) => ({ assetId: i.asset_id, seq: i.seq, visionNote: null }));
+      // 组内没有任何可预览图则跳过该候选（坏资产组不进候选列表）
+      if (orderedAssets.length === 0) continue;
+      const biz = g.bidding_screenshots ?? null;
+      results.push({
+        groupId: g.id,
+        sectionTitle: g.section_title,
+        imageCount: g.image_count,
+        score: x.score,
+        sourceRecordId: g.record_id,
+        sourceProjectName: biz?.project_name ?? null,
+        sourceSchool: biz?.project_school ?? null,
+        assets: orderedAssets,
+      });
+    }
+    return results;
   }
 }
 
@@ -634,8 +678,8 @@ const FUNC_STOP = new Set([
  */
 const PARAM_NOUNS = [
   '样式', '颜色', '背景色', '背景', '字体', '字号', '文字颜色', '文字大小', '皮肤', '边框',
-  '图谱形态', '形态', '节点', '知识点', '大纲', '标签', '画像', '标注', '导航', '学习地图',
-  '章节', '一键转化', '转化', '资源关联', '关联资源', '跨课程', '图谱模式', '大纲模式',
+  '图谱形态', '形态', '节点', '大纲', '标签', '画像', '标注', '导航', '学习地图',
+  '一键转化', '转化', '资源关联', '关联资源', '跨课程', '图谱模式', '大纲模式',
   '作业批改', '批改', '答疑', '问答库', '客服', '回复', '答案', '解析', '反馈', '评价',
   '评分', '文档解析', '网络课程',
   '达成度', '课程目标', '毕业要求', '培养方案', '方案对比', '版本对比', '达标',
@@ -645,7 +689,16 @@ const PARAM_NOUNS = [
   '水位', '掌握率', '完成率', '雷达', '看板', '预警', '监控', '考勤', '签到', '抢答', '投屏',
   '听课', '督导', '巡课', '评教', '直播', '录播', '对接',
   '库存', '盘点', '资产', '报废', '入库', '字典', '权限', '组织架构', '同步', '推送', '移动端',
+  // 视觉属性/配置项（高区分度，专门防止「大杂烩总览组」靠堆砌词虚高）
+  '标红', '高亮', '绘制', '排版', '浅色',
 ];
+
+/**
+ * 弱领域词：在该业务域内几乎每条参数都会出现（知识图谱域的「知识点/章节」、
+ * 通用的「资源/内容/数据」），跨参数零区分度。参与召回 ilike 与弱打分(+0.5)，
+ * 但**不计入强参数名词命中**（不决定采用门槛、不主导排序）。
+ */
+const WEAK_DOMAIN = ['知识点', '章节', '资源', '内容', '数据', '课程'];
 
 /**
  * 从评分项标题/关键词里抽取「标准模块词 + 功能词」。
@@ -655,10 +708,12 @@ const PARAM_NOUNS = [
 export function extractMatchTerms(keywords: string[]): {
   modules: string[];
   params: string[];
+  weak: string[];
   functions: string[];
 } {
   const modules = new Set<string>();
   const paramSet = new Set<string>();
+  const weakSet = new Set<string>();
   const functionSet = new Set<string>();
 
   for (const raw of keywords) {
@@ -673,6 +728,11 @@ export function extractMatchTerms(keywords: string[]): {
     // ① 具体参数名词：直接在归一化全文扫描（高区分度，主导信号）
     for (const noun of PARAM_NOUNS) {
       if (text.includes(noun.toLowerCase())) paramSet.add(noun.toLowerCase());
+    }
+
+    // ①b 弱领域词：仅用于召回 ilike 兜底，不主导排序/采用门槛
+    for (const w of WEAK_DOMAIN) {
+      if (text.includes(w.toLowerCase())) weakSet.add(w.toLowerCase());
     }
 
     for (const [canonical, aliases] of Object.entries(MODULE_ALIASES)) {
@@ -701,6 +761,7 @@ export function extractMatchTerms(keywords: string[]): {
   return {
     modules: Array.from(modules),
     params: Array.from(paramSet).slice(0, 12),
+    weak: Array.from(weakSet).slice(0, 8),
     functions: Array.from(functionSet).slice(0, 8),
   };
 }
@@ -713,7 +774,7 @@ export function extractMatchTerms(keywords: string[]): {
  */
 export function scoreGroupTitle(
   rawTitle: string,
-  terms: { modules: string[]; params: string[]; functions: string[] },
+  terms: { modules: string[]; params: string[]; weak?: string[]; functions: string[] },
   keywords: string[],
   kbVersion?: string,
   groupVersion?: string | null,
@@ -752,6 +813,9 @@ export function scoreGroupTitle(
       fnHit = true;
     }
   }
+  // 弱领域词（知识点/章节/资源…）：整串命中才给一次极小加分，仅用于毫无强信号时的排序，
+  // 不进采用门槛、不叠加，避免总览组靠堆砌泛词虚高。
+  if ((terms.weak ?? []).some((w) => title.includes(w.toLowerCase()))) s += 0.2;
   // 整句长串重合（≥4 字，标题原文照抄评分项时）
   let phraseHit = false;
   for (const kw of keywords.filter(Boolean).slice(0, 6)) {
@@ -759,6 +823,27 @@ export function scoreGroupTitle(
     if (safe.length >= 4 && title.includes(safe)) {
       s += 1;
       phraseHit = true;
+    }
+  }
+
+  // 主题集中度惩罚：一个标题里堆砌 ≥4 个功能分句（门户/总览/大杂烩组），
+  // 而命中的强参数名词只集中在其中少数分句时，说明这组图只是「顺带提到」该参数，
+  // 不是专门参数页——这类组什么词都沾、分数虚高，必须压过专注组。
+  if (paramHit > 0) {
+    const clauses = rawTitle
+      .split(/[；;。]/)
+      .map((c) => c.toLowerCase().replace(/[\s，,。.；;：:、（）()【】\[\]"'“”‘’！!？?/\\\-—_·]/g, ''))
+      .filter((c) => c.length >= 4);
+    if (clauses.length >= 4) {
+      const hitClauses = new Set<number>();
+      for (const p of terms.params) {
+        if (!title.includes(p.toLowerCase())) continue;
+        clauses.forEach((c, ci) => {
+          if (c.includes(p.toLowerCase())) hitClauses.add(ci);
+        });
+      }
+      // 命中分散度：命中的分句数 / 总分句数。专注组≈高（整篇讲一个参数），总览组≈很低。
+      if (hitClauses.size / clauses.length < 0.34) s -= 2;
     }
   }
   return s;
