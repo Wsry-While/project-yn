@@ -41,6 +41,33 @@ export interface SupabaseLoginToken {
 }
 
 /**
+ * 调用 admin.generateLink 并校验返回结构，失败时打结构化日志。
+ * 对不存在的邮箱会自动建用户、对已存在邮箱返回登录链接，一步完成「建用户 + 取 token」。
+ */
+async function generateLoginLink(
+  admin: ReturnType<typeof getSupabaseAdminClient>,
+  email: string,
+) {
+  const { data: link, error: linkError } = await admin.auth.admin.generateLink({
+    type: 'magiclink',
+    email,
+  });
+  if (linkError || !link.properties?.hashed_token || !link.user?.id) {
+    console.error('[chaoxing-login] admin.generateLink 失败:', linkError
+      ? {
+          message: linkError.message,
+          name: (linkError as { name?: string }).name,
+          status: (linkError as { status?: number }).status,
+          code: (linkError as { code?: string }).code,
+          stack: linkError.stack,
+        }
+      : '返回结构缺少 hashed_token/user.id');
+    throw new Error(`无法为超星用户生成 Supabase 登录凭据：${linkError?.message || '未知错误'}`);
+  }
+  return link;
+}
+
+/**
  * 将已验证的超星身份映射为 Supabase Auth 用户，并生成一次性登录 token。
  * 不创建或保存用户密码。
  */
@@ -64,40 +91,27 @@ export async function createSupabaseLoginToken(
   // 只放已解析的这几个字段，不要把响应里的其他内容原样塞进来。
   const appMetadata = { ...LEGACY_APP_METADATA_KEYS, chaoxing: userInfo };
 
-  // generateLink(type=magiclink) 对不存在的邮箱会自动建用户、对已存在邮箱返回登录链接，
-  // 一步完成「建用户 + 取一次性 token」，无需先 createUser（后者对已存在邮箱会 422，
-  // 且在并发/重复登录时容易产生竞态）。随后用 updateUserById 把超星资料写入 metadata。
-  const { data: link, error: linkError } = await admin.auth.admin.generateLink({
-    type: 'magiclink',
-    email,
-  });
-  if (linkError || !link.properties?.hashed_token || !link.user?.id) {
-    console.error('[chaoxing-login] admin.generateLink 失败:', linkError
-      ? {
-          message: linkError.message,
-          name: (linkError as { name?: string }).name,
-          status: (linkError as { status?: number }).status,
-          code: (linkError as { code?: string }).code,
-          stack: linkError.stack,
-        }
-      : '返回结构缺少 hashed_token/user.id');
-    throw new Error(`无法为超星用户生成 Supabase 登录凭据：${linkError?.message || '未知错误'}`);
-  }
-
-  // 新用户返回 signup、已存在用户返回 magiclink，必须用真实类型 verifyOtp。
-  const verificationType = (link.properties.verification_type ??
-    'magiclink') as SupabaseLoginVerificationType;
-
-  const userId = link.user.id;
+  // 第一次 generateLink：对不存在的邮箱自动建用户（无需先 createUser，后者对已存在邮箱
+  // 会 422，且在并发/重复登录时容易产生竞态），拿到 userId 后把超星资料写进 metadata。
+  const first = await generateLoginLink(admin, email);
+  const userId = first.user.id;
   const { error: updateError } = await admin.auth.admin.updateUserById(userId, {
-    app_metadata: { ...link.user.app_metadata, ...appMetadata },
-    user_metadata: { ...link.user.user_metadata, ...userMetadata },
+    app_metadata: { ...first.user.app_metadata, ...appMetadata },
+    user_metadata: { ...first.user.user_metadata, ...userMetadata },
     email_confirm: true,
   });
   if (updateError) throw new Error(`无法同步超星用户资料：${updateError.message}`);
 
+  // 关键：updateUserById（尤其带 email_confirm）会让上面那枚挂起的一次性 OTP 立即作废，
+  // 直接拿 first.hashed_token 去 verifyOtp 会被判 otp_expired（实测新用户 signup 链接必现）。
+  // 写完资料后再生成一次链接，用这枚新鲜、且一定是 magiclink 类型的 token 去验证；
+  // 此时用户已存在且邮箱已确认，返回的 verification_type 稳定为 magiclink。
+  const second = await generateLoginLink(admin, email);
+  const verificationType = (second.properties.verification_type ??
+    'magiclink') as SupabaseLoginVerificationType;
+
   return {
-    tokenHash: link.properties.hashed_token,
+    tokenHash: second.properties.hashed_token,
     verificationType,
   };
 }

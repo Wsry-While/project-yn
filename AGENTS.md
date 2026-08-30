@@ -15,6 +15,7 @@
 本项目在超星 OAuth 登录模板之上扩展为「项目中心」——一个企业信息化驾驶舱风格的内部团队项目管理平台，并已落地学校业务模型：
 
 - 已登录用户进入 `/dashboard`，未登录用户在首页看到超星登录入口。
+- 超星登录建会话链路（`src/lib/supabase-chaoxing-user.ts` + `src/app/api/auth/callback/chaoxing/route.ts`）用虚拟邮箱 `chaoxing_<sha256(openid)>@oauth.invalid` 映射 Supabase Auth。必须严格按此时序，否则回调报 `403 otp_expired`（Email link is invalid or has expired）跳到 `/auth/error?reason=session_failed`：① `admin.generateLink({type:'magiclink'})`（对不存在邮箱自动建用户）→ ② `admin.updateUserById({app_metadata, user_metadata, email_confirm:true})` 写超星资料 → ③ **再调一次 `generateLink`**，用这枚新鲜 token 的 `properties.hashed_token` + `properties.verification_type` 给 `supabase.auth.verifyOtp({token_hash, type})` 验证。原因：本实例 `mailer_autoconfirm=true`，第②步会让第①步那枚挂起 OTP 立即作废；且新用户首枚链接的 `verification_type` 是 `signup` 而非 `magiclink`，类型必须取自 generateLink 返回值，不能写死。实测「生成→更新→直接验证」必现 otp_expired。
 - 核心业务视图：仪表盘 `/dashboard`、我的工作台 `/workbench`、任务看板 `/kanban`、学校档案 `/schools`、项目外出 `/trips`、招投标截图 `/bidding-screenshots`、项目建设申请 `/project-demands`、启明星建设 `/qiming-construction`、团队 `/team`、项目设置 `/settings`。
 - 学校和部门作为客户档案；招投标、启明星建设、项目建设、日常运营等作为项目；项目内通过里程碑管理阶段。
 - 项目外出是独立业务工单，完全由超星表单推送驱动，系统内只查看/筛选/详情，不提供内部新建或编辑入口。
