@@ -309,12 +309,17 @@ export class ScreenshotExampleService {
 
     // 注意：不按 kb_version 硬过滤（见方法注释）。
 
-    // 2) 组装 OR 召回条件：模块词命中 system_module/parameter_key 前缀，
+    // 2) 组装 OR 召回条件：模块别名命中 system_module/parameter_key（宁多勿滥，打分阶段再归一精确判定），
     //    功能词命中 parameter_key/parameter_name；vision_note 权重最低，用最短的词兜底。
     const ors: string[] = [];
     for (const mod of terms.modules) {
-      ors.push(`system_module.ilike.%${mod}%`);
-      ors.push(`parameter_key.ilike.${mod}:%`);
+      for (const alias of MODULE_ALIASES[mod] ?? [mod]) {
+        const a = alias.toLowerCase().replace(/\s/g, '');
+        if (a.length >= 2) {
+          ors.push(`system_module.ilike.%${a}%`);
+          ors.push(`parameter_key.ilike.%${a}%`);
+        }
+      }
     }
     for (const fn of terms.functions) {
       ors.push(`parameter_key.ilike.%${fn}%`);
@@ -353,24 +358,45 @@ export class ScreenshotExampleService {
     // asset_id 为空（极早期数据）或资产状态可预览的才保留
     const rows = rawRows.filter((r) => !r.asset_id || usableAssets.has(r.asset_id));
 
-    // 3) 相关度打分：模块命中 +2，功能词命中 parameter_key/name 每个 +2，
-    //    命中 vision_note +0.5；同 asset 保留得分最高者，最后按 (得分, confidence) 排序。
-    const modSet = terms.modules;
+    // 3) 相关度打分（模块 AND 功能 双命中才是强相关，压跨模块误匹配）：
+    //    - 库行模块归一到标准名，与查询模块有交集 +3；库行带模块但与查询模块完全不交集 -3（跨模块重名，如别处也有"列表"）。
+    //    - 功能词命中 parameter_key/name 每个 +2，命中 vision_note +0.5。
+    //    - 模块命中且至少 1 个功能词命中 → 双命中额外 +2（防止只靠通用功能词跨模块撞中）。
+    //    - confidence 存 0..1，直接作基线（旧代码 /100 等于没加）；同 kb_version +0.05。
+    const modSet = new Set(terms.modules);
     const fnSet = terms.functions;
     const score = (r: ParameterMappingRow): number => {
-      let s = Number(r.confidence) / 100; // 0..1 基线
+      let s = Number(r.confidence); // 0..1 基线
       const pkey = (r.parameter_key ?? '').toLowerCase();
       const pname = (r.parameter_name ?? '').toLowerCase();
-      const mod = (r.system_module ?? '').toLowerCase();
       const note = (r.vision_note ?? '').toLowerCase();
       if (opts.kbVersion && r.kb_version === opts.kbVersion) s += 0.05;
-      for (const m of modSet) {
-        if (mod.includes(m) || pkey.startsWith(`${m}:`)) s += 2;
+
+      // 库行模块（system_module + key 前缀）归一到标准模块名
+      const rowMods = new Set([
+        ...extractModules(r.system_module),
+        ...extractModules(pkey.split(':')[0]),
+      ]);
+      let modHit = false;
+      if (modSet.size > 0) {
+        if (Array.from(modSet).some((m) => rowMods.has(m))) {
+          modHit = true;
+          s += 3;
+        } else if (rowMods.size > 0) {
+          s -= 3; // 跨模块：库里明确属于别的模块
+        }
       }
+
+      let fnHit = false;
       for (const f of fnSet) {
-        if (pkey.includes(f) || pname.includes(f)) s += 2;
-        else if (note.includes(f)) s += 0.5;
+        if (pkey.includes(f) || pname.includes(f)) {
+          s += 2;
+          fnHit = true;
+        } else if (note.includes(f)) {
+          s += 0.5;
+        }
       }
+      if (modHit && fnHit) s += 2;
       return s;
     };
 
@@ -415,12 +441,19 @@ export class ScreenshotExampleService {
     opts: { limit?: number; kbVersion?: string; minScore?: number } = {},
   ): Promise<ReferenceGroup | null> {
     const limit = opts.limit ?? 40;
-    const minScore = opts.minScore ?? 2;
+    // 门槛：新打分尺度下，模块命中(+3)即过；无模块但≥2个功能词(+4)也过；
+    // 单个通用功能词(+2)或仅长句弱命中不过，压跨模块/通用词误匹配。
+    const minScore = opts.minScore ?? 3.5;
     const terms = extractMatchTerms(keywords);
 
-    // 1) 召回候选图组（按小节标题 ilike 模块词/功能词/原始关键词）
+    // 1) 召回候选图组（模块别名/功能词/原始关键词 ilike 小节标题）
     const ors: string[] = [];
-    for (const mod of terms.modules) ors.push(`section_title.ilike.%${mod}%`);
+    for (const mod of terms.modules) {
+      for (const alias of MODULE_ALIASES[mod] ?? [mod]) {
+        const a = alias.toLowerCase().replace(/\s/g, '');
+        if (a.length >= 2) ors.push(`section_title.ilike.%${a}%`);
+      }
+    }
     for (const fn of terms.functions) ors.push(`section_title.ilike.%${fn}%`);
     for (const kw of keywords.filter(Boolean).slice(0, 6)) {
       const safe = kw.replace(/[,()（）、，:：%]/g, ' ').trim();
@@ -444,19 +477,10 @@ export class ScreenshotExampleService {
     }>;
     if (groupRows.length === 0) return null;
 
-    // 2) 打分：模块词命中 +2、功能词命中 +2、原始关键词子串 +1
-    const scoreGroup = (g: GroupRow): number => {
-      const title = (g.section_title ?? '').toLowerCase();
-      let s = 0;
-      if (opts.kbVersion && g.kb_version === opts.kbVersion) s += 0.05;
-      for (const m of terms.modules) if (title.includes(m)) s += 2;
-      for (const f of terms.functions) if (title.includes(f)) s += 2;
-      for (const kw of keywords.filter(Boolean).slice(0, 6)) {
-        const safe = kw.replace(/[,()（）、，:：%]/g, '').toLowerCase();
-        if (safe.length >= 2 && title.includes(safe)) s += 1;
-      }
-      return s;
-    };
+    // 2) 打分（模块归一 + 模块 AND 功能 双命中；section_title 是历史真实参数原文，提权）。
+    //    逻辑抽到 scoreGroupTitle，服务端召回与评测脚本共用同一份打分，避免两处漂移。
+    const scoreGroup = (g: GroupRow): number =>
+      scoreGroupTitle(g.section_title ?? '', terms, keywords, opts.kbVersion, g.kb_version);
 
     const scored = groupRows
       .map((g) => ({ g, score: scoreGroup(g) }))
@@ -507,17 +531,63 @@ export class ScreenshotExampleService {
 }
 
 /**
- * 从评分项标题/关键词里抽取「系统模块词」和「功能词」。
- * - modules：知识图谱/问题图谱/微课/AI教案/学情分析/实践/文献检测/达成度 等业务模块名。
- * - functions：去掉模块名和「支持/提供/具备/功能」等套话后，按功能语义拆出的短语。
+ * 系统模块受控词表：key=标准模块名，value=历史数据里出现过的别名/自由写法。
+ * 视觉标签/图组标题里同一模块写法极发散（AI助教/ai助教/AI助教-作业批改），
+ * 不归一会导致模块词抽不全、也和库内标签对不上。匹配时统一归算到标准名。
  */
-const MODULE_HINTS = [
-  '知识图谱', '知识森林', '问题图谱', '课程图谱', '微课', 'ai教案', '教案',
-  'ai学情分析', '学情分析', 'ai实践', '实践', '文献检测', '课程达成度', '达成度',
-  '数据统计', '资源管理', '业务问答', '问答', '助教', '移动端', '自测', '报告',
+const MODULE_ALIASES: Record<string, string[]> = {
+  知识图谱: ['知识图谱', '知识森林', '课程图谱', '图谱'],
+  问题图谱: ['问题图谱', '题库图谱'],
+  ai助教: ['ai助教', 'ai 助教', '人工智能助教', '智能助教', '大模型回复', 'ai对话', '助教'],
+  作业: ['作业批改', '作业管理', '作业'],
+  智能问答: ['智能问答', '业务问答', 'ai问答', 'ai答疑', '智能答疑', '智能客服', '问答库', '客服', '问答', '答疑'],
+  ai教案: ['ai教案', '智能教案', '教案'],
+  微课: ['微课', '微课制作'],
+  ppt创作: ['ppt创作', 'ppt课件', 'ppt制作', 'ppt', '课件制作', '课件'],
+  备课: ['备课', '智能备课', '备授课', '团队备课'],
+  课堂互动: ['课堂互动', '互动课堂', '投屏', '签到', '抢答', '课堂'],
+  学情分析: ['ai学情分析', '学情分析', '学情', '数据分析', '数据统计', '数据看板', '统计分析', '掌握率', '完成率'],
+  实践教学: ['ai实践', '实践教学', '实践报告', '实训', '虚拟仿真', '实践'],
+  文献检测: ['文献检测', '论文检测', '查重', '论文管理', '论文'],
+  达成度: ['课程达成度', '达成度', '专业评价', '毕业要求达成', '毕业要求', '课程目标达成', '达标标准'],
+  资源管理: ['资源管理', '资源中心', '资源库', '资源'],
+  门户: ['门户', '首页', '工作台', '个人空间'],
+  自测: ['自测', '随堂练习', '在线考试', '在线考核', '监考', '防作弊', '活体检测', '活体人脸', '人脸核对', '人脸识别', '练习', '测验', '考试'],
+  题库组卷: ['题库管理', '题库安全', '题库建设', '智能组卷', '组卷逻辑', '组卷', '题库', '题目来源'],
+  资产库存: ['资产库存', '库存盘点', '资产盘点', '资产清理', '资产报废', '资产入库', '资产管理', '库存'],
+  培养方案: ['培养方案对比', '方案对比', '版本对比', '培养方案', '人才培养方案', '培养目标', '毕业要求设置'],
+  教学督导: ['教学督导', '督导听课', '督导评价', '巡课', '听课任务', '远程听课', '直播听课', '智慧教室', '直播录播', '录播平台', '随堂评价', '即时评价', '评价窗口', '直播', '录播', '评教', '教学评价', '同行评价', '领导评价', '教学质量', '督导'],
+  系统管理: ['系统字典', '数据字典', '基础数据管理', '基础数据', '用户管理', '权限管理', '组织架构', '系统管理'],
+  报告: ['学习报告', '统计报表', '报告'],
+  移动端: ['移动端', '手机端', 'app', '小程序'],
+};
+
+/** 从一段文本里找出出现的标准模块（命中任一别名即归算到标准名），去重返回。 */
+export function extractModules(text: string | null | undefined): string[] {
+  if (!text) return [];
+  const t = text.toLowerCase().replace(/[\s，,。.；;：:、（）()【】\[\]"'“”‘’！!？?/\\\-—_·]/g, '');
+  const found = new Set<string>();
+  for (const [canonical, aliases] of Object.entries(MODULE_ALIASES)) {
+    const hit = aliases.some((a) => t.includes(a.toLowerCase().replace(/\s/g, '')));
+    if (hit) found.add(canonical);
+  }
+  return Array.from(found);
+}
+
+/** 操作步骤类噪声词：图组标题多为「登录后台/点击菜单/找到设置」这类动作句，不是功能点。 */
+const STEP_NOISE = [
+  '登录', '点击', '打开', '进入', '选择', '找到', '按照', '如图', '所示', '按钮', '菜单',
+  '后台', '账号', '密码', '截图', '如下', '下图', '上图', '填写', '输入', '提交', '保存',
+  '返回', '查看', '看到', '显示', '对应', '需要', '可以', '进行', '相关', '功能', '模块',
+  '内容', '信息', '方式', '地方', '位置', '步骤', '操作', '页面', '系统', '平台', '完成',
 ];
 
-function extractMatchTerms(keywords: string[]): { modules: string[]; functions: string[] } {
+/**
+ * 从评分项标题/关键词里抽取「标准模块词 + 功能词」。
+ * - modules：归并到 MODULE_ALIASES 标准名的业务模块（AI助教/ai助教/AI助教-作业批改 → ai助教）。
+ * - functions：去掉模块名/套话/操作步骤噪声后，按功能动词边界切出的名词短语（≥3 字、含实义）。
+ */
+export function extractMatchTerms(keywords: string[]): { modules: string[]; functions: string[] } {
   const modules = new Set<string>();
   const functionSet = new Set<string>();
 
@@ -530,10 +600,11 @@ function extractMatchTerms(keywords: string[]): { modules: string[]; functions: 
     text = text.replace(/^(支持|提供|具备|可|能够|可以|实现|拥有|含|包括|系统|平台)+/g, '');
     text = text.replace(/(功能|情况|能力)$/g, '');
 
-    for (const m of MODULE_HINTS) {
-      if (text.includes(m)) {
-        modules.add(m);
-        text = text.split(m).join(' ');
+    for (const [canonical, aliases] of Object.entries(MODULE_ALIASES)) {
+      const compactAliases = aliases.map((a) => a.toLowerCase().replace(/\s/g, ''));
+      if (compactAliases.some((a) => text.includes(a))) {
+        modules.add(canonical);
+        for (const a of compactAliases) text = text.split(a).join(' ');
       }
     }
 
@@ -541,10 +612,12 @@ function extractMatchTerms(keywords: string[]): { modules: string[]; functions: 
     const parts = text
       .split(/\s+|(?=(?:一键|自定义|智能|多类型|多方式|多途径|多种|多个|双模式|双|关联|导入|导出|生成|切换|编辑|检索|搜索|统计|展示|显示|查看|反馈|解析|上传|下载|标签|画像|报告|转化|可视化|导航|标注|属性|背景色|样式|大纲|模型|回复|答案|文档|资料|资源|名单|模式|入口|内容|列表|详情|分布))/g)
       .map((p) => p.trim())
-      .filter((p) => p.length >= 2 && p.length <= 12);
+      .filter((p) => p.length >= 3 && p.length <= 12);
     for (const p of parts) {
-      // 过滤纯模块名/纯套话
-      if (MODULE_HINTS.includes(p)) continue;
+      // 过滤含模块词、操作步骤噪声词、纯数字的碎片
+      if (extractModules(p).length > 0) continue;
+      if (STEP_NOISE.some((n) => p.includes(n))) continue;
+      if (/^\d+$/.test(p)) continue;
       functionSet.add(p);
     }
   }
@@ -553,6 +626,56 @@ function extractMatchTerms(keywords: string[]): { modules: string[]; functions: 
     modules: Array.from(modules),
     functions: Array.from(functionSet).slice(0, 10),
   };
+}
+
+/**
+ * 图组标题相关度打分（纯函数，服务端召回与评测脚本共用）。
+ * 规则见 searchReferenceGroup：模块归一交集 +3 / 跨模块 -3；功能词 +2；
+ * 整句关键词重合长串 +1.5、短串 +1；模块命中且功能/整句也命中再 +2；版本一致 +0.05。
+ */
+export function scoreGroupTitle(
+  rawTitle: string,
+  terms: { modules: string[]; functions: string[] },
+  keywords: string[],
+  kbVersion?: string,
+  groupVersion?: string | null,
+): number {
+  const title = rawTitle
+    .toLowerCase()
+    .replace(/[\s，,。.；;：:、（）()【】\[\]"'“”‘’！!？?/\\\-—_·]/g, '');
+  let s = 0;
+  if (kbVersion && groupVersion === kbVersion) s += 0.05;
+
+  const titleMods = new Set(extractModules(rawTitle));
+  let modHit = false;
+  if (terms.modules.length > 0) {
+    if (terms.modules.some((m) => titleMods.has(m))) {
+      modHit = true;
+      s += 3;
+    } else if (titleMods.size > 0) {
+      s -= 3;
+    }
+  }
+
+  let fnHit = false;
+  for (const f of terms.functions) {
+    if (title.includes(f.toLowerCase())) {
+      s += 2;
+      fnHit = true;
+    }
+  }
+  let phraseHit = false;
+  for (const kw of keywords.filter(Boolean).slice(0, 6)) {
+    const safe = kw.replace(/[,()（）、，:：%\s]/g, '').toLowerCase();
+    if (safe.length >= 3 && title.includes(safe)) {
+      s += 1.5;
+      phraseHit = true;
+    } else if (safe.length === 2 && title.includes(safe)) {
+      s += 1;
+    }
+  }
+  if (modHit && (fnHit || phraseHit)) s += 2;
+  return s;
 }
 
 /**
