@@ -27,12 +27,26 @@ function virtualEmail(openid: string): string {
 }
 
 /**
+ * GoTrue generateLink 返回的一次性 token 类型。
+ * 实例开启 mailer_autoconfirm 后，全新用户拿到的是 signup 验证链接、
+ * 已存在用户拿到的是 magiclink 登录链接；必须用返回里的真实 verification_type
+ * 去 verifyOtp，类型不匹配会被判成 otp_expired（"Email link is invalid or has expired"）。
+ */
+export type SupabaseLoginVerificationType = 'magiclink' | 'signup' | 'recovery' | 'invite' | 'email';
+
+export interface SupabaseLoginToken {
+  /** generateLink 返回的 hashed_token，配合 verification_type 走 verifyOtp(token_hash)。 */
+  tokenHash: string;
+  verificationType: SupabaseLoginVerificationType;
+}
+
+/**
  * 将已验证的超星身份映射为 Supabase Auth 用户，并生成一次性登录 token。
  * 不创建或保存用户密码。
  */
 export async function createSupabaseLoginToken(
   identity: ChaoxingIdentity,
-): Promise<string> {
+): Promise<SupabaseLoginToken> {
   const admin = getSupabaseAdminClient();
   const { avatar, ...userInfo } = identity;
   const email = virtualEmail(userInfo.openid);
@@ -70,6 +84,10 @@ export async function createSupabaseLoginToken(
     throw new Error(`无法为超星用户生成 Supabase 登录凭据：${linkError?.message || '未知错误'}`);
   }
 
+  // 新用户返回 signup、已存在用户返回 magiclink，必须用真实类型 verifyOtp。
+  const verificationType = (link.properties.verification_type ??
+    'magiclink') as SupabaseLoginVerificationType;
+
   const userId = link.user.id;
   const { error: updateError } = await admin.auth.admin.updateUserById(userId, {
     app_metadata: { ...link.user.app_metadata, ...appMetadata },
@@ -78,5 +96,8 @@ export async function createSupabaseLoginToken(
   });
   if (updateError) throw new Error(`无法同步超星用户资料：${updateError.message}`);
 
-  return link.properties.hashed_token;
+  return {
+    tokenHash: link.properties.hashed_token,
+    verificationType,
+  };
 }

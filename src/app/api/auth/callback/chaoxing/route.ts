@@ -46,11 +46,13 @@ async function finishChaoxingLogin(request: NextRequest): Promise<NextResponse> 
   }
 
   try {
-    const tokenHash = await createSupabaseLoginToken(identity);
+    const { tokenHash, verificationType } = await createSupabaseLoginToken(identity);
     const { supabase, applyToResponse } = createSupabaseRouteClient(request);
+    // 新用户的一次性链接是 signup 类型、已存在用户是 magiclink 类型；
+    // 用 generateLink 返回的真实类型验证，写死 magiclink 会让新用户报 otp_expired。
     const { error } = await supabase.auth.verifyOtp({
       token_hash: tokenHash,
-      type: 'magiclink',
+      type: verificationType,
     });
     if (error) throw error;
 
