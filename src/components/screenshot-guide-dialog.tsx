@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   X,
   Loader2,
@@ -14,8 +14,13 @@ import {
   Eye,
   Ban,
   Layers,
+  RefreshCw,
+  GripVertical,
+  Check,
+  Plus,
+  XCircle,
 } from 'lucide-react';
-import { apiFetchSSE } from '@/lib/web/api-client';
+import { apiFetch, apiFetchSSE } from '@/lib/web/api-client';
 import { showToast } from '@/lib/web/toast-store';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -34,10 +39,8 @@ export interface GuideReference {
 }
 
 /**
- * 统一参考来源候选（通用模式）：一条参数可能匹配到多个参考来源，前端用同一个
- * 选择器让用户勾选最贴合的一个。
- * - kind='group'：整组截图（同一交付文档同一 ▲ 小节连续多张，最贴合真实交付）；
- * - kind='loose'：散图参考（跨参数历史示例 Top N，兜底）。
+ * 参考来源候选（按组展示）。图片虽然按「整组/散图」来源分组呈现，
+ * 但允许用户跨组勾选任意多张，并可对已选图拖动排序（导出按此顺序）。
  */
 export interface ReferenceSource {
   id: string;
@@ -56,13 +59,12 @@ export interface GuideItem {
   requirement: string;
   score: number | null;
   mustCapture: boolean;
+  /** 当前生效参考图（= selectedAssetIds 按序反查候选池），界面预览与导出都用它 */
   references: GuideReference[];
-  /** 整组匹配时的参数小节标题（这组图共同响应同一条参数） */
+  /** 用户勾选的参考图 assetId 有序列表（可跨组、可排序） */
+  selectedAssetIds: string[];
   referenceGroupTitle?: string | null;
-  /** 统一参考来源候选池（图组 + 散图兜底）；多来源时前端展示切换 */
   referenceSources?: ReferenceSource[];
-  /** 当前选中的参考来源 id */
-  selectedSourceId?: string | null;
   instruction: string;
   suggestedFileName: string;
   status: 'pending' | 'ready' | 'na';
@@ -97,8 +99,36 @@ const STATUS_META: Record<ItemStatus, { label: string; tone: string; icon: typeo
   na: { label: '本项无', tone: 'text-muted-foreground', icon: Ban },
 };
 
+/** 把候选池按 assetId 展开成索引 */
+function buildPool(item: GuideItem): Map<string, { ref: GuideReference; source: ReferenceSource }> {
+  const pool = new Map<string, { ref: GuideReference; source: ReferenceSource }>();
+  for (const source of item.referenceSources ?? []) {
+    for (const ref of source.refs) {
+      if (!pool.has(ref.assetId)) pool.set(ref.assetId, { ref, source });
+    }
+  }
+  return pool;
+}
+
+/** 根据 selectedAssetIds + 候选池重算 references（保序、去重、剔除失效） */
+function resolveReferences(item: GuideItem, assetIds: string[]): GuideReference[] {
+  const pool = buildPool(item);
+  const seen = new Set<string>();
+  const out: GuideReference[] = [];
+  for (const id of assetIds) {
+    if (seen.has(id)) continue;
+    const hit = pool.get(id);
+    if (hit) {
+      seen.add(id);
+      out.push(hit.ref);
+    }
+  }
+  return out;
+}
+
 export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, exporting }: Props) {
   const [loading, setLoading] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
   const [progress, setProgress] = useState<{ step: string; detail: string; percent: number }>({
     step: '',
     detail: '',
@@ -109,60 +139,157 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [refIndex, setRefIndex] = useState(0);
+  /** 用户手工编辑过说明的项（仅这些项持久化 instructionOverride） */
+  const editedInstructions = useRef<Set<string>>(new Set());
+  /** 拖拽排序：当前拖动的 assetId */
+  const [dragAsset, setDragAsset] = useState<string | null>(null);
+  const skipSave = useRef(true);
+  const guideRef = useRef<ScreenshotGuide | null>(null);
+  guideRef.current = guide;
 
   const activeItem = useMemo(
     () => guide?.items.find((i) => i.itemId === activeId) ?? null,
     [guide, activeId],
   );
 
+  /** 组装待持久化的人工决策合集 */
+  const buildSelections = useCallback((g: ScreenshotGuide) => {
+    const selections: Record<
+      string,
+      { status: ItemStatus; selectedAssetIds: string[]; instructionOverride?: string }
+    > = {};
+    for (const it of g.items) {
+      selections[it.itemId] = {
+        status: it.status,
+        selectedAssetIds: it.selectedAssetIds,
+        ...(editedInstructions.current.has(it.itemId)
+          ? { instructionOverride: it.instruction }
+          : {}),
+      };
+    }
+    return selections;
+  }, []);
+
+  /** 落库（keepalive 以便关闭时也能发出） */
+  const persist = useCallback(
+    async (g: ScreenshotGuide, keepalive = false) => {
+      try {
+        await fetch(`/api/bidding-screenshots/${g.recordId}/screenshot-guide`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ selections: buildSelections(g) }),
+          keepalive,
+        });
+      } catch {
+        // 静默：自动保存失败不打断操作
+      }
+    },
+    [buildSelections],
+  );
+
+  /** SSE 生成（force=true 为重新匹配，合并历史勾选） */
+  const runGenerate = useCallback(
+    (force: boolean) => {
+      setLoading(true);
+      setRegenerating(force);
+      setGuide(null);
+      setProgress({ step: 'load', detail: force ? '重新匹配知识库…' : '开始生成…', percent: 0 });
+
+      const url = `/api/bidding-screenshots/${recordId}/screenshot-guide${force ? '?force=1' : ''}`;
+      const cancel = apiFetchSSE(
+        url,
+        {},
+        {
+          onDelta: () => {},
+          onStep: (s) => {
+            setProgress({
+              step: String(s.step ?? s.phase ?? ''),
+              detail: String(s.detail ?? s.message ?? ''),
+              percent: typeof s.percent === 'number' ? s.percent : 0,
+            });
+          },
+          onDone: (evt) => {
+            const g = (evt as { guide?: ScreenshotGuide } | undefined)?.guide;
+            if (g) {
+              skipSave.current = true;
+              setGuide(g);
+              setActiveId(g.items[0]?.itemId ?? null);
+              if (force) showToast('已重新匹配知识库，并保留你的勾选与状态', { kind: 'success' });
+            }
+            setLoading(false);
+            setRegenerating(false);
+          },
+          onError: (err) => {
+            setLoading(false);
+            setRegenerating(false);
+            showToast(err.message || '生成截图指导书失败', { kind: 'error' });
+          },
+        },
+      );
+      return cancel;
+    },
+    [recordId],
+  );
+
+  // 打开弹窗：优先复用已保存指导书（GET），无则首次全量生成（SSE）
   useEffect(() => {
     if (!open || !recordId) return;
     let cancelled = false;
-    setLoading(true);
+    let cancelSse: (() => void) | null = null;
+    skipSave.current = true;
+    editedInstructions.current = new Set();
     setGuide(null);
-    setProgress({ step: 'load', detail: '开始生成…', percent: 0 });
+    setActiveId(null);
 
-    const cancel = apiFetchSSE(
-      `/api/bidding-screenshots/${recordId}/screenshot-guide`,
-      {},
-      {
-        onDelta: () => {},
-        onStep: (s) => {
-          if (cancelled) return;
-          setProgress({
-            step: String(s.step ?? ''),
-            detail: String(s.detail ?? s.message ?? ''),
-            percent: typeof s.percent === 'number' ? s.percent : 0,
-          });
-        },
-        onDone: (evt) => {
-          if (cancelled) return;
-          const g = (evt as { guide?: ScreenshotGuide } | undefined)?.guide;
-          if (g) {
-            setGuide(g);
-            setActiveId(g.items[0]?.itemId ?? null);
+    (async () => {
+      try {
+        const data = await apiFetch<{ saved: boolean; guide?: ScreenshotGuide }>(
+          `/api/bidding-screenshots/${recordId}/screenshot-guide`,
+        );
+        if (cancelled) return;
+        if (data.saved && data.guide) {
+          // 二次进入：直接复用上次结果（含勾选/状态/说明）
+          setGuide(data.guide);
+          setActiveId(data.guide.items[0]?.itemId ?? null);
+          // 已有说明视为用户可能编辑过，重算时保留
+          for (const it of data.guide.items) {
+            if (it.instruction) editedInstructions.current.add(it.itemId);
           }
-          setLoading(false);
-        },
-        onError: (err) => {
-          if (cancelled) return;
-          setLoading(false);
-          showToast(err.message || '生成截图指导书失败', { kind: 'error' });
-        },
-      },
-    );
+        } else {
+          // 首次进入：走知识库搜索 + 生成
+          cancelSse = runGenerate(false);
+        }
+      } catch {
+        if (!cancelled) cancelSse = runGenerate(false);
+      }
+    })();
+
     return () => {
       cancelled = true;
-      cancel();
+      cancelSse?.();
     };
-  }, [open, recordId]);
+  }, [open, recordId, runGenerate]);
+
+  // 自动保存（防抖）
+  useEffect(() => {
+    if (!guide) return;
+    if (skipSave.current) {
+      skipSave.current = false;
+      return;
+    }
+    const t = setTimeout(() => {
+      persist(guide);
+    }, 800);
+    return () => clearTimeout(t);
+  }, [guide, persist]);
 
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
-        onClose();
+        handleClose();
       }
     };
     document.addEventListener('keydown', onKey);
@@ -172,7 +299,14 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
       document.removeEventListener('keydown', onKey);
       document.body.style.overflow = prev;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, onClose]);
+
+  // 关闭前尽力落盘一次
+  const handleClose = () => {
+    if (guideRef.current) persist(guideRef.current, true);
+    onClose();
+  };
 
   useEffect(() => {
     setRefIndex(0);
@@ -200,26 +334,69 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
 
   const saveDraft = () => {
     if (!activeItem) return;
+    editedInstructions.current.add(activeItem.itemId);
     updateItem(activeItem.itemId, { instruction: draft });
     setEditing(false);
   };
 
-  /**
-   * 切换参考来源（通用模式）：自动召回的默认来源不一定最贴合，用户可在统一候选池
-   * （整组截图 + 散图兜底）里勾选；切换即替换 references 与组标题，导出 Word 用的
-   * 就是当前选中来源（guide state 即导出数据源）。
-   */
-  const selectSource = (item: GuideItem, sourceId: string) => {
-    const sources = item.referenceSources ?? [];
-    const source = sources.find((s) => s.id === sourceId);
-    if (!source) return;
+  /** 跨组勾选/取消单张图 */
+  const toggleAsset = (item: GuideItem, assetId: string) => {
+    const has = item.selectedAssetIds.includes(assetId);
+    let nextIds: string[];
+    if (has) {
+      nextIds = item.selectedAssetIds.filter((id) => id !== assetId);
+    } else {
+      nextIds = [...item.selectedAssetIds, assetId];
+    }
+    const refs = resolveReferences(item, nextIds);
+    const firstSrc = nextIds.length
+      ? (buildPool(item).get(nextIds[0])?.source ?? null)
+      : null;
     updateItem(item.itemId, {
-      references: source.refs,
-      referenceGroupTitle: source.kind === 'group' ? source.title : null,
-      selectedSourceId: source.id,
+      selectedAssetIds: nextIds,
+      references: refs,
+      referenceGroupTitle: firstSrc?.kind === 'group' ? firstSrc.title : null,
     });
     setRefIndex(0);
-    showToast(`已切换参考来源：${source.title.slice(0, 20)}…`, { kind: 'success' });
+  };
+
+  /** 整组快速勾选/取消 */
+  const toggleSourceAll = (item: GuideItem, source: ReferenceSource) => {
+    const selected = new Set(item.selectedAssetIds);
+    const allIn = source.refs.every((r) => selected.has(r.assetId));
+    if (allIn) {
+      for (const r of source.refs) selected.delete(r.assetId);
+    } else {
+      for (const r of source.refs) selected.add(r.assetId);
+    }
+    // 保持 references 顺序：按来源顺序重建（已有的保留相对位置，新选追加）
+    const ordered: string[] = [];
+    for (const src of item.referenceSources ?? []) {
+      for (const r of src.refs) {
+        if (selected.has(r.assetId)) ordered.push(r.assetId);
+      }
+    }
+    updateItem(item.itemId, {
+      selectedAssetIds: ordered,
+      references: resolveReferences(item, ordered),
+      referenceGroupTitle: null,
+    });
+    setRefIndex(0);
+  };
+
+  /** 拖拽排序：把 dragAsset 放到 targetAsset 位置 */
+  const reorder = (item: GuideItem, targetAsset: string) => {
+    if (!dragAsset || dragAsset === targetAsset) return;
+    const ids = [...item.selectedAssetIds];
+    const from = ids.indexOf(dragAsset);
+    const to = ids.indexOf(targetAsset);
+    if (from < 0 || to < 0) return;
+    ids.splice(from, 1);
+    ids.splice(to, 0, dragAsset);
+    updateItem(item.itemId, {
+      selectedAssetIds: ids,
+      references: resolveReferences(item, ids),
+    });
   };
 
   const readyCount = guide?.items.filter((i) => i.status === 'ready').length ?? 0;
@@ -250,9 +427,25 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
             {guide && (
               <Button
                 size="sm"
+                variant="outline"
+                disabled={loading || regenerating || exporting}
+                onClick={() => runGenerate(true)}
+                title="重新搜索知识库，保留你的勾选与状态"
+              >
+                {regenerating ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4" />
+                )}
+                重新匹配知识库
+              </Button>
+            )}
+            {guide && (
+              <Button
+                size="sm"
                 variant="default"
                 disabled={exporting}
-                onClick={() => onExport(guide)}
+                onClick={() => guide && onExport(guide)}
               >
                 {exporting ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -265,7 +458,7 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
             <button
               type="button"
               aria-label="关闭"
-              onClick={onClose}
+              onClick={handleClose}
               className="rounded-md p-1.5 text-muted-foreground transition hover:bg-accent hover:text-foreground"
             >
               <X className="h-4 w-4" />
@@ -321,8 +514,8 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
                         <span className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
                           <Icon className={cn('h-3 w-3', meta.tone)} />
                           {meta.label}
-                          {item.references.length > 0 && (
-                            <span className="text-status-success">· {item.references.length} 参考</span>
+                          {item.selectedAssetIds.length > 0 && (
+                            <span className="text-status-success">· {item.selectedAssetIds.length} 图</span>
                           )}
                           {item.score != null && <span>· {item.score}分</span>}
                         </span>
@@ -370,10 +563,15 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
                 </div>
 
                 <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-2">
-                  {/* Reference image */}
+                  {/* Reference images */}
                   <div className="flex min-h-0 flex-col border-b border-border lg:border-b-0 lg:border-r">
                     <div className="flex items-center justify-between border-b border-border px-4 py-2 text-sm">
-                      <span className="font-medium">历史参考截图</span>
+                      <span className="font-medium">
+                        历史参考截图
+                        <span className="ml-2 text-xs font-normal text-muted-foreground">
+                          已选 {activeItem.selectedAssetIds.length} 张 · 可跨组勾选、拖动排序
+                        </span>
+                      </span>
                       {activeItem.references.length > 1 && (
                         <div className="flex items-center gap-1">
                           <Button
@@ -399,89 +597,155 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
                       )}
                     </div>
                     <div className="min-h-0 flex-1 overflow-auto p-4">
-                      {activeItem.references.length === 0 ? (
+                      {(!activeItem.referenceSources || activeItem.referenceSources.length === 0) &&
+                      activeItem.references.length === 0 ? (
                         <div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
                           <ImageIcon className="h-8 w-8 opacity-40" />
                           知识库暂无此项的历史参考图
                           <span className="text-xs">请按通用规范截图或标记「待补充」</span>
                         </div>
                       ) : (
-                        <div className="space-y-3">
-                          {activeItem.referenceGroupTitle && activeItem.references.length > 1 && (
-                            <div className="flex items-start gap-2 rounded-md border border-brand/20 bg-brand/5 p-2.5 text-xs">
-                              <Layers className="mt-0.5 h-4 w-4 shrink-0 text-brand" />
-                              <div className="min-w-0">
-                                <p className="font-medium text-brand">
-                                  整组截图 · 该参数由 {activeItem.references.length} 张截图共同响应
-                                </p>
-                                <p className="mt-0.5 break-all text-muted-foreground">
-                                  {activeItem.referenceGroupTitle}
-                                </p>
-                                <p className="mt-0.5 text-muted-foreground">
-                                  请按顺序截取形态/界面的全部截图，完整证明该参数。
-                                </p>
+                        <div className="space-y-4">
+                          {/* 大图预览（当前浏览的已选图） */}
+                          {activeItem.references.length > 0 ? (
+                            <ReferenceViewer reference={activeItem.references[Math.min(refIndex, activeItem.references.length - 1)]} />
+                          ) : (
+                            <div className="flex min-h-[160px] flex-col items-center justify-center gap-1 rounded-md border border-dashed border-border text-sm text-muted-foreground">
+                              <Ban className="h-6 w-6 opacity-40" />
+                              尚未勾选参考图，请从下方候选中选择
+                            </div>
+                          )}
+
+                          {/* 已选截图（可拖动排序 / 移除） */}
+                          {activeItem.references.length > 0 && (
+                            <div className="rounded-md border border-brand/20 bg-brand/5 p-2.5">
+                              <p className="mb-2 flex items-center gap-1 text-xs font-medium text-brand">
+                                <Layers className="h-3.5 w-3.5" />
+                                已选截图（{activeItem.references.length}）· 拖动可调整导出顺序
+                              </p>
+                              <div className="flex flex-wrap gap-2">
+                                {activeItem.references.map((ref, idx) => (
+                                  <div
+                                    key={ref.assetId}
+                                    draggable
+                                    onDragStart={() => setDragAsset(ref.assetId)}
+                                    onDragOver={(e) => e.preventDefault()}
+                                    onDrop={() => reorder(activeItem, ref.assetId)}
+                                    onDragEnd={() => setDragAsset(null)}
+                                    className={cn(
+                                      'group relative w-20 shrink-0 cursor-grab overflow-hidden rounded border bg-card active:cursor-grabbing',
+                                      dragAsset === ref.assetId
+                                        ? 'border-brand opacity-50'
+                                        : 'border-border hover:border-brand/50',
+                                    )}
+                                  >
+                                    <div className="flex items-center justify-between bg-muted/60 px-1 py-0.5 text-[10px] text-muted-foreground">
+                                      <GripVertical className="h-3 w-3" />
+                                      <span className="font-mono">#{idx + 1}</span>
+                                    </div>
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img
+                                      src={`/api/files/preview/${ref.assetId}`}
+                                      alt=""
+                                      className="h-14 w-full object-cover"
+                                      onClick={() => setRefIndex(idx)}
+                                    />
+                                    <button
+                                      type="button"
+                                      aria-label="移除"
+                                      onClick={() => toggleAsset(activeItem, ref.assetId)}
+                                      className="absolute right-0.5 top-5 rounded-full bg-background/80 text-muted-foreground opacity-0 transition hover:text-destructive group-hover:opacity-100"
+                                    >
+                                      <XCircle className="h-3.5 w-3.5" />
+                                    </button>
+                                  </div>
+                                ))}
                               </div>
                             </div>
                           )}
 
-                          {/* 统一参考来源选择器：整组截图 + 散图兜底，自动匹配首个，可手动切换 */}
-                          {activeItem.referenceSources && activeItem.referenceSources.length > 1 && (
-                            <div className="rounded-md border border-border bg-muted/30 p-2.5">
-                              <p className="mb-1.5 flex items-center gap-1 text-xs font-medium text-muted-foreground">
-                                <Layers className="h-3.5 w-3.5" />
-                                参考来源（{activeItem.referenceSources.length} 个，自动匹配首个，可手动切换）
-                              </p>
-                              <div className="space-y-1">
-                                {activeItem.referenceSources.map((s, si) => {
-                                  const selected = s.id === activeItem.selectedSourceId;
-                                  return (
-                                    <button
-                                      key={s.id}
-                                      type="button"
-                                      onClick={() => selectSource(activeItem, s.id)}
-                                      className={cn(
-                                        'flex w-full items-start gap-2 rounded border px-2 py-1.5 text-left text-xs transition',
-                                        selected
-                                          ? 'border-brand bg-brand/10 text-foreground'
-                                          : 'border-border bg-card hover:border-brand/40 hover:bg-accent',
-                                      )}
-                                    >
+                          {/* 候选参考图（按来源分组，可跨组勾选） */}
+                          <div className="space-y-2">
+                            <p className="text-xs font-medium text-muted-foreground">
+                              候选参考图（按知识库来源分组，点击图片即可加入/移出）
+                            </p>
+                            {(activeItem.referenceSources ?? []).map((s) => {
+                              const allIn = s.refs.every((r) =>
+                                activeItem.selectedAssetIds.includes(r.assetId),
+                              );
+                              return (
+                                <div key={s.id} className="rounded-md border border-border bg-muted/20">
+                                  <div className="flex items-center justify-between gap-2 border-b border-border px-2.5 py-1.5">
+                                    <div className="flex min-w-0 items-center gap-1.5 text-xs">
                                       <span
                                         className={cn(
-                                          'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border',
-                                          selected ? 'border-brand bg-brand text-white' : 'border-muted-foreground/40',
+                                          'rounded px-1 py-px text-[10px]',
+                                          s.kind === 'group'
+                                            ? 'bg-brand/15 text-brand'
+                                            : 'bg-muted text-muted-foreground',
                                         )}
                                       >
-                                        {selected && <CheckCircle2 className="h-3 w-3" />}
+                                        {s.kind === 'group' ? '整组' : '散图'}
                                       </span>
-                                      <span className="min-w-0 flex-1">
-                                        <span className="line-clamp-2 break-all leading-snug">
-                                          <span className="font-mono text-muted-foreground">#{si + 1}</span>{' '}
+                                      <span className="line-clamp-1 break-all">{s.title}</span>
+                                      <span className="shrink-0 text-muted-foreground">
+                                        {s.imageCount} 张{s.sourceProjectName ? ` · ${s.sourceProjectName}` : ''}
+                                      </span>
+                                    </div>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-6 shrink-0 px-2 text-xs"
+                                      onClick={() => toggleSourceAll(activeItem, s)}
+                                    >
+                                      {allIn ? '取消整组' : '全选整组'}
+                                    </Button>
+                                  </div>
+                                  <div className="grid grid-cols-2 gap-1.5 p-2 sm:grid-cols-3">
+                                    {s.refs.map((ref) => {
+                                      const checked = activeItem.selectedAssetIds.includes(ref.assetId);
+                                      return (
+                                        <button
+                                          key={ref.assetId}
+                                          type="button"
+                                          onClick={() => toggleAsset(activeItem, ref.assetId)}
+                                          className={cn(
+                                            'group relative overflow-hidden rounded border text-left transition',
+                                            checked
+                                              ? 'border-brand ring-1 ring-brand'
+                                              : 'border-border hover:border-brand/40',
+                                          )}
+                                          title={ref.visionNote ?? ''}
+                                        >
+                                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                                          <img
+                                            src={`/api/files/preview/${ref.assetId}`}
+                                            alt=""
+                                            className="h-16 w-full object-cover"
+                                          />
                                           <span
                                             className={cn(
-                                              'mr-1 rounded px-1 py-px text-[10px]',
-                                              s.kind === 'group'
-                                                ? 'bg-brand/15 text-brand'
-                                                : 'bg-muted text-muted-foreground',
+                                              'absolute left-1 top-1 flex h-4 w-4 items-center justify-center rounded-full border',
+                                              checked
+                                                ? 'border-brand bg-brand text-white'
+                                                : 'border-white/70 bg-black/40 text-transparent',
                                             )}
                                           >
-                                            {s.kind === 'group' ? '整组' : '散图'}
+                                            {checked ? <Check className="h-3 w-3" /> : <Plus className="h-3 w-3 text-white" />}
                                           </span>
-                                          {s.title}
-                                        </span>
-                                        <span className="mt-0.5 block text-muted-foreground">
-                                          {s.imageCount} 张
-                                          {s.sourceProjectName ? ` · ${s.sourceProjectName}` : ''}
-                                        </span>
-                                      </span>
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          )}
-
-                          <ReferenceViewer reference={activeItem.references[refIndex]} />
+                                          {ref.visionNote && (
+                                            <span className="block truncate bg-background/85 px-1 py-0.5 text-[10px] text-muted-foreground">
+                                              {ref.visionNote}
+                                            </span>
+                                          )}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
                         </div>
                       )}
                     </div>

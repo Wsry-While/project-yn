@@ -53,18 +53,24 @@ export interface GuideItem {
   score?: number | null;
   /** 该项是否必须截图（一般参数可跳过） */
   mustCapture: boolean;
-  /** 匹配到的参考截图（当前选中来源的截图；简单参数为单张，整组参数为多张，按文档顺序） */
+  /**
+   * 当前生效的参考截图（= selectedAssetIds 按序反查候选池归一）。
+   * 支持跨图组多选：用户可在任意「参考来源」里勾选/取消单张，顺序即用户排列顺序，
+   * 导出 Word 与界面预览都以此为准。
+   */
   references: GuideReference[];
-  /** 参考图来源的参数小节标题（整组匹配时有值，散图回退为 null） */
+  /**
+   * 用户勾选的参考图 assetId 有序列表（跨组多选 + 排序）。
+   * 默认取自动匹配的首个来源（整组默认全选、散图取 Top N），无需人工逐张点选。
+   */
+  selectedAssetIds: string[];
+  /** 参考图来源的参数小节标题（选中图主要来自某个整组时用于展示，否则 null） */
   referenceGroupTitle?: string | null;
   /**
    * 统一参考来源候选池：自动召回不一定把「专门参数组」排最前，这里下发全部可选来源
-   * （合格图组 + 散图兜底），references 默认取最匹配的一个；用户可在前端切换。
-   * 只要匹配到参考图就下发，前端用统一选择器呈现（多来源时可切换）。
+   * （合格图组 + 散图兜底）。图片按组展示，但允许跨组勾选多张。
    */
   referenceSources?: ReferenceSource[];
-  /** 当前选中的参考来源 id（默认最匹配项；用户切换后由前端更新，导出据此取图） */
-  selectedSourceId?: string | null;
   /** LLM 生成的作业说明：到哪个模块/菜单、截什么、怎么证明满足要求 */
   instruction: string;
   /** 建议的截图文件名/编号 */
@@ -72,6 +78,18 @@ export interface GuideItem {
   /** 该项状态（前端用户可编辑）：pending(待补充) / ready(可截图) / na(本项目无此项) */
   status: 'pending' | 'ready' | 'na';
 }
+
+/** 单项人工决策（跨组勾选 + 状态 + 手工说明），持久化到 screenshot_guides.item_selections */
+export interface GuideItemSelection {
+  status?: GuideItem['status'];
+  /** 有序、可跨组；空数组表示该项不选任何参考图 */
+  selectedAssetIds?: string[];
+  /** 用户手工编辑过的作业说明（未编辑则不下发，沿用 AI 生成） */
+  instructionOverride?: string;
+}
+
+/** 以 itemId 为键的人工决策合集 */
+export type GuideSelections = Record<string, GuideItemSelection>;
 
 export interface ScreenshotGuide {
   recordId: string;
@@ -112,6 +130,7 @@ export const ScreenshotGuideService = {
   async generate(
     recordId: string,
     onProgress?: (step: string, detail?: string, percent?: number) => void,
+    opts: { prevSelections?: GuideSelections } = {},
   ): Promise<ScreenshotGuide> {
     const supabase = getAdminSupabase();
     const exampleService = new ScreenshotExampleService(supabase);
@@ -222,6 +241,8 @@ export const ScreenshotGuideService = {
         refs = defaultSource.refs;
         if (defaultSource.kind === 'group') groupTitle = defaultSource.title;
       }
+      // 默认勾选首个来源的全部图（整组全选、散图取其 Top N），无需人工逐张点选
+      const defaultAssetIds = refs.map((r) => r.assetId);
 
       items.push({
         itemId: row.id,
@@ -232,9 +253,9 @@ export const ScreenshotGuideService = {
         score: row.score_value != null ? Number(row.score_value) : null,
         mustCapture: row.item_type !== 'general',
         references: refs,
+        selectedAssetIds: defaultAssetIds,
         referenceGroupTitle: groupTitle,
         referenceSources: sources.length > 0 ? sources : undefined,
-        selectedSourceId: defaultSource?.id ?? null,
         instruction: '',
         suggestedFileName: buildFileName(row, i + 1),
         status: 'pending',
@@ -245,8 +266,6 @@ export const ScreenshotGuideService = {
         10 + Math.round((i / screenshotRows.length) * 40),
       );
     }
-
-    const matchedCount = items.filter((it) => it.references.length > 0).length;
 
     onProgress?.('generate', '正在由 AI 汇总作业说明', 55);
 
@@ -269,19 +288,193 @@ export const ScreenshotGuideService = {
 
     onProgress?.('done', '截图指导书生成完成', 100);
 
+    const sorted = items.sort((a, b) => a.seq - b.seq);
+    // 「重新匹配知识库」时，把上次人工勾选/状态/说明合并进新召回结果：
+    // 已选 assetId 若仍在新候选池则保留（顺序沿用用户排列），失效的图剔除；全部失效回退默认。
+    applySelections(sorted, opts.prevSelections ?? {});
+
     return {
       recordId,
       projectName: record.project_name || '未命名项目',
       schoolName: record.project_school ?? null,
       generatedAt: new Date().toISOString(),
       kbVersion: kbVersion?.version ?? null,
-      items: items.sort((a, b) => a.seq - b.seq),
-      totalScreenshots: items.filter((i) => i.mustCapture).length,
-      matchedCount,
-      unmatchedCount: items.length - matchedCount,
+      items: sorted,
+      totalScreenshots: sorted.filter((i) => i.mustCapture).length,
+      matchedCount: sorted.filter((it) => it.references.length > 0).length,
+      unmatchedCount: sorted.filter((it) => it.references.length === 0).length,
     };
   },
 };
+
+// =============== 持久化（screenshot_guides） ===============
+
+/** 把每项的 referenceSources 候选池展开成 assetId → GuideReference 索引 */
+function buildRefPool(item: GuideItem): Map<string, GuideReference> {
+  const pool = new Map<string, GuideReference>();
+  for (const src of item.referenceSources ?? []) {
+    for (const ref of src.refs) {
+      if (!pool.has(ref.assetId)) pool.set(ref.assetId, ref);
+    }
+  }
+  return pool;
+}
+
+/** 找到某 assetId 所属来源（用于整组标题展示） */
+function sourceOfAsset(item: GuideItem, assetId: string): ReferenceSource | null {
+  for (const src of item.referenceSources ?? []) {
+    if (src.refs.some((r) => r.assetId === assetId)) return src;
+  }
+  return null;
+}
+
+/**
+ * 把人工决策（状态/勾选/说明）应用到机器生成的 items 上。
+ * - 勾选：仅保留仍在候选池里的 assetId（按用户顺序）；若一项历史有勾选但全部失效，回退默认；
+ * - 状态/说明：沿用人工值；未显式勾选的项保持机器默认。
+ * 返回被应用过的有效决策合集（供落库，剔除失效项）。
+ */
+export function applySelections(items: GuideItem[], selections: GuideSelections): GuideSelections {
+  const persisted: GuideSelections = {};
+  for (const item of items) {
+    const sel = selections[item.itemId];
+    if (!sel) continue;
+
+    if (sel.status === 'ready' || sel.status === 'pending' || sel.status === 'na') {
+      item.status = sel.status;
+    }
+    if (typeof sel.instructionOverride === 'string' && sel.instructionOverride.trim()) {
+      item.instruction = sel.instructionOverride;
+    }
+
+    if (Array.isArray(sel.selectedAssetIds)) {
+      const pool = buildRefPool(item);
+      const valid = sel.selectedAssetIds.filter((id): id is string => typeof id === 'string' && pool.has(id));
+      if (valid.length > 0) {
+        // 去重并保序
+        const uniq = Array.from(new Set(valid));
+        item.selectedAssetIds = uniq;
+        item.references = uniq.map((id) => pool.get(id)!).filter(Boolean);
+        // 组标题取首张选中图所属整组（跨组时展示主要来源）
+        const firstSrc = sourceOfAsset(item, uniq[0]);
+        item.referenceGroupTitle = firstSrc?.kind === 'group' ? firstSrc.title : null;
+      } else if (sel.selectedAssetIds.length > 0) {
+        // 历史勾选全部失效 → 保持机器默认（不覆盖），该决策不持久化
+        continue;
+      } else {
+        // 用户显式清空
+        item.selectedAssetIds = [];
+        item.references = [];
+        item.referenceGroupTitle = null;
+      }
+    }
+
+    persisted[item.itemId] = {
+      status: item.status,
+      selectedAssetIds: item.selectedAssetIds,
+      ...(sel.instructionOverride != null ? { instructionOverride: item.instruction } : {}),
+    };
+  }
+  return persisted;
+}
+
+/**
+ * 读取某招投标记录已保存的指导书（二次进入直接复用，不再跑 LLM/召回）。
+ * 无记录返回 null。返回的 guide 已合并 guide_payload（机器结果）与 item_selections（人工决策）。
+ */
+export async function getSavedGuide(recordId: string): Promise<ScreenshotGuide | null> {
+  const supabase = getAdminSupabase();
+  const { data, error } = await supabase
+    .from('screenshot_guides')
+    .select('guide_payload, item_selections, kb_version')
+    .eq('record_id', recordId)
+    .maybeSingle();
+  if (error) throw new Error(`读取已保存指导书失败: ${error.message}`);
+  if (!data || !data.guide_payload) return null;
+
+  const guide = data.guide_payload as ScreenshotGuide;
+  const selections = (data.item_selections ?? {}) as GuideSelections;
+  applySelections(guide.items, selections);
+  // 重新汇总计数（合并勾选后可能变化）
+  guide.matchedCount = guide.items.filter((it) => it.references.length > 0).length;
+  guide.unmatchedCount = guide.items.filter((it) => it.references.length === 0).length;
+  return guide;
+}
+
+/**
+ * 保存/更新一份指导书（首次生成或重新匹配后落机器结果 + 人工决策）。
+ * 机器结果写 guide_payload，人工决策写 item_selections。
+ */
+export async function upsertSavedGuide(
+  recordId: string,
+  guide: ScreenshotGuide,
+  selections: GuideSelections,
+  actor?: { id: string; displayName?: string | null },
+): Promise<void> {
+  const supabase = getAdminSupabase();
+  const { error } = await supabase
+    .from('screenshot_guides')
+    .upsert(
+      {
+        record_id: recordId,
+        kb_version: guide.kbVersion,
+        guide_payload: guide as unknown as Record<string, unknown>,
+        item_selections: selections,
+        generated_at: new Date(guide.generatedAt).toISOString(),
+        updated_by: actor?.id ?? null,
+        updated_by_name: actor?.displayName ?? null,
+      },
+      { onConflict: 'record_id' },
+    );
+  if (error) throw new Error(`保存指导书失败: ${error.message}`);
+}
+
+/**
+ * 仅更新人工决策（勾选/状态/说明的自动保存），不重算机器结果。
+ * selections 为完整合集（前端每次提交当前全部决策），后端只保留引用合法 assetId 的项。
+ */
+export async function saveGuideSelections(
+  recordId: string,
+  selections: GuideSelections,
+  actor?: { id: string; displayName?: string | null },
+): Promise<void> {
+  const supabase = getAdminSupabase();
+  const { data, error: readErr } = await supabase
+    .from('screenshot_guides')
+    .select('guide_payload')
+    .eq('record_id', recordId)
+    .maybeSingle();
+  if (readErr) throw new Error(`读取指导书失败: ${readErr.message}`);
+  if (!data?.guide_payload) {
+    // 尚未生成过指导书，忽略纯勾选保存
+    return;
+  }
+  const guide = data.guide_payload as ScreenshotGuide;
+  const cleaned = applySelections(guide.items, selections);
+
+  const { error } = await supabase
+    .from('screenshot_guides')
+    .update({
+      item_selections: cleaned,
+      guide_payload: guide as unknown as Record<string, unknown>,
+      updated_by: actor?.id ?? null,
+      updated_by_name: actor?.displayName ?? null,
+    })
+    .eq('record_id', recordId);
+  if (error) throw new Error(`保存勾选失败: ${error.message}`);
+}
+
+/** 读取已保存的人工决策（供「重新匹配知识库」时合并旧勾选） */
+export async function getSavedSelections(recordId: string): Promise<GuideSelections> {
+  const supabase = getAdminSupabase();
+  const { data, error } = await supabase
+    .from('screenshot_guides')
+    .select('item_selections')
+    .eq('record_id', recordId)
+    .maybeSingle();
+  if (error) throw new Error(`读取历史勾选失败: ${error.message}`);
+  return (data?.item_selections ?? {}) as GuideSelections;
+}
 
 function mapReference(r: ParameterMapping): GuideReference {
   return {

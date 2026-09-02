@@ -18,16 +18,68 @@ import { getAssetMeta, resolveAssetDownload } from './asset-access';
 import type { ScreenshotGuide, GuideItem } from './screenshot-guide-service';
 
 const IMAGE_MAX_BYTES = 8 * 1024 * 1024;
-const IMAGE_WIDTH = 460;
-const IMAGE_HEIGHT = 300;
+const IMAGE_MAX_WIDTH = 460;
+const IMAGE_MAX_HEIGHT = 360;
 
 function sanitizeFilename(name: string): string {
   return name.replace(/[\\/:*?"<>|]+/g, '_').slice(0, 120);
 }
 
+/**
+ * 读取 PNG/JPG 的像素宽高（直接解析文件头，不引第三方图片库）。
+ * GIF/BMP 返回 null，由调用方退回默认尺寸。
+ */
+function readImageSize(data: Buffer, contentType: string): { width: number; height: number } | null {
+  try {
+    if (contentType.includes('png')) {
+      // PNG: 8 字节签名后 IHDR，宽高在偏移 16/20（大端 4 字节）
+      if (data.length >= 24 && data.toString('ascii', 12, 16) === 'IHDR') {
+        return { width: data.readUInt32BE(16), height: data.readUInt32BE(20) };
+      }
+    }
+    if (contentType.includes('jpeg') || contentType.includes('jpg')) {
+      // JPEG: 扫描 SOF 标记取宽高
+      let offset = 2;
+      while (offset + 9 < data.length) {
+        if (data[offset] !== 0xff) {
+          offset += 1;
+          continue;
+        }
+        const marker = data[offset + 1];
+        // SOF0..SOF15（除 DHT/C4、DAC/CC 外）
+        if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+          const height = data.readUInt16BE(offset + 5);
+          const width = data.readUInt16BE(offset + 7);
+          return { width, height };
+        }
+        const segLen = data.readUInt16BE(offset + 2);
+        offset += 2 + segLen;
+      }
+    }
+  } catch {
+    // fallthrough
+  }
+  return null;
+}
+
+/** 按真实宽高比缩放，限制在最大宽高内（不拉伸变形） */
+function fitImage(
+  width: number | null,
+  height: number | null,
+): { width: number; height: number } {
+  if (!width || !height || width <= 0 || height <= 0) {
+    return { width: IMAGE_MAX_WIDTH, height: Math.round(IMAGE_MAX_WIDTH * 0.62) };
+  }
+  const ratio = Math.min(IMAGE_MAX_WIDTH / width, IMAGE_MAX_HEIGHT / height, 1);
+  return {
+    width: Math.max(1, Math.round(width * ratio)),
+    height: Math.max(1, Math.round(height * ratio)),
+  };
+}
+
 async function fetchImageBuffer(
   assetId: string,
-): Promise<{ data: Buffer; contentType: string } | null> {
+): Promise<{ data: Buffer; contentType: string; width: number | null; height: number | null } | null> {
   const meta = await getAssetMeta(assetId);
   if (!meta) return null;
   if (meta.status === 'failed' || meta.status === 'pending') return null;
@@ -39,7 +91,14 @@ async function fetchImageBuffer(
     if (!r.ok) return null;
     const buf = Buffer.from(await r.arrayBuffer());
     if (buf.length === 0 || buf.length > IMAGE_MAX_BYTES) return null;
-    return { data: buf, contentType: meta.contentType || 'image/png' };
+    const contentType = meta.contentType || 'image/png';
+    const size = readImageSize(buf, contentType);
+    return {
+      data: buf,
+      contentType,
+      width: size?.width ?? null,
+      height: size?.height ?? null,
+    };
   } catch {
     return null;
   }
@@ -233,35 +292,64 @@ export async function buildScreenshotGuideDocx(
       }),
     );
 
-    // 第一张参考图（其余参考图仅在界面查看，Word 不重复贴）
-    const firstRef = item.references[0];
-    if (firstRef) {
-      const img = await fetchImageBuffer(firstRef.assetId);
-      if (img) {
-        try {
+    // 参考图：一项参数可由多张截图共同响应（用户跨组勾选并排序），全部按序插入
+    const refs = item.references ?? [];
+    if (refs.length > 0) {
+      for (let r = 0; r < refs.length; r++) {
+        const ref = refs[r];
+        const img = await fetchImageBuffer(ref.assetId);
+        if (!img) {
           children.push(
             new Paragraph({
               spacing: { before: 80 },
               children: [
+                new TextRun({
+                  text: `[参考图 ${r + 1}/${refs.length} 附件尚未就绪，请在系统中查看]`,
+                  color: '999999',
+                  italics: true,
+                  size: 18,
+                }),
+              ],
+            }),
+          );
+          continue;
+        }
+        try {
+          // 多张图加「图 N/总数」小标题，方便交付人员按顺序截取
+          if (refs.length > 1) {
+            children.push(
+              new Paragraph({
+                spacing: { before: 120 },
+                children: [
+                  new TextRun({ text: `参考图 ${r + 1}/${refs.length}`, bold: true, size: 19, color: '333333' }),
+                ],
+              }),
+            );
+          } else {
+            children.push(new Paragraph({ spacing: { before: 80 }, children: [] }));
+          }
+          children.push(
+            new Paragraph({
+              children: [
                 new ImageRun({
                   data: img.data,
-                  transformation: { width: IMAGE_WIDTH, height: IMAGE_HEIGHT },
+                  transformation: fitImage(img.width, img.height),
                   type: detectImageType(img.contentType),
                   altText: {
                     title: item.title,
-                    description: firstRef.visionNote || item.title,
+                    description: ref.visionNote || item.title,
                     name: item.title,
                   },
                 }),
               ],
             }),
           );
-          if (firstRef.visionNote) {
+          if (ref.visionNote) {
             children.push(
               new Paragraph({
                 children: [
                   new TextRun({
-                    text: `参考图识别要点：${firstRef.visionNote}`,
+                    text: `图注：${ref.visionNote}`,
                     size: 18,
                     italics: true,
                     color: '666666',
@@ -273,22 +361,10 @@ export async function buildScreenshotGuideDocx(
         } catch {
           children.push(
             new Paragraph({
-              children: [new TextRun({ text: '[参考图读取失败]', color: 'CC0000' })],
+              children: [new TextRun({ text: `[参考图 ${r + 1} 读取失败]`, color: 'CC0000' })],
             }),
           );
         }
-      } else {
-        children.push(
-          new Paragraph({
-            children: [
-              new TextRun({
-                text: '[参考图附件尚未就绪，请在系统中查看]',
-                color: '999999',
-                italics: true,
-              }),
-            ],
-          }),
-        );
       }
     } else {
       children.push(
