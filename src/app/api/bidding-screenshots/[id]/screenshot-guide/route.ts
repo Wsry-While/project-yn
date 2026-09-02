@@ -10,7 +10,6 @@ import {
   type GuideItem,
   type GuideSelections,
 } from '@/lib/domain/screenshot-guide-service';
-
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -78,12 +77,13 @@ export async function POST(
         const send = (obj: Record<string, unknown>) =>
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
         try {
-          // 重新匹配时读历史人工决策，生成后合并保留
+          // 重新匹配时读历史人工决策与历史参考来源（人工搜索加入的图），生成后合并保留
           const prevSelections = force ? await getSavedSelections(id) : {};
+          const prevGuide = force ? await getSavedGuide(id) : null;
           const guide = await ScreenshotGuideService.generate(
             id,
             (step, detail, percent) => send({ type: 'step', step, detail, percent }),
-            { prevSelections },
+            { prevSelections, prevGuide },
           );
           // 落库：机器结果 + 人工决策（默认勾选/状态；重算时保留历史手工说明）
           await upsertSavedGuide(id, guide, buildSelections(guide.items, prevSelections), actor);

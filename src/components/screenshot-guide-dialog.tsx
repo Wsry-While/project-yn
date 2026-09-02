@@ -8,17 +8,20 @@ import {
   CheckCircle2,
   AlertTriangle,
   FileDown,
-  ChevronLeft,
-  ChevronRight,
+  Ban,
   Pencil,
   Eye,
-  Ban,
   Layers,
   RefreshCw,
   GripVertical,
   Check,
   Plus,
   XCircle,
+  Search,
+  Sparkles,
+  PanelRightClose,
+  PanelRightOpen,
+  Images,
 } from 'lucide-react';
 import { apiFetch, apiFetchSSE } from '@/lib/web/api-client';
 import { showToast } from '@/lib/web/toast-store';
@@ -38,10 +41,6 @@ export interface GuideReference {
   sourceProjectName?: string | null;
 }
 
-/**
- * 参考来源候选（按组展示）。图片虽然按「整组/散图」来源分组呈现，
- * 但允许用户跨组勾选任意多张，并可对已选图拖动排序（导出按此顺序）。
- */
 export interface ReferenceSource {
   id: string;
   kind: 'group' | 'loose';
@@ -59,9 +58,7 @@ export interface GuideItem {
   requirement: string;
   score: number | null;
   mustCapture: boolean;
-  /** 当前生效参考图（= selectedAssetIds 按序反查候选池），界面预览与导出都用它 */
   references: GuideReference[];
-  /** 用户勾选的参考图 assetId 有序列表（可跨组、可排序） */
   selectedAssetIds: string[];
   referenceGroupTitle?: string | null;
   referenceSources?: ReferenceSource[];
@@ -82,11 +79,25 @@ export interface ScreenshotGuide {
   unmatchedCount: number;
 }
 
+/** 知识库图片搜索的单张结果（带所属图组上下文） */
+interface KbImageHit {
+  assetId: string;
+  score: number;
+  seqInGroup: number;
+  group: {
+    groupId: string;
+    sectionTitle: string;
+    imageCount: number;
+    sourceRecordId: string;
+    sourceProjectName: string | null;
+    sourceSchool: string | null;
+  };
+}
+
 interface Props {
   open: boolean;
   recordId: string;
   onClose: () => void;
-  /** 导出 Word，由父组件拼接下载链接并触发下载 */
   onExport: (guide: ScreenshotGuide) => void;
   exporting?: boolean;
 }
@@ -99,7 +110,6 @@ const STATUS_META: Record<ItemStatus, { label: string; tone: string; icon: typeo
   na: { label: '本项无', tone: 'text-muted-foreground', icon: Ban },
 };
 
-/** 把候选池按 assetId 展开成索引 */
 function buildPool(item: GuideItem): Map<string, { ref: GuideReference; source: ReferenceSource }> {
   const pool = new Map<string, { ref: GuideReference; source: ReferenceSource }>();
   for (const source of item.referenceSources ?? []) {
@@ -110,7 +120,6 @@ function buildPool(item: GuideItem): Map<string, { ref: GuideReference; source: 
   return pool;
 }
 
-/** 根据 selectedAssetIds + 候选池重算 references（保序、去重、剔除失效） */
 function resolveReferences(item: GuideItem, assetIds: string[]): GuideReference[] {
   const pool = buildPool(item);
   const seen = new Set<string>();
@@ -126,6 +135,19 @@ function resolveReferences(item: GuideItem, assetIds: string[]): GuideReference[
   return out;
 }
 
+function refFromHit(hit: KbImageHit, idx: number): GuideReference {
+  return {
+    assetId: hit.assetId,
+    storagePath: null,
+    exampleId: `manual-${hit.assetId}`,
+    visionNote: `图组第 ${idx + 1} 张：${hit.group.sectionTitle}`,
+    evidenceElements: [],
+    confidence: null,
+    sourceRecordId: hit.group.sourceRecordId,
+    sourceProjectName: hit.group.sourceProjectName,
+  };
+}
+
 export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, exporting }: Props) {
   const [loading, setLoading] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
@@ -138,11 +160,17 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
   const [activeId, setActiveId] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
-  const [refIndex, setRefIndex] = useState(0);
-  /** 用户手工编辑过说明的项（仅这些项持久化 instructionOverride） */
-  const editedInstructions = useRef<Set<string>>(new Set());
-  /** 拖拽排序：当前拖动的 assetId */
+  const [showInfo, setShowInfo] = useState(true);
   const [dragAsset, setDragAsset] = useState<string | null>(null);
+
+  // 搜知识库
+  const [searchInput, setSearchInput] = useState('');
+  const [searchKeyword, setSearchKeyword] = useState('');
+  const [hits, setHits] = useState<KbImageHit[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searchedFor, setSearchedFor] = useState<string | null>(null);
+
+  const editedInstructions = useRef<Set<string>>(new Set());
   const skipSave = useRef(true);
   const guideRef = useRef<ScreenshotGuide | null>(null);
   guideRef.current = guide;
@@ -152,7 +180,6 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
     [guide, activeId],
   );
 
-  /** 组装待持久化的人工决策合集 */
   const buildSelections = useCallback((g: ScreenshotGuide) => {
     const selections: Record<
       string,
@@ -170,7 +197,6 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
     return selections;
   }, []);
 
-  /** 落库（keepalive 以便关闭时也能发出） */
   const persist = useCallback(
     async (g: ScreenshotGuide, keepalive = false) => {
       try {
@@ -182,20 +208,20 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
           keepalive,
         });
       } catch {
-        // 静默：自动保存失败不打断操作
+        // 静默
       }
     },
     [buildSelections],
   );
 
-  /** SSE 生成（force=true 为重新匹配，合并历史勾选） */
   const runGenerate = useCallback(
     (force: boolean) => {
       setLoading(true);
       setRegenerating(force);
       setGuide(null);
+      setHits([]);
+      setSearchedFor(null);
       setProgress({ step: 'load', detail: force ? '重新匹配知识库…' : '开始生成…', percent: 0 });
-
       const url = `/api/bidding-screenshots/${recordId}/screenshot-guide${force ? '?force=1' : ''}`;
       const cancel = apiFetchSSE(
         url,
@@ -232,7 +258,6 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
     [recordId],
   );
 
-  // 打开弹窗：优先复用已保存指导书（GET），无则首次全量生成（SSE）
   useEffect(() => {
     if (!open || !recordId) return;
     let cancelled = false;
@@ -241,6 +266,8 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
     editedInstructions.current = new Set();
     setGuide(null);
     setActiveId(null);
+    setHits([]);
+    setSearchedFor(null);
 
     (async () => {
       try {
@@ -249,15 +276,12 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
         );
         if (cancelled) return;
         if (data.saved && data.guide) {
-          // 二次进入：直接复用上次结果（含勾选/状态/说明）
           setGuide(data.guide);
           setActiveId(data.guide.items[0]?.itemId ?? null);
-          // 已有说明视为用户可能编辑过，重算时保留
           for (const it of data.guide.items) {
             if (it.instruction) editedInstructions.current.add(it.itemId);
           }
         } else {
-          // 首次进入：走知识库搜索 + 生成
           cancelSse = runGenerate(false);
         }
       } catch {
@@ -278,11 +302,14 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
       skipSave.current = false;
       return;
     }
-    const t = setTimeout(() => {
-      persist(guide);
-    }, 800);
+    const t = setTimeout(() => persist(guide), 800);
     return () => clearTimeout(t);
   }, [guide, persist]);
+
+  const handleClose = useCallback(() => {
+    if (guideRef.current) persist(guideRef.current, true);
+    onClose();
+  }, [onClose, persist]);
 
   useEffect(() => {
     if (!open) return;
@@ -299,29 +326,25 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
       document.removeEventListener('keydown', onKey);
       document.body.style.overflow = prev;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, onClose]);
-
-  // 关闭前尽力落盘一次
-  const handleClose = () => {
-    if (guideRef.current) persist(guideRef.current, true);
-    onClose();
-  };
+  }, [open, handleClose]);
 
   useEffect(() => {
-    setRefIndex(0);
     setEditing(false);
   }, [activeId]);
 
-  if (!open) return null;
+  // 切换参数后，自动用参数标题搜一次知识库（用户可再手动改关键词）
+  useEffect(() => {
+    if (!activeItem) return;
+    const kw = activeItem.title || '';
+    setSearchInput(kw);
+    void doSearch(kw);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId]);
 
   const updateItem = (itemId: string, patch: Partial<GuideItem>) => {
     setGuide((prev) =>
       prev
-        ? {
-            ...prev,
-            items: prev.items.map((it) => (it.itemId === itemId ? { ...it, ...patch } : it)),
-          }
+        ? { ...prev, items: prev.items.map((it) => (it.itemId === itemId ? { ...it, ...patch } : it)) }
         : prev,
     );
   };
@@ -339,52 +362,131 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
     setEditing(false);
   };
 
-  /** 跨组勾选/取消单张图 */
+  const doSearch = async (raw?: string) => {
+    const kw = (raw ?? searchInput).trim();
+    if (!kw) {
+      showToast('请输入搜索关键词', { kind: 'info' });
+      return;
+    }
+    setSearching(true);
+    setSearchKeyword(kw);
+    try {
+      const data = await apiFetch<{ rows: KbImageHit[] }>('/api/bidding-screenshots/kb-images', {
+        query: { keywords: kw, limit: 60 },
+      });
+      setHits(data.rows ?? []);
+      setSearchedFor(kw);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '搜索知识库失败', { kind: 'error' });
+      setHits([]);
+      setSearchedFor(kw);
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  /** 把搜索来源（整组/散图）并入候选池，返回更新后的 sources */
+  const ensureSource = (
+    item: GuideItem,
+    source: ReferenceSource,
+  ): ReferenceSource[] => {
+    const sources = item.referenceSources ? [...item.referenceSources] : [];
+    const existing = sources.find((s) => s.id === source.id);
+    if (existing) return sources;
+    sources.push(source);
+    return sources;
+  };
+
+  /** 加入单张搜索结果图 */
+  const addHitAsset = (item: GuideItem, hit: KbImageHit) => {
+    if (item.selectedAssetIds.includes(hit.assetId)) {
+      // 已选则取消
+      toggleAsset(item, hit.assetId);
+      return;
+    }
+    const ref = refFromHit(hit, hit.seqInGroup);
+    // 若候选池里没有该图，用「搜知识库」散图来源承载（保证重开/重算不丢）
+    let sources = item.referenceSources ?? [];
+    if (!buildPool(item).has(hit.assetId)) {
+      const manualId = 'manual:search';
+      const manual = sources.find((s) => s.id === manualId);
+      if (manual) {
+        sources = sources.map((s) =>
+          s.id === manualId ? { ...s, refs: [...s.refs, ref], imageCount: s.refs.length + 1 } : s,
+        );
+      } else {
+        sources = [
+          ...sources,
+          { id: manualId, kind: 'loose', title: '搜知识库加入', imageCount: 1, sourceProjectName: null, refs: [ref] },
+        ];
+      }
+    }
+    const nextIds = [...item.selectedAssetIds, hit.assetId];
+    const updated = { ...item, referenceSources: sources };
+    updateItem(item.itemId, {
+      referenceSources: sources,
+      selectedAssetIds: nextIds,
+      references: resolveReferences(updated, nextIds),
+    });
+  };
+
+  /** 整组加入：把该图组在搜索结果里的所有图加入（若推荐来源里已有完整组则用其全部） */
+  const addHitGroup = (item: GuideItem, groupId: string) => {
+    const groupHits = hits
+      .filter((h) => h.group.groupId === groupId)
+      .sort((a, b) => a.seqInGroup - b.seqInGroup);
+    if (!groupHits.length) return;
+    const g = groupHits[0].group;
+
+    let sources = item.referenceSources ? [...item.referenceSources] : [];
+    const groupSourceId = `group:${groupId}`;
+    let groupRefs: GuideReference[];
+    const existingGroup = sources.find((s) => s.id === groupSourceId);
+    if (existingGroup) {
+      groupRefs = existingGroup.refs;
+    } else {
+      groupRefs = groupHits.map((h, i) => refFromHit(h, i));
+      sources.push({
+        id: groupSourceId,
+        kind: 'group',
+        title: g.sectionTitle,
+        imageCount: g.imageCount,
+        sourceProjectName: g.sourceProjectName,
+        refs: groupRefs,
+      });
+    }
+
+    const selected = new Set(item.selectedAssetIds);
+    for (const r of groupRefs) selected.add(r.assetId);
+    // 保持顺序：按来源顺序重建
+    const ordered: string[] = [];
+    for (const src of sources) {
+      for (const r of src.refs) if (selected.has(r.assetId)) ordered.push(r.assetId);
+    }
+    const updated = { ...item, referenceSources: sources };
+    updateItem(item.itemId, {
+      referenceSources: sources,
+      selectedAssetIds: ordered,
+      references: resolveReferences(updated, ordered),
+      referenceGroupTitle: g.sectionTitle,
+    });
+    showToast(`已整组加入 ${groupRefs.length} 张`, { kind: 'success' });
+  };
+
   const toggleAsset = (item: GuideItem, assetId: string) => {
     const has = item.selectedAssetIds.includes(assetId);
-    let nextIds: string[];
-    if (has) {
-      nextIds = item.selectedAssetIds.filter((id) => id !== assetId);
-    } else {
-      nextIds = [...item.selectedAssetIds, assetId];
-    }
+    const nextIds = has
+      ? item.selectedAssetIds.filter((id) => id !== assetId)
+      : [...item.selectedAssetIds, assetId];
     const refs = resolveReferences(item, nextIds);
-    const firstSrc = nextIds.length
-      ? (buildPool(item).get(nextIds[0])?.source ?? null)
-      : null;
+    const firstSrc = nextIds.length ? buildPool(item).get(nextIds[0])?.source ?? null : null;
     updateItem(item.itemId, {
       selectedAssetIds: nextIds,
       references: refs,
       referenceGroupTitle: firstSrc?.kind === 'group' ? firstSrc.title : null,
     });
-    setRefIndex(0);
   };
 
-  /** 整组快速勾选/取消 */
-  const toggleSourceAll = (item: GuideItem, source: ReferenceSource) => {
-    const selected = new Set(item.selectedAssetIds);
-    const allIn = source.refs.every((r) => selected.has(r.assetId));
-    if (allIn) {
-      for (const r of source.refs) selected.delete(r.assetId);
-    } else {
-      for (const r of source.refs) selected.add(r.assetId);
-    }
-    // 保持 references 顺序：按来源顺序重建（已有的保留相对位置，新选追加）
-    const ordered: string[] = [];
-    for (const src of item.referenceSources ?? []) {
-      for (const r of src.refs) {
-        if (selected.has(r.assetId)) ordered.push(r.assetId);
-      }
-    }
-    updateItem(item.itemId, {
-      selectedAssetIds: ordered,
-      references: resolveReferences(item, ordered),
-      referenceGroupTitle: null,
-    });
-    setRefIndex(0);
-  };
-
-  /** 拖拽排序：把 dragAsset 放到 targetAsset 位置 */
   const reorder = (item: GuideItem, targetAsset: string) => {
     if (!dragAsset || dragAsset === targetAsset) return;
     const ids = [...item.selectedAssetIds];
@@ -393,23 +495,39 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
     if (from < 0 || to < 0) return;
     ids.splice(from, 1);
     ids.splice(to, 0, dragAsset);
-    updateItem(item.itemId, {
-      selectedAssetIds: ids,
-      references: resolveReferences(item, ids),
-    });
+    updateItem(item.itemId, { selectedAssetIds: ids, references: resolveReferences(item, ids) });
   };
+
+  // 搜索结果按图组归并（保持相关度顺序），便于整组加入
+  const hitGroups = useMemo(() => {
+    const map = new Map<string, { hit: KbImageHit; items: KbImageHit[] }>();
+    for (const h of hits) {
+      const cur = map.get(h.group.groupId);
+      if (cur) cur.items.push(h);
+      else map.set(h.group.groupId, { hit: h, items: [h] });
+    }
+    return Array.from(map.values()).sort((a, b) => b.hit.score - a.hit.score);
+  }, [hits]);
+
+  // 推荐来源：排除「搜知识库加入」散图来源（它由已选区体现）
+  const recommendSources = useMemo(
+    () => (activeItem?.referenceSources ?? []).filter((s) => s.id !== 'manual:search'),
+    [activeItem],
+  );
 
   const readyCount = guide?.items.filter((i) => i.status === 'ready').length ?? 0;
   const pendingCount = guide?.items.filter((i) => i.status === 'pending').length ?? 0;
   const naCount = guide?.items.filter((i) => i.status === 'na').length ?? 0;
 
+  if (!open) return null;
+
   return (
     <div
       role="dialog"
       aria-modal="true"
-      className="fixed inset-0 z-[95] flex items-stretch justify-center bg-black/50 p-2 sm:p-4"
+      className="fixed inset-0 z-[95] flex items-stretch justify-center bg-black/60 p-1.5 sm:p-3"
     >
-      <div className="animate-fade-in-up relative flex w-full max-w-[1400px] flex-col overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-[0_24px_60px_rgba(0,0,0,0.4)]">
+      <div className="animate-fade-in-up relative flex h-full w-full max-w-[1560px] flex-col overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-[0_24px_60px_rgba(0,0,0,0.4)]">
         {/* Header */}
         <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-3">
           <div className="min-w-0">
@@ -419,7 +537,7 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
             </h2>
             <p className="mt-0.5 truncate text-sm text-muted-foreground">
               {guide
-                ? `${guide.projectName}${guide.schoolName ? ` · ${guide.schoolName}` : ''} · 共 ${guide.items.length} 项（必截 ${guide.totalScreenshots}） · 已匹配参考图 ${guide.matchedCount} 项${guide.kbVersion ? ` · 知识库 ${guide.kbVersion}` : ''}`
+                ? `${guide.projectName}${guide.schoolName ? ` · ${guide.schoolName}` : ''} · 共 ${guide.items.length} 项 · 已匹配 ${guide.matchedCount} 项${guide.kbVersion ? ` · 知识库 ${guide.kbVersion}` : ''}`
                 : '正在根据评分项与知识库生成作业说明…'}
             </p>
           </div>
@@ -432,26 +550,13 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
                 onClick={() => runGenerate(true)}
                 title="重新搜索知识库，保留你的勾选与状态"
               >
-                {regenerating ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <RefreshCw className="h-4 w-4" />
-                )}
-                重新匹配知识库
+                {regenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                重新匹配
               </Button>
             )}
             {guide && (
-              <Button
-                size="sm"
-                variant="default"
-                disabled={exporting}
-                onClick={() => guide && onExport(guide)}
-              >
-                {exporting ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <FileDown className="h-4 w-4" />
-                )}
+              <Button size="sm" variant="default" disabled={exporting} onClick={() => guide && onExport(guide)}>
+                {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileDown className="h-4 w-4" />}
                 导出 Word
               </Button>
             )}
@@ -468,14 +573,14 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
 
         {loading ? (
           <LoadingState progress={progress} />
-        ) : !guide ? (
+        ) : !guide || !activeItem ? (
           <div className="flex flex-1 items-center justify-center p-10 text-sm text-muted-foreground">
             生成失败，请关闭后重试。
           </div>
         ) : (
           <div className="flex min-h-0 flex-1">
-            {/* Left: item list */}
-            <aside className="flex w-72 shrink-0 flex-col border-r border-border bg-muted/20">
+            {/* Left: param list */}
+            <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-muted/20">
               <div className="flex items-center gap-2 border-b border-border px-3 py-2 text-xs text-muted-foreground">
                 <span className="inline-flex items-center gap-1">
                   <CheckCircle2 className="h-3 w-3 text-status-success" />
@@ -489,7 +594,6 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
                   <Ban className="h-3 w-3" />
                   {naCount}
                 </span>
-                <span className="ml-auto">点击切换</span>
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto py-1">
                 {guide.items.map((item) => {
@@ -517,7 +621,6 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
                           {item.selectedAssetIds.length > 0 && (
                             <span className="text-status-success">· {item.selectedAssetIds.length} 图</span>
                           )}
-                          {item.score != null && <span>· {item.score}分</span>}
                         </span>
                       </span>
                     </button>
@@ -526,342 +629,356 @@ export function ScreenshotGuideDialog({ open, recordId, onClose, onExport, expor
               </div>
             </aside>
 
-            {/* Right: detail */}
-            {activeItem && (
-              <section className="flex min-w-0 flex-1 flex-col">
-                <div className="border-b border-border px-6 py-4">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <span className="font-mono">#{String(activeItem.seq).padStart(2, '0')}</span>
-                        {activeItem.systemModule && (
-                          <span className="rounded bg-muted px-1.5 py-0.5">{activeItem.systemModule}</span>
-                        )}
-                        {activeItem.score != null && <span>{activeItem.score} 分</span>}
-                        {!activeItem.mustCapture && (
-                          <span className="text-muted-foreground">（一般参数）</span>
-                        )}
-                      </div>
-                      <h3 className="mt-1 text-lg font-semibold leading-snug">{activeItem.title}</h3>
-                      <p className="mt-1 max-h-24 overflow-y-auto rounded bg-muted/40 p-2 text-sm text-muted-foreground">
-                        {activeItem.requirement}
+            {/* Center: image workbench */}
+            <section className="flex min-w-0 flex-1 flex-col">
+              {/* Search bar */}
+              <div className="border-b border-border px-4 py-2.5">
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <input
+                      value={searchInput}
+                      onChange={(e) => setSearchInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void doSearch();
+                      }}
+                      placeholder="搜知识库：参数关键词 / 模块名，如 知识图谱 多形态"
+                      className="h-9 w-full rounded-md border border-border bg-background pl-8 pr-3 text-sm outline-none focus:border-brand"
+                    />
+                  </div>
+                  <Button size="sm" onClick={() => void doSearch()} disabled={searching}>
+                    {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                    搜知识库
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setShowInfo((v) => !v)}
+                    title={showInfo ? '收起作业说明面板' : '展开作业说明面板'}
+                  >
+                    {showInfo ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="flex min-h-0 flex-1">
+                {/* Image column */}
+                <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                  {/* Selected strip */}
+                  <div className="mb-4 rounded-md border border-brand/20 bg-brand/5 p-2.5">
+                    <p className="mb-2 flex items-center gap-1 text-xs font-medium text-brand">
+                      <Images className="h-3.5 w-3.5" />
+                      已选截图（{activeItem.selectedAssetIds.length}）· 拖动调整导出顺序，点击 × 移除
+                    </p>
+                    {activeItem.references.length === 0 ? (
+                      <p className="py-2 text-center text-xs text-muted-foreground">
+                        还未选图，从下方知识库搜索结果或推荐参考中挑选
                       </p>
+                    ) : (
+                      <div className="flex flex-wrap gap-2">
+                        {activeItem.references.map((ref, idx) => (
+                          <div
+                            key={ref.assetId}
+                            draggable
+                            onDragStart={() => setDragAsset(ref.assetId)}
+                            onDragOver={(e) => e.preventDefault()}
+                            onDrop={() => reorder(activeItem, ref.assetId)}
+                            onDragEnd={() => setDragAsset(null)}
+                            className={cn(
+                              'group relative w-28 shrink-0 cursor-grab overflow-hidden rounded border bg-card active:cursor-grabbing',
+                              dragAsset === ref.assetId ? 'border-brand opacity-50' : 'border-border hover:border-brand/50',
+                            )}
+                          >
+                            <div className="flex items-center justify-between bg-muted/60 px-1 py-0.5 text-[10px] text-muted-foreground">
+                              <GripVertical className="h-3 w-3" />
+                              <span className="font-mono">#{idx + 1}</span>
+                            </div>
+                            <a href={`/api/files/preview/${ref.assetId}`} target="_blank" rel="noreferrer">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={`/api/files/preview/${ref.assetId}`}
+                                                alt=""
+                                className="h-20 w-full object-cover"
+                              />
+                            </a>
+                            <button
+                              type="button"
+                              aria-label="移除"
+                              onClick={() => toggleAsset(activeItem, ref.assetId)}
+                              className="absolute right-0.5 top-6 rounded-full bg-background/85 text-muted-foreground transition hover:text-destructive"
+                            >
+                              <XCircle className="h-4 w-4" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Search results */}
+                  <div className="mb-2 flex items-center gap-2 text-sm font-medium">
+                    <Search className="h-4 w-4 text-brand" />
+                    知识库搜索
+                    {searchedFor && (
+                      <span className="text-xs font-normal text-muted-foreground">
+                        「{searchKeyword}」· {hits.length} 张
+                        {hits.length === 0 && !searching && '（换个关键词试试，或看下方推荐参考）'}
+                      </span>
+                    )}
+                  </div>
+
+                  {searching ? (
+                    <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
+                      <Loader2 className="h-5 w-5 animate-spin text-brand" /> 正在搜索知识库…
                     </div>
-                    <Button size="sm" variant="outline" onClick={() => cycleStatus(activeItem)}>
-                      {(() => {
-                        const meta = STATUS_META[activeItem.status];
-                        const Icon = meta.icon;
+                  ) : hits.length > 0 ? (
+                    <div className="space-y-4">
+                      {hitGroups.map(({ hit: first, items: groupHits }) => {
+                        const g = first.group;
+                        const allIn = groupHits.every((h) => activeItem.selectedAssetIds.includes(h.assetId));
                         return (
-                          <>
-                            <Icon className={cn('h-4 w-4', meta.tone)} />
-                            {meta.label}
-                          </>
+                          <div key={g.groupId} className="rounded-lg border border-border bg-card">
+                            <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+                              <div className="min-w-0 text-xs">
+                                <p className="flex items-center gap-1.5">
+                                  <span className="rounded bg-brand/15 px-1.5 py-px text-[10px] text-brand">
+                                    整组 · {g.imageCount} 张
+                                  </span>
+                                  <span className="line-clamp-1 font-medium">{g.sectionTitle}</span>
+                                </p>
+                                <p className="mt-0.5 text-muted-foreground">
+                                  {g.sourceProjectName ? `来自：${g.sourceProjectName}` : '知识库历史交付'}
+                                  {g.sourceSchool ? ` · ${g.sourceSchool}` : ''}
+                                </p>
+                              </div>
+                              <Button
+                                size="sm"
+                                variant={allIn ? 'outline' : 'default'}
+                                className="h-7 shrink-0 px-2.5 text-xs"
+                                onClick={() => addHitGroup(activeItem, g.groupId)}
+                              >
+                                <Layers className="h-3.5 w-3.5" />
+                                {allIn ? '已在已选' : '整组加入'}
+                              </Button>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2 p-2.5 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
+                              {groupHits.map((h) => {
+                                const checked = activeItem.selectedAssetIds.includes(h.assetId);
+                                return (
+                                  <button
+                                    key={h.assetId}
+                                    type="button"
+                                    onClick={() => addHitAsset(activeItem, h)}
+                                    className={cn(
+                                      'group relative overflow-hidden rounded-md border text-left transition',
+                                      checked ? 'border-brand ring-2 ring-brand/30' : 'border-border hover:border-brand/50',
+                                    )}
+                                    title={g.sectionTitle}
+                                  >
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img
+                                      src={`/api/files/preview/${h.assetId}`}
+                                      alt=""
+                                      loading="lazy"
+                                      className="h-28 w-full object-cover"
+                                    />
+                                    <span
+                                      className={cn(
+                                        'absolute left-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-full border',
+                                        checked
+                                          ? 'border-brand bg-brand text-white'
+                                          : 'border-white/70 bg-black/40 text-transparent group-hover:text-white/80',
+                                      )}
+                                    >
+                                      {checked ? <Check className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
+                                    </span>
+                                    <span className="flex items-center justify-between bg-background/90 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                                      <span className="truncate">第 {h.seqInGroup + 1} 张</span>
+                                      {checked ? (
+                                        <span className="inline-flex items-center text-brand">
+                                          <Check className="h-3 w-3" /> 已选
+                                        </span>
+                                      ) : (
+                                        <Eye className="h-3 w-3" />
+                                      )}
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
                         );
-                      })()}
-                    </Button>
+                      })}
+                    </div>
+                  ) : searchedFor ? (
+                    <div className="rounded-md border border-dashed border-border py-8 text-center text-xs text-muted-foreground">
+                      知识库中未搜到与「{searchKeyword}」相关的截图
+                    </div>
+                  ) : null}
+
+                  {/* Recommended (auto recall) */}
+                  <div className="mt-6 border-t border-border pt-4">
+                    <p className="mb-2 flex items-center gap-1.5 text-sm font-medium text-muted-foreground">
+                      <Sparkles className="h-4 w-4" />
+                      系统推荐参考（自动召回）
+                    </p>
+                    {recommendSources.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">暂无自动推荐，可直接用上方搜索。</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {recommendSources.map((s) => {
+                          const selectedIds = new Set(activeItem.selectedAssetIds);
+                          const allIn = s.refs.length > 0 && s.refs.every((r) => selectedIds.has(r.assetId));
+                          return (
+                            <div key={s.id} className="rounded-md border border-border bg-muted/20">
+                              <div className="flex items-center justify-between gap-2 px-2.5 py-1.5">
+                                <div className="min-w-0 text-xs">
+                                  <span
+                                    className={cn(
+                                      'mr-1 rounded px-1 py-px text-[10px]',
+                                      s.kind === 'group' ? 'bg-brand/15 text-brand' : 'bg-muted text-muted-foreground',
+                                    )}
+                                  >
+                                    {s.kind === 'group' ? '整组' : '散图'}
+                                  </span>
+                                  <span className="line-clamp-1 break-all">
+                                    {s.title} · {s.imageCount} 张
+                                    {s.sourceProjectName ? ` · ${s.sourceProjectName}` : ''}
+                                  </span>
+                                </div>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-6 shrink-0 px-2 text-xs"
+                                  onClick={() => {
+                                    const ids = new Set(activeItem.selectedAssetIds);
+                                    if (allIn) for (const r of s.refs) ids.delete(r.assetId);
+                                    else for (const r of s.refs) ids.add(r.assetId);
+                                    const ordered: string[] = [];
+                                    for (const src of activeItem.referenceSources ?? []) {
+                                      for (const r of src.refs) if (ids.has(r.assetId)) ordered.push(r.assetId);
+                                    }
+                                    updateItem(activeItem.itemId, {
+                                      selectedAssetIds: ordered,
+                                      references: resolveReferences(activeItem, ordered),
+                                    });
+                                  }}
+                                >
+                                  {allIn ? '取消整组' : '全选整组'}
+                                </Button>
+                              </div>
+                              <div className="grid grid-cols-3 gap-1.5 p-2 sm:grid-cols-4 md:grid-cols-6">
+                                {s.refs.map((ref) => {
+                                  const checked = activeItem.selectedAssetIds.includes(ref.assetId);
+                                  return (
+                                    <button
+                                      key={ref.assetId}
+                                      type="button"
+                                      onClick={() => toggleAsset(activeItem, ref.assetId)}
+                                      className={cn(
+                                        'relative overflow-hidden rounded border',
+                                        checked ? 'border-brand ring-1 ring-brand' : 'border-border hover:border-brand/40',
+                                      )}
+                                      title={ref.visionNote ?? ''}
+                                    >
+                                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                                      <img
+                                        src={`/api/files/preview/${ref.assetId}`}
+                                        alt=""
+                                        loading="lazy"
+                                        className="h-16 w-full object-cover"
+                                      />
+                                      <span
+                                        className={cn(
+                                          'absolute left-1 top-1 flex h-4 w-4 items-center justify-center rounded-full border',
+                                          checked
+                                            ? 'border-brand bg-brand text-white'
+                                            : 'border-white/70 bg-black/40 text-transparent',
+                                        )}
+                                      >
+                                        {checked ? <Check className="h-3 w-3" /> : <Plus className="h-3 w-3 text-white" />}
+                                      </span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 </div>
 
-                <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-2">
-                  {/* Reference images */}
-                  <div className="flex min-h-0 flex-col border-b border-border lg:border-b-0 lg:border-r">
+                {/* Right: instruction panel (collapsible) */}
+                {showInfo && (
+                  <aside className="flex w-80 shrink-0 flex-col border-l border-border">
                     <div className="flex items-center justify-between border-b border-border px-4 py-2 text-sm">
-                      <span className="font-medium">
-                        历史参考截图
-                        <span className="ml-2 text-xs font-normal text-muted-foreground">
-                          已选 {activeItem.selectedAssetIds.length} 张 · 可跨组勾选、拖动排序
-                        </span>
-                      </span>
-                      {activeItem.references.length > 1 && (
-                        <div className="flex items-center gap-1">
-                          <Button
-                            size="icon-sm"
-                            variant="ghost"
-                            onClick={() =>
-                              setRefIndex((i) => (i - 1 + activeItem.references.length) % activeItem.references.length)
-                            }
-                          >
-                            <ChevronLeft className="h-4 w-4" />
-                          </Button>
-                          <span className="font-mono text-xs text-muted-foreground">
-                            {refIndex + 1}/{activeItem.references.length}
-                          </span>
-                          <Button
-                            size="icon-sm"
-                            variant="ghost"
-                            onClick={() => setRefIndex((i) => (i + 1) % activeItem.references.length)}
-                          >
-                            <ChevronRight className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      )}
+                      <span className="font-medium">作业说明 / 状态</span>
+                      <Button size="sm" variant="outline" onClick={() => cycleStatus(activeItem)}>
+                        {(() => {
+                          const meta = STATUS_META[activeItem.status];
+                          const Icon = meta.icon;
+                          return (
+                            <>
+                              <Icon className={cn('h-4 w-4', meta.tone)} />
+                              {meta.label}
+                            </>
+                          );
+                        })()}
+                      </Button>
                     </div>
-                    <div className="min-h-0 flex-1 overflow-auto p-4">
-                      {(!activeItem.referenceSources || activeItem.referenceSources.length === 0) &&
-                      activeItem.references.length === 0 ? (
-                        <div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
-                          <ImageIcon className="h-8 w-8 opacity-40" />
-                          知识库暂无此项的历史参考图
-                          <span className="text-xs">请按通用规范截图或标记「待补充」</span>
-                        </div>
-                      ) : (
-                        <div className="space-y-4">
-                          {/* 大图预览（当前浏览的已选图） */}
-                          {activeItem.references.length > 0 ? (
-                            <ReferenceViewer reference={activeItem.references[Math.min(refIndex, activeItem.references.length - 1)]} />
-                          ) : (
-                            <div className="flex min-h-[160px] flex-col items-center justify-center gap-1 rounded-md border border-dashed border-border text-sm text-muted-foreground">
-                              <Ban className="h-6 w-6 opacity-40" />
-                              尚未勾选参考图，请从下方候选中选择
-                            </div>
-                          )}
-
-                          {/* 已选截图（可拖动排序 / 移除） */}
-                          {activeItem.references.length > 0 && (
-                            <div className="rounded-md border border-brand/20 bg-brand/5 p-2.5">
-                              <p className="mb-2 flex items-center gap-1 text-xs font-medium text-brand">
-                                <Layers className="h-3.5 w-3.5" />
-                                已选截图（{activeItem.references.length}）· 拖动可调整导出顺序
-                              </p>
-                              <div className="flex flex-wrap gap-2">
-                                {activeItem.references.map((ref, idx) => (
-                                  <div
-                                    key={ref.assetId}
-                                    draggable
-                                    onDragStart={() => setDragAsset(ref.assetId)}
-                                    onDragOver={(e) => e.preventDefault()}
-                                    onDrop={() => reorder(activeItem, ref.assetId)}
-                                    onDragEnd={() => setDragAsset(null)}
-                                    className={cn(
-                                      'group relative w-20 shrink-0 cursor-grab overflow-hidden rounded border bg-card active:cursor-grabbing',
-                                      dragAsset === ref.assetId
-                                        ? 'border-brand opacity-50'
-                                        : 'border-border hover:border-brand/50',
-                                    )}
-                                  >
-                                    <div className="flex items-center justify-between bg-muted/60 px-1 py-0.5 text-[10px] text-muted-foreground">
-                                      <GripVertical className="h-3 w-3" />
-                                      <span className="font-mono">#{idx + 1}</span>
-                                    </div>
-                                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                                    <img
-                                      src={`/api/files/preview/${ref.assetId}`}
-                                      alt=""
-                                      className="h-14 w-full object-cover"
-                                      onClick={() => setRefIndex(idx)}
-                                    />
-                                    <button
-                                      type="button"
-                                      aria-label="移除"
-                                      onClick={() => toggleAsset(activeItem, ref.assetId)}
-                                      className="absolute right-0.5 top-5 rounded-full bg-background/80 text-muted-foreground opacity-0 transition hover:text-destructive group-hover:opacity-100"
-                                    >
-                                      <XCircle className="h-3.5 w-3.5" />
-                                    </button>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-
-                          {/* 候选参考图（按来源分组，可跨组勾选） */}
-                          <div className="space-y-2">
-                            <p className="text-xs font-medium text-muted-foreground">
-                              候选参考图（按知识库来源分组，点击图片即可加入/移出）
-                            </p>
-                            {(activeItem.referenceSources ?? []).map((s) => {
-                              const allIn = s.refs.every((r) =>
-                                activeItem.selectedAssetIds.includes(r.assetId),
-                              );
-                              return (
-                                <div key={s.id} className="rounded-md border border-border bg-muted/20">
-                                  <div className="flex items-center justify-between gap-2 border-b border-border px-2.5 py-1.5">
-                                    <div className="flex min-w-0 items-center gap-1.5 text-xs">
-                                      <span
-                                        className={cn(
-                                          'rounded px-1 py-px text-[10px]',
-                                          s.kind === 'group'
-                                            ? 'bg-brand/15 text-brand'
-                                            : 'bg-muted text-muted-foreground',
-                                        )}
-                                      >
-                                        {s.kind === 'group' ? '整组' : '散图'}
-                                      </span>
-                                      <span className="line-clamp-1 break-all">{s.title}</span>
-                                      <span className="shrink-0 text-muted-foreground">
-                                        {s.imageCount} 张{s.sourceProjectName ? ` · ${s.sourceProjectName}` : ''}
-                                      </span>
-                                    </div>
-                                    <Button
-                                      size="sm"
-                                      variant="ghost"
-                                      className="h-6 shrink-0 px-2 text-xs"
-                                      onClick={() => toggleSourceAll(activeItem, s)}
-                                    >
-                                      {allIn ? '取消整组' : '全选整组'}
-                                    </Button>
-                                  </div>
-                                  <div className="grid grid-cols-2 gap-1.5 p-2 sm:grid-cols-3">
-                                    {s.refs.map((ref) => {
-                                      const checked = activeItem.selectedAssetIds.includes(ref.assetId);
-                                      return (
-                                        <button
-                                          key={ref.assetId}
-                                          type="button"
-                                          onClick={() => toggleAsset(activeItem, ref.assetId)}
-                                          className={cn(
-                                            'group relative overflow-hidden rounded border text-left transition',
-                                            checked
-                                              ? 'border-brand ring-1 ring-brand'
-                                              : 'border-border hover:border-brand/40',
-                                          )}
-                                          title={ref.visionNote ?? ''}
-                                        >
-                                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                                          <img
-                                            src={`/api/files/preview/${ref.assetId}`}
-                                            alt=""
-                                            className="h-16 w-full object-cover"
-                                          />
-                                          <span
-                                            className={cn(
-                                              'absolute left-1 top-1 flex h-4 w-4 items-center justify-center rounded-full border',
-                                              checked
-                                                ? 'border-brand bg-brand text-white'
-                                                : 'border-white/70 bg-black/40 text-transparent',
-                                            )}
-                                          >
-                                            {checked ? <Check className="h-3 w-3" /> : <Plus className="h-3 w-3 text-white" />}
-                                          </span>
-                                          {ref.visionNote && (
-                                            <span className="block truncate bg-background/85 px-1 py-0.5 text-[10px] text-muted-foreground">
-                                              {ref.visionNote}
-                                            </span>
-                                          )}
-                                        </button>
-                                      );
-                                    })}
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Instruction editor */}
-                  <div className="flex min-h-0 flex-col">
-                    <div className="flex items-center justify-between border-b border-border px-4 py-2 text-sm">
-                      <span className="font-medium">作业说明</span>
-                      <div className="flex items-center gap-2">
-                        {editing ? (
-                          <>
+                    <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                      <div className="mb-3 rounded bg-muted/40 p-2 text-xs text-muted-foreground">
+                        <p className="mb-1 font-medium text-foreground">{activeItem.title}</p>
+                        <p className="max-h-28 overflow-y-auto">{activeItem.requirement}</p>
+                        {activeItem.score != null && <p className="mt-1">分值：{activeItem.score}</p>}
+                      </div>
+                      {editing ? (
+                        <>
+                          <Textarea
+                            value={draft}
+                            onChange={(e) => setDraft(e.target.value)}
+                            className="min-h-[260px] resize-none text-sm leading-relaxed"
+                            placeholder="写明到哪个菜单、截什么、如何证明满足要求…"
+                          />
+                          <div className="mt-2 flex justify-end gap-2">
                             <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
                               取消
                             </Button>
                             <Button size="sm" variant="default" onClick={saveDraft}>
                               <CheckCircle2 className="h-4 w-4" /> 保存
                             </Button>
-                          </>
-                        ) : (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => {
-                              setDraft(activeItem.instruction);
-                              setEditing(true);
-                            }}
-                          >
-                            <Pencil className="h-4 w-4" /> 编辑
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-                    <div className="min-h-0 flex-1 overflow-auto p-4">
-                      {editing ? (
-                        <Textarea
-                          value={draft}
-                          onChange={(e) => setDraft(e.target.value)}
-                          className="min-h-[240px] resize-none font-mono text-sm leading-relaxed"
-                          placeholder="写明到哪个菜单、截什么、如何证明满足要求…"
-                        />
+                          </div>
+                        </>
                       ) : (
-                        <div className="whitespace-pre-wrap text-sm leading-relaxed">
-                          {activeItem.instruction || (
-                            <span className="text-muted-foreground">暂无说明，点击「编辑」补充。</span>
-                          )}
-                        </div>
+                        <>
+                          <div className="whitespace-pre-wrap rounded-md border border-border p-3 text-sm leading-relaxed">
+                            {activeItem.instruction || (
+                              <span className="text-muted-foreground">暂无说明，点击「编辑」补充。</span>
+                            )}
+                          </div>
+                          <Button size="sm" variant="outline" className="mt-2 w-full" onClick={() => { setDraft(activeItem.instruction); setEditing(true); }}>
+                            <Pencil className="h-4 w-4" /> 编辑说明
+                          </Button>
+                        </>
                       )}
                       <div className="mt-4 rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground">
                         <div className="flex items-center gap-1.5 font-medium text-foreground">
                           <FileDown className="h-3.5 w-3.5" />
                           建议文件名
                         </div>
-                        <p className="mt-1 font-mono">{activeItem.suggestedFileName}</p>
+                        <p className="mt-1 font-mono break-all">{activeItem.suggestedFileName}</p>
                       </div>
                     </div>
-                  </div>
-                </div>
-              </section>
-            )}
+                  </aside>
+                )}
+              </div>
+            </section>
           </div>
         )}
       </div>
     </div>
-  );
-}
-
-function ReferenceViewer({ reference }: { reference: GuideReference }) {
-  const previewUrl = `/api/files/preview/${reference.assetId}`;
-  const [broken, setBroken] = useState(false);
-  return (
-    <figure className="space-y-2">
-      <a
-        href={previewUrl}
-        target="_blank"
-        rel="noreferrer"
-        className="block overflow-hidden rounded-md border border-border bg-muted/30"
-      >
-        {broken ? (
-          <div className="flex h-48 items-center justify-center text-sm text-muted-foreground">
-            <Eye className="mr-2 h-4 w-4" />
-            预览不可用，点击新窗口打开
-          </div>
-        ) : (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={previewUrl}
-            alt={reference.visionNote || '参考截图'}
-            className="max-h-[420px] w-full object-contain"
-            onError={() => setBroken(true)}
-          />
-        )}
-      </a>
-      {reference.visionNote && (
-        <figcaption className="text-sm text-muted-foreground">
-          {reference.visionNote.startsWith('图组第') ? null : (
-            <span className="font-medium text-foreground">识别要点：</span>
-          )}
-          {reference.visionNote}
-        </figcaption>
-      )}
-      {reference.evidenceElements && reference.evidenceElements.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {reference.evidenceElements.map((el, i) => (
-            <span key={i} className="rounded bg-brand/10 px-1.5 py-0.5 text-xs text-brand">
-              {el}
-            </span>
-          ))}
-        </div>
-      )}
-      {reference.confidence != null && (
-        <p className="text-xs text-muted-foreground">
-          匹配置信度 {Math.round(reference.confidence * 100)}%
-        </p>
-      )}
-    </figure>
   );
 }
 
@@ -879,19 +996,12 @@ function LoadingState({
   const pct = Math.min(100, Math.max(0, progress.percent));
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-5 p-10">
-      <div className="relative flex h-16 w-16 items-center justify-center">
-        <Loader2 className="h-12 w-12 animate-spin text-brand" />
-      </div>
+      <Loader2 className="h-12 w-12 animate-spin text-brand" />
       <div className="w-full max-w-md space-y-2 text-center">
-        <p className="text-sm font-medium">
-          {STEP_LABEL[progress.step] ?? '生成中'}…
-        </p>
+        <p className="text-sm font-medium">{STEP_LABEL[progress.step] ?? '生成中'}…</p>
         <p className="text-xs text-muted-foreground">{progress.detail}</p>
         <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-          <div
-            className="h-full rounded-full bg-brand transition-all duration-300"
-            style={{ width: `${pct}%` }}
-          />
+          <div className="h-full rounded-full bg-brand transition-all duration-300" style={{ width: `${pct}%` }} />
         </div>
       </div>
     </div>

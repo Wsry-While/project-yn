@@ -615,6 +615,125 @@ export class ScreenshotExampleService {
     }
     return results;
   }
+
+  /**
+   * 知识库图片搜索（人工挑图工作台用）：按参数关键词/模块名在全库图组里检索，
+   * 返回**单张大图平铺**结果，每张图带所属图组上下文（可一键整组加入）。
+   *
+   * 与 searchReferenceGroups 的区别：
+   * - 这里面向「人主动搜、自己挑」，召回更宽（不做严格 adopt 门槛），按相关度排序后平铺；
+   * - 结果以单张图为单位，group 字段标注来源图组；同组图片连续返回，便于整组加入。
+   */
+  async searchKbImages(
+    keywords: string[],
+    opts: { limit?: number } = {},
+  ): Promise<KbImageHit[]> {
+    const totalLimit = opts.limit ?? 60;
+    const terms = extractMatchTerms(keywords);
+
+    // 1) 宽召回图组：模块别名 / 参数名词 / 功能词 / 原始关键词 命中 section_title
+    const ors: string[] = [];
+    for (const mod of terms.modules) {
+      for (const alias of MODULE_ALIASES[mod] ?? [mod]) {
+        const a = alias.toLowerCase().replace(/\s/g, '');
+        if (a.length >= 2) ors.push(`section_title.ilike.%${a}%`);
+      }
+    }
+    for (const p of terms.params) ors.push(`section_title.ilike.%${p}%`);
+    for (const w of terms.weak) ors.push(`section_title.ilike.%${w}%`);
+    for (const fn of terms.functions) ors.push(`section_title.ilike.%${fn}%`);
+    for (const kw of keywords.filter(Boolean).slice(0, 6)) {
+      const safe = kw.replace(/[,()（）、，:：%]/g, ' ').trim();
+      if (safe.length >= 2) ors.push(`section_title.ilike.%${safe}%`);
+    }
+    if (ors.length === 0) return [];
+
+    const { data: groupData, error: gErr } = await this.db
+      .from('screenshot_parameter_groups')
+      .select('id,record_id,section_title,image_count,kb_version,bidding_screenshots(project_name,project_school)')
+      .or(ors.join(','))
+      .limit(200);
+    if (gErr) throw gErr;
+    const groupRows = (groupData ?? []) as unknown as Array<GroupRow & {
+      bidding_screenshots?: { project_name?: string; project_school?: string } | null;
+    }>;
+    if (groupRows.length === 0) return [];
+
+    // 2) 用 scoreGroupTitle 打分（不做严格 adopt，人来判断），取相关度最高的前 N 组
+    const scored = groupRows
+      .map((g) => ({ g, score: scoreGroupTitle(g.section_title ?? '', terms, keywords, undefined, g.kb_version) }))
+      .sort((a, b) => b.score - a.score || b.g.image_count - a.g.image_count)
+      .slice(0, 24);
+
+    // 3) 加载这些组的全部资产（按 seq），过滤可预览资产
+    const topIds = scored.map((x) => x.g.id);
+    const { data: itemRows, error: itemErr } = await this.db
+      .from('screenshot_group_assets')
+      .select('group_id,asset_id,seq')
+      .in('group_id', topIds)
+      .order('seq', { ascending: true });
+    if (itemErr) throw itemErr;
+    const items = (itemRows ?? []) as GroupAssetRow[];
+
+    const assetIds = Array.from(new Set(items.map((i) => i.asset_id)));
+    const usable = new Set<string>();
+    if (assetIds.length) {
+      const { data: assets, error: assetErr } = await this.db
+        .from('external_file_assets')
+        .select('id,status')
+        .in('id', assetIds);
+      if (assetErr) throw assetErr;
+      for (const a of assets as Array<{ id: string; status: string }>) {
+        if (a.status === 'stored' || a.status === 'direct') usable.add(a.id);
+      }
+    }
+
+    // 4) 平铺成单张结果：组按相关度、组内按 seq；同 asset 跨组只保留得分最高的一次
+    const hits: KbImageHit[] = [];
+    const seenAsset = new Set<string>();
+    for (const { g, score } of scored) {
+      const biz = g.bidding_screenshots ?? null;
+      const groupAssets = items
+        .filter((i) => i.group_id === g.id && usable.has(i.asset_id))
+        .sort((a, b) => a.seq - b.seq);
+      groupAssets.forEach((ga, idx) => {
+        if (seenAsset.has(ga.asset_id)) return;
+        seenAsset.add(ga.asset_id);
+        hits.push({
+          assetId: ga.asset_id,
+          score,
+          seqInGroup: ga.seq,
+          group: {
+            groupId: g.id,
+            sectionTitle: g.section_title,
+            imageCount: g.image_count,
+            sourceRecordId: g.record_id,
+            sourceProjectName: biz?.project_name ?? null,
+            sourceSchool: biz?.project_school ?? null,
+          },
+        });
+      });
+      if (hits.length >= totalLimit) break;
+    }
+    return hits.slice(0, totalLimit);
+  }
+}
+
+/** 知识库图片搜索的单张结果（带所属图组上下文） */
+export interface KbImageHit {
+  assetId: string;
+  /** 所属图组的相关度得分（同组图片一致） */
+  score: number;
+  /** 在所属图组中的序号 */
+  seqInGroup: number;
+  group: {
+    groupId: string;
+    sectionTitle: string;
+    imageCount: number;
+    sourceRecordId: string;
+    sourceProjectName: string | null;
+    sourceSchool: string | null;
+  };
 }
 
 /**

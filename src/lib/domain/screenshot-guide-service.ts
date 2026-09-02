@@ -130,7 +130,7 @@ export const ScreenshotGuideService = {
   async generate(
     recordId: string,
     onProgress?: (step: string, detail?: string, percent?: number) => void,
-    opts: { prevSelections?: GuideSelections } = {},
+    opts: { prevSelections?: GuideSelections; prevGuide?: ScreenshotGuide | null } = {},
   ): Promise<ScreenshotGuide> {
     const supabase = getAdminSupabase();
     const exampleService = new ScreenshotExampleService(supabase);
@@ -289,8 +289,11 @@ export const ScreenshotGuideService = {
     onProgress?.('done', '截图指导书生成完成', 100);
 
     const sorted = items.sort((a, b) => a.seq - b.seq);
-    // 「重新匹配知识库」时，把上次人工勾选/状态/说明合并进新召回结果：
-    // 已选 assetId 若仍在新候选池则保留（顺序沿用用户排列），失效的图剔除；全部失效回退默认。
+    // 「重新匹配知识库」时：先把上一版人工搜索加入的参考来源合并进来（扩大候选池），
+    // 再应用人工勾选/状态/说明——这样手动从知识库挑的图不会因重算被当成失效图剔除。
+    if (opts.prevGuide) {
+      mergePrevSources(sorted, opts.prevGuide);
+    }
     applySelections(sorted, opts.prevSelections ?? {});
 
     return {
@@ -474,6 +477,32 @@ export async function getSavedSelections(recordId: string): Promise<GuideSelecti
     .maybeSingle();
   if (error) throw new Error(`读取历史勾选失败: ${error.message}`);
   return (data?.item_selections ?? {}) as GuideSelections;
+}
+
+/**
+ * 「重新匹配知识库」时，把上一版里用户通过搜知识库手动加入的参考来源
+ * （图组来源 group:* 或 manual:search 散图）合并进新召回结果，避免人工挑的图被丢掉。
+ * 只合并「其图片仍在用户勾选集合里」的来源；按 source id 去重，不覆盖新召回的同名来源。
+ * 合并后应再跑一次 applySelections，让 selectedAssetIds 能从扩大后的候选池反查出 references。
+ */
+export function mergePrevSources(items: GuideItem[], prevGuide: ScreenshotGuide | null): void {
+  if (!prevGuide) return;
+  const prevById = new Map(prevGuide.items.map((it) => [it.itemId, it]));
+  for (const item of items) {
+    const prev = prevById.get(item.itemId);
+    if (!prev || !prev.referenceSources?.length) continue;
+    const selected = new Set(item.selectedAssetIds);
+    const existingIds = new Set((item.referenceSources ?? []).map((s) => s.id));
+    const merged: ReferenceSource[] = [...(item.referenceSources ?? [])];
+    for (const src of prev.referenceSources) {
+      if (existingIds.has(src.id)) continue;
+      // 只保留仍被勾选、且确实带来新图的来源
+      if (!src.refs.some((r) => selected.has(r.assetId))) continue;
+      merged.push(src);
+      existingIds.add(src.id);
+    }
+    item.referenceSources = merged;
+  }
 }
 
 function mapReference(r: ParameterMapping): GuideReference {
