@@ -115,6 +115,28 @@ const STALE_DAYS = 30;
 export class ScreenshotExampleService {
   constructor(private readonly db: SupabaseClient) {}
 
+  /**
+   * 分块查询资产状态（stored/direct 可预览）。assetId 数量可能达上百个（UUID 各 36 字符），
+   * 一次性 .in('id', ids) 会把 URL 撑爆（现网 `URI too long`），因此按 CHUNK_IN 分块并集。
+   */
+  private async fetchUsableAssetIds(assetIds: string[]): Promise<Set<string>> {
+    const usable = new Set<string>();
+    const uniq = Array.from(new Set(assetIds));
+    const CHUNK_IN = 40;
+    for (let i = 0; i < uniq.length; i += CHUNK_IN) {
+      const slice = uniq.slice(i, i + CHUNK_IN);
+      const { data, error } = await this.db
+        .from('external_file_assets')
+        .select('id,status')
+        .in('id', slice);
+      if (error) throw error;
+      for (const a of (data ?? []) as Array<{ id: string; status: string }>) {
+        if (a.status === 'stored' || a.status === 'direct') usable.add(a.id);
+      }
+    }
+    return usable;
+  }
+
   /** 把全表超过 30 天的示例标记为 stale。可在召回前调用以保证新鲜度。 */
   async refreshStale(): Promise<void> {
     const cutoff = new Date(Date.now() - STALE_DAYS * 24 * 60 * 60 * 1000).toISOString();
@@ -147,7 +169,7 @@ export class ScreenshotExampleService {
       const safe = kw.replace(/[,()]/g, ' ').trim();
       if (safe) ors.push(`description.ilike.%${safe}%,system_module.ilike.%${safe}%`);
     }
-    if (ors.length) q = q.or(ors.join(','));
+    if (ors.length) q = q.or(ors.slice(0, 24).join(','));
 
     const { data, error } = await q;
     if (error) throw error;
@@ -335,14 +357,17 @@ export class ScreenshotExampleService {
     for (const w of terms.weak) {
       ors.push(`parameter_name.ilike.%${w}%`);
     }
-    // 原始关键词（去掉标点）在 parameter_name 上兜底
-    for (const kw of keywords.filter(Boolean).slice(0, 6)) {
+    // 原始关键词（去掉标点）在 parameter_name 上兜底。注意：超长关键词（如评分项
+    // requirement 原文可到数百字）绝不能整句塞进 ilike OR——PostgREST 的 .or() 拼 URL，
+    // 会触发 `URI too long`（线上已现网报错）。这里统一走 clipIlKeywords 截成短词，长文
+    // 的语义已由 extractMatchTerms 的词袋承担，原文兜底只补短句命中。
+    for (const kw of clipIlKeywords(keywords)) {
       const safe = kw.replace(/[,()（）、，:：]/g, ' ').trim();
       if (safe.length >= 2 && !terms.functions.includes(safe.toLowerCase())) {
         ors.push(`parameter_name.ilike.%${safe}%`);
       }
     }
-    if (ors.length) q = q.or(ors.join(','));
+    if (ors.length) q = q.or(ors.slice(0, 24).join(','));
 
     const { data, error } = await q;
     if (error) throw error;
@@ -354,17 +379,8 @@ export class ScreenshotExampleService {
     const assetIds = Array.from(
       new Set(rawRows.map((r) => r.asset_id).filter((x): x is string => !!x)),
     );
-    const usableAssets = new Set<string>();
-    if (assetIds.length) {
-      const { data: assets, error: assetErr } = await this.db
-        .from('external_file_assets')
-        .select('id,status')
-        .in('id', assetIds);
-      if (assetErr) throw assetErr;
-      for (const a of assets as Array<{ id: string; status: string }>) {
-        if (a.status === 'stored' || a.status === 'direct') usableAssets.add(a.id);
-      }
-    }
+    // 分块查状态避免 `.in()` 拼 URL 超长（现网 URI too long）
+    const usableAssets = assetIds.length ? await this.fetchUsableAssetIds(assetIds) : new Set<string>();
     // asset_id 为空（极早期数据）或资产状态可预览的才保留
     const rows = rawRows.filter((r) => !r.asset_id || usableAssets.has(r.asset_id));
 
@@ -503,7 +519,9 @@ export class ScreenshotExampleService {
     for (const p of terms.params) ors.push(`section_title.ilike.%${p}%`);
     for (const w of terms.weak) ors.push(`section_title.ilike.%${w}%`);
     for (const fn of terms.functions) ors.push(`section_title.ilike.%${fn}%`);
-    for (const kw of keywords.filter(Boolean).slice(0, 6)) {
+    // 原文关键词兜底用 clipIlKeywords 截短——长 requirement（可达数百字）直接整句拼 .or()
+    // 会让 PostgREST URI 超长（现网 `URI too long`），长文语义由 extractMatchTerms 承担。
+    for (const kw of clipIlKeywords(keywords)) {
       const safe = kw.replace(/[,()（）、，:：%]/g, ' ').trim();
       if (safe.length >= 2) ors.push(`section_title.ilike.%${safe}%`);
     }
@@ -581,17 +599,7 @@ export class ScreenshotExampleService {
     const items = (itemRows ?? []) as GroupAssetRow[];
 
     const assetIds = Array.from(new Set(items.map((i) => i.asset_id)));
-    const usable = new Set<string>();
-    if (assetIds.length) {
-      const { data: assets, error: assetErr } = await this.db
-        .from('external_file_assets')
-        .select('id,status')
-        .in('id', assetIds);
-      if (assetErr) throw assetErr;
-      for (const a of assets as Array<{ id: string; status: string }>) {
-        if (a.status === 'stored' || a.status === 'direct') usable.add(a.id);
-      }
-    }
+    const usable = assetIds.length ? await this.fetchUsableAssetIds(assetIds) : new Set<string>();
 
     const results: ReferenceGroup[] = [];
     for (const x of tops) {
@@ -642,7 +650,8 @@ export class ScreenshotExampleService {
     for (const p of terms.params) ors.push(`section_title.ilike.%${p}%`);
     for (const w of terms.weak) ors.push(`section_title.ilike.%${w}%`);
     for (const fn of terms.functions) ors.push(`section_title.ilike.%${fn}%`);
-    for (const kw of keywords.filter(Boolean).slice(0, 6)) {
+    // 原文关键词兜底同样走 clipIlKeywords（避免长 requirement 整句进 OR 触发 URI too long）
+    for (const kw of clipIlKeywords(keywords)) {
       const safe = kw.replace(/[,()（）、，:：%]/g, ' ').trim();
       if (safe.length >= 2) ors.push(`section_title.ilike.%${safe}%`);
     }
@@ -676,17 +685,7 @@ export class ScreenshotExampleService {
     const items = (itemRows ?? []) as GroupAssetRow[];
 
     const assetIds = Array.from(new Set(items.map((i) => i.asset_id)));
-    const usable = new Set<string>();
-    if (assetIds.length) {
-      const { data: assets, error: assetErr } = await this.db
-        .from('external_file_assets')
-        .select('id,status')
-        .in('id', assetIds);
-      if (assetErr) throw assetErr;
-      for (const a of assets as Array<{ id: string; status: string }>) {
-        if (a.status === 'stored' || a.status === 'direct') usable.add(a.id);
-      }
-    }
+    const usable = assetIds.length ? await this.fetchUsableAssetIds(assetIds) : new Set<string>();
 
     // 4) 平铺成单张结果：组按相关度、组内按 seq；同 asset 跨组只保留得分最高的一次
     const hits: KbImageHit[] = [];
@@ -897,6 +896,45 @@ export function extractMatchTerms(keywords: string[]): {
  * 具体参数名词命中 +2.5（决定排序）；弱功能词 +0.5；整句长串重合 +1；版本一致 +0.05。
  * 采用门槛见 scoreGroupResult：同模块需至少命中 1 个具体参数名词，跨模块直接不采。
  */
+/**
+ * 把原始搜索关键词截成「适合拼进 OR 的长字段 ilike」的短词列表。
+ * 背景：generate() 会把评分项 requirement（可达数百字）当作原始关键词传入，若整句塞进
+ * PostgREST 的 .or() 会导致 URI 超长（现网 `URI too long` 报错）。因此按标点/空白/功能
+ * 动作边界切块，仅保留 <= 24 字的短块；超过该长度的长文语义由 extractMatchTerms 的词袋承担，
+ * 这里只兜底短句命中，保证召回不丢且 URL 不炸。
+ */
+export function clipIlKeywords(keywords: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of keywords) {
+    const normalized = String(raw ?? '').replace(/[,()（）、，:：|"']/g, ' ').trim();
+    if (!normalized) continue;
+    if (normalized.length <= 24) {
+      const k = normalized.toLowerCase();
+      if (!seen.has(k)) {
+        seen.add(k);
+        out.push(normalized);
+      }
+      continue;
+    }
+    // 长文本按功能动作边界 + 标点切块，取每块前 24 字以内的片段
+    const blocks = normalized
+      .split(/\s+|(?=(?:一键|智能|关联|导入|导出|生成|检索|搜索|统计|反馈|解析|标签|画像|转化|可视化|导航|标注|属性|模型|回复|答案|名单|分布|形态|章节|节点|批改|组卷|排课|巡课|考核|监控|预警|推送|同步|对接|盘点|库存|人脸|监考|直播|录播))/g)
+      .map((b) => b.trim())
+      .filter((b) => b.length >= 2);
+    for (const b of blocks) {
+      const piece = b.length <= 24 ? b : b.slice(0, 24);
+      const bkey = piece.toLowerCase();
+      if (!seen.has(bkey)) {
+        seen.add(bkey);
+        out.push(piece);
+      }
+      if (out.length >= 8) return out;
+    }
+  }
+  return out.slice(0, 8);
+}
+
 export function scoreGroupTitle(
   rawTitle: string,
   terms: { modules: string[]; params: string[]; weak?: string[]; functions: string[] },
