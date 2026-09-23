@@ -406,7 +406,7 @@ export function BiddingDocumentPanel({ record }: PanelProps) {
             <p className="text-sm text-muted-foreground">
               点击「生成文档」，系统将解析招标文件，自动抽取评分项并匹配截图知识库。
             </p>
-            {!record.projectBiddingFile && (
+            {(!record.projectBiddingFile || record.projectBiddingFile.length === 0) && (
               <p className="mt-2 text-xs text-status-danger">
                 该记录尚未上传招标文件，无法生成。请等待第三方附件转存或联系管理员。
               </p>

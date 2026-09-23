@@ -34,9 +34,7 @@ export async function POST(request: NextRequest) {
     const record = await service.getById(body.screenshotId);
     if (!record) return fail('not_found', '招投标记录不存在', 404);
 
-    const biddingFile = Array.isArray(record.projectBiddingFile)
-      ? record.projectBiddingFile[0]
-      : record.projectBiddingFile;
+    const biddingFile = record.projectBiddingFile?.find((f) => !!f.assetId) ?? null;
     if (!biddingFile?.assetId) {
       return fail('file_not_ready', '该记录的招标文件尚未转存完成，请先在详情中重新获取附件', 409);
     }
@@ -56,7 +54,7 @@ export async function POST(request: NextRequest) {
             fileName: biddingFile.name || '招标文件',
           });
 
-          const parsed = await parseAssetDocument(biddingFile.assetId);
+          const parsed = await parseAssetDocument(biddingFile.assetId as string);
           if (parsed.kind === 'unsupported') {
             send({
               type: 'error',

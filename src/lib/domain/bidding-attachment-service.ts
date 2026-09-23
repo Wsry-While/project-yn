@@ -306,8 +306,8 @@ export async function processBiddingAttachments(record: BiddingScreenshot): Prom
       return;
     }
     const current = nextFiles[field];
-    if (current && !Array.isArray(current) && sameFile(current, resolved)) {
-      nextFiles[field] = inject(current);
+    if (Array.isArray(current)) {
+      nextFiles[field] = current.map((f) => (sameFile(f, resolved) ? inject(f) : f));
     }
   };
 
@@ -398,12 +398,8 @@ export async function retransferBiddingFile(
     if (fileUrl && f.url && f.url === fileUrl) return true;
     return false;
   };
-  const current =
-    field === 'attachments'
-      ? (record.attachments ?? []).find(matches) ?? null
-      : matches(record[field] as BiddingFileRef | null)
-        ? (record[field] as BiddingFileRef | null)
-        : null;
+  const list = field === 'attachments' ? record.attachments ?? [] : record[field] ?? [];
+  const current = list.find(matches) ?? null;
   const result = await ensureAndTransferByObjectId(objectId, {
     externalId: record.externalId || record.id,
     field,
@@ -429,14 +425,10 @@ export async function retransferBiddingFile(
     return applyStorageResult(base, result.assetId!, meta?.bucket ?? '', meta?.storageKey ?? '');
   };
 
-  if (field === 'attachments') {
-    patch.attachments = await Promise.all(
-      (record.attachments ?? []).map((f) => (matches(f) ? applyTo(f) : Promise.resolve(f))),
-    );
-  } else {
-    const scalar = record[field] as BiddingFileRef | null;
-    if (scalar) patch[field] = (await applyTo(scalar)) as BiddingScreenshot[typeof field];
-  }
+  const sourceList = field === 'attachments' ? record.attachments ?? [] : record[field] ?? [];
+  patch[field] = await Promise.all(
+    sourceList.map((f) => (matches(f) ? applyTo(f) : Promise.resolve(f))),
+  );
   await persistBusinessRecord(record, patch);
   return { ok: result.ok, status: result.status, assetId: result.assetId, error: result.error };
 }

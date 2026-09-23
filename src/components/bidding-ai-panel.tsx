@@ -40,9 +40,7 @@ export function BiddingAiPanel({ record }: { record: BiddingScreenshot }) {
   const [learning, setLearning] = useState(false);
   const [learned, setLearned] = useState<LearnedItem[] | null>(null);
 
-  const hasBiddingFile = !!record.projectBiddingFile && (Array.isArray(record.projectBiddingFile)
-    ? record.projectBiddingFile[0]?.assetId
-    : record.projectBiddingFile.assetId);
+  const hasBiddingFile = !!record.projectBiddingFile?.some((f) => !!f.assetId);
 
   // 用 ref 持有增量拼接文本，onDone 时解析；state 仅用于渲染。
   const scoreAccum = useRef('');

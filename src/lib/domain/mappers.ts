@@ -510,14 +510,6 @@ function pickFileRefFields(x: BiddingFileRefRow): BiddingFileRef {
   };
 }
 
-function toFileRef(row: BiddingFileRefRow | BiddingFileRefRow[] | null | undefined): BiddingFileRef | null {
-  const item = Array.isArray(row) ? row[0] : row;
-  if (!item) return null;
-  // url 可空：超星 fileupload 只给 objectId/resid，外链由后续换取
-  if (!item.url && !item.objectId && !item.resid) return null;
-  return pickFileRefFields(item);
-}
-
 function toFileRefs(row: BiddingFileRefRow[] | BiddingFileRefRow | null | undefined): BiddingFileRef[] {
   const items = Array.isArray(row) ? row : row ? [row] : [];
   return items
@@ -546,7 +538,7 @@ export function mapBiddingScreenshot(row: BiddingScreenshotRow): BiddingScreensh
     submissionDate: row.submission_date,
     dueDeliveryDate: row.due_delivery_date,
     reservedDays: row.reserved_days,
-    projectBiddingFile: toFileRef(row.project_bidding_file),
+    projectBiddingFile: toFileRefs(row.project_bidding_file),
     projectCategory: row.project_category ?? [],
     projectCategoryNorm: row.project_category_norm ?? [],
     screenshotRequirement: row.screenshot_requirement,
@@ -554,13 +546,13 @@ export function mapBiddingScreenshot(row: BiddingScreenshotRow): BiddingScreensh
     assignedPmId: row.assigned_pm_id,
     completionStatus: row.completion_status,
     completionStatusNorm: row.completion_status_norm,
-    deliveryDocument: toFileRef(row.delivery_document),
+    deliveryDocument: toFileRefs(row.delivery_document),
     deliveryRemark: row.delivery_remark,
     isMeetScreenshotRequirement: row.is_meet_screenshot_requirement,
     salesFeedback: row.sales_feedback,
     attachments: toFileRefs(row.attachments),
     rectificationFeedback: row.rectification_feedback,
-    rectifiedDocument: toFileRef(row.rectified_document),
+    rectifiedDocument: toFileRefs(row.rectified_document),
     schoolId: row.school_id,
     projectId: row.project_id,
     createdAt: row.created_at,

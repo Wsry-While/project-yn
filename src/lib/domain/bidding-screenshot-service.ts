@@ -37,7 +37,7 @@ export interface BiddingScreenshotInput {
   submissionDate: string;
   dueDeliveryDate?: string | null;
   reservedDays?: number | null;
-  projectBiddingFile?: BiddingFileRef | null;
+  projectBiddingFile?: BiddingFileRef[];
   projectCategory?: string[] | null;
   projectCategoryNorm?: string[] | null;
   screenshotRequirement?: string | null;
@@ -45,13 +45,13 @@ export interface BiddingScreenshotInput {
   assignedPmId?: string | null;
   completionStatus?: string | null;
   completionStatusNorm?: string | null;
-  deliveryDocument?: BiddingFileRef | null;
+  deliveryDocument?: BiddingFileRef[];
   deliveryRemark?: string | null;
   isMeetScreenshotRequirement?: boolean | null;
   salesFeedback?: string | null;
   attachments?: BiddingFileRef[];
   rectificationFeedback?: string | null;
-  rectifiedDocument?: BiddingFileRef | null;
+  rectifiedDocument?: BiddingFileRef[];
   externalId: string;
   externalSource: string;
   externalSerial?: string | null;

@@ -331,7 +331,7 @@ export class ScreenshotKnowledgeService {
       id: string;
       project_name: string | null;
       project_school: string | null;
-      delivery_document: BiddingFileRef | null;
+      delivery_document: BiddingFileRef | BiddingFileRef[] | null;
       attachments: BiddingFileRef[] | null;
     }> = [];
     while (true) {
@@ -360,17 +360,22 @@ export class ScreenshotKnowledgeService {
 
     for (const row of all) {
       // 归一为 BiddingScreenshot 形态供后续复用（id/projectName/projectSchool/deliveryDocument/attachments）
+      const deliveryDocs = Array.isArray(row.delivery_document)
+        ? row.delivery_document
+        : row.delivery_document
+          ? [row.delivery_document]
+          : [];
       const record = {
         id: row.id,
         projectName: row.project_name,
         projectSchool: row.project_school,
-        deliveryDocument: row.delivery_document,
+        deliveryDocument: deliveryDocs,
         attachments: row.attachments ?? [],
       } as unknown as BiddingScreenshot;
 
-      // 1) docx 交付文档 —— 抽内嵌图
-      const dd = row.delivery_document;
-      if (dd && isDocx(dd.name)) {
+      // 1) docx 交付文档 —— 抽内嵌图（同一字段可能有多份 docx，逐份抽取）
+      for (const dd of deliveryDocs) {
+        if (!dd || !isDocx(dd.name)) continue;
         try {
           const extracted = await this.fetchAndExtractDocx(dd, record);
           // 按参数小节（▲ 标题）把连续截图归为一组：一条参数常由多张截图响应
@@ -403,7 +408,7 @@ export class ScreenshotKnowledgeService {
       }
 
       // 2) 独立图片：交付文档本身就是图片，或附件里的图片
-      const standalone = [row.delivery_document, ...(row.attachments ?? [])]
+      const standalone = [...deliveryDocs, ...(row.attachments ?? [])]
         .flat()
         .filter((f): f is NonNullable<BiddingFileRef> => !!f && isImage(f.name, f.type));
       for (const f of standalone) {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Download,
   FileText,
@@ -70,7 +70,7 @@ export function AttachmentLink({
   business,
   onRetried,
 }: {
-  file: BiddingFileRef | null | undefined;
+  file: BiddingFileRef | BiddingFileRef[] | null | undefined;
   fallbackLabel?: string;
   variant?: 'clip' | 'doc';
   /** 业务记录 ID，用于 objectId 兜底转存回写（招投标=记录 id）。 */
@@ -80,7 +80,63 @@ export function AttachmentLink({
   business?: 'bidding' | 'demand' | 'qiming';
   onRetried?: () => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const files = useMemo(() => {
+    if (!file) return [] as BiddingFileRef[];
+    const arr = Array.isArray(file) ? file : [file];
+    return arr.filter((f): f is BiddingFileRef => !!f);
+  }, [file]);
+  const [openAssetId, setOpenAssetId] = useState<string | null>(null);
+
+  if (!files.length) return <span className="text-muted-foreground">—</span>;
+
+  return (
+    <span className="flex flex-col gap-1">
+      {files.map((f, idx) => (
+        <AttachmentLinkItem
+          key={`${f.assetId ?? f.objectId ?? f.url ?? ''}-${idx}`}
+          file={f}
+          fallbackLabel={`${fallbackLabel} ${idx + 1}`}
+          variant={variant}
+          externalId={externalId}
+          field={field}
+          business={business}
+          onRetried={onRetried}
+          onPreview={(assetId) => setOpenAssetId(assetId)}
+        />
+      ))}
+      {openAssetId && (
+        <PreviewModal
+          assetId={openAssetId}
+          open
+          onClose={() => setOpenAssetId(null)}
+          externalId={externalId}
+          field={field}
+          onRetried={onRetried}
+        />
+      )}
+    </span>
+  );
+}
+
+function AttachmentLinkItem({
+  file,
+  fallbackLabel,
+  variant,
+  externalId,
+  field,
+  business,
+  onRetried,
+  onPreview,
+}: {
+  file: BiddingFileRef;
+  fallbackLabel: string;
+  variant: 'clip' | 'doc';
+  externalId?: string;
+  field?: string;
+  business?: 'bidding' | 'demand' | 'qiming';
+  onRetried?: () => void;
+  onPreview: (assetId: string) => void;
+}) {
   const [acquiring, setAcquiring] = useState(false);
 
   // 提前用 useCallback 固定引用，避免在 `if (!file) return` 之后调用 Hook。
@@ -118,8 +174,6 @@ export function AttachmentLink({
     }
   }, [file, business, externalId, field, onRetried]);
 
-  if (!file) return <span className="text-muted-foreground">—</span>;
-
   const name = file.name || fallbackLabel;
   const hasAsset = !!file.assetId;
   const url = file.url || '';
@@ -145,8 +199,8 @@ export function AttachmentLink({
   const clickable = stored || canAcquire || (!!file.url && !hasObjectId);
 
   const handleNameClick = () => {
-    if (stored) {
-      setOpen(true);
+    if (stored && file.assetId) {
+      onPreview(file.assetId);
     } else if (canAcquire) {
       void handleAcquire();
     } else if (file.url && !hasObjectId) {
@@ -212,17 +266,6 @@ export function AttachmentLink({
           </span>
         )}
       </span>
-
-      {hasAsset && (
-        <PreviewModal
-          assetId={file.assetId!}
-          open={open}
-          onClose={() => setOpen(false)}
-          externalId={externalId}
-          field={field}
-          onRetried={onRetried}
-        />
-      )}
     </>
   );
 }

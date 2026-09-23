@@ -7,7 +7,6 @@ import { TeamMemberService } from '@/lib/domain/team-member-service';
 import { DictService } from '@/lib/domain/dict-service';
 import { ReferenceResolver } from '@/lib/domain/reference-resolver';
 import {
-  normalizeFile,
   normalizeFiles,
   pickContactName,
   pickString,
@@ -236,7 +235,7 @@ function parseBody(body: PushItem, topLevel: PushItem = {}) {
       body.reservedDays ?? body.reserved_days ?? body['预留天数'] ??
       topLevel.reservedDays ?? topLevel.reserved_days ?? topLevel['预留天数'],
     ),
-    projectBiddingFile: normalizeFile(
+    projectBiddingFile: normalizeFiles(
       body.projectBiddingFile ?? body.project_bidding_file ?? body['项目招标文件'] ??
       topLevel.projectBiddingFile ?? topLevel.project_bidding_file,
     ),
@@ -246,7 +245,7 @@ function parseBody(body: PushItem, topLevel: PushItem = {}) {
       pickContactName(body.assignedProjectManager) ||
       read('assignedProjectManager', 'assigned_project_manager', '指派项目经理', '项目经理'),
     completionStatus: read('completionStatus', 'completion_status', '完成情况'),
-    deliveryDocument: normalizeFile(
+    deliveryDocument: normalizeFiles(
       body.deliveryDocument ?? body.delivery_document ?? body['交付文档上传'] ?? body['交付文档'] ??
       topLevel.deliveryDocument ?? topLevel.delivery_document,
     ),
@@ -260,7 +259,7 @@ function parseBody(body: PushItem, topLevel: PushItem = {}) {
       body.attachments ?? body['附件材料'] ?? body['附件'] ?? topLevel.attachments,
     ),
     rectificationFeedback: read('rectificationFeedback', 'rectification_feedback', '整改情况反馈', '整改反馈'),
-    rectifiedDocument: normalizeFile(
+    rectifiedDocument: normalizeFiles(
       body.rectifiedDocument ?? body.rectified_document ?? body['整改后文档'] ??
       topLevel.rectifiedDocument ?? topLevel.rectified_document,
     ),

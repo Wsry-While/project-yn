@@ -18,6 +18,7 @@ import {
   extractRequirementsSection,
   chunkRequirementsText,
 } from "./parse/document-parser";
+import type { ParsedDocument } from "./parse/document-parser";
 import {
   buildMessages,
   getModelForScenario,
@@ -162,6 +163,22 @@ function parseBiddingFile(file: unknown): { assetId?: string; url?: string; name
   return null;
 }
 
+/**
+ * 把可能是单个/多个文件引用的字段，展开成全部候选文件引用列表。
+ * 超星同一字段可能推送多个文件（如截图项.docx + 真实招标文件.docx），
+ * 不能只取第一个，否则会用错文件、定位不到采购需求章节。
+ */
+function parseBiddingFiles(file: unknown): Array<{ assetId?: string; url?: string; name?: string }> {
+  if (!file) return [];
+  const arr = Array.isArray(file) ? file : [file];
+  const out: Array<{ assetId?: string; url?: string; name?: string }> = [];
+  for (const item of arr) {
+    const ref = parseBiddingFile(item);
+    if (ref && (ref.assetId || ref.url)) out.push(ref);
+  }
+  return out;
+}
+
 export const BiddingDocumentService = {
   async getLatestDocument(recordId: string) {
     const supabase = getAdminSupabase();
@@ -224,19 +241,63 @@ export const BiddingDocumentService = {
 
     emit("step", { phase: "load", message: "读取招标文件…" });
     const record = await this.getRecordById(recordId);
-    const fileRef = parseBiddingFile(record.projectBiddingFile);
-    if (!fileRef || (!fileRef.assetId && !fileRef.url)) {
+    const fileRefs = parseBiddingFiles(record.projectBiddingFile);
+    if (!fileRefs.length) {
       throw new Error("未找到项目招标文件（请确认附件已转存完成，或销售提交时已附文件）");
     }
 
     emit("step", { phase: "parse", message: "解析招标文件…" });
-    const parsed = fileRef.assetId
-      ? await parseAssetDocument(fileRef.assetId)
-      : await parseDocumentFromUrl(fileRef.url as string, fileRef.name);
-    if (parsed.kind === "unsupported") {
-      throw new Error(`暂不支持解析该文件类型（${parsed.fileName}），请上传 PDF 或 Word（.docx）。`);
+    // 同一字段可能有多份文件：逐份解析，优先选同时含「评分办法」与「采购需求」章节的那份；
+    // 都不全时退化到评分办法最完整的一份，并在末尾给出更友好的提示。
+    let parsed: ParsedDocument | null = null;
+    let chosenScore: { text: string; matched: boolean | null } | null = null;
+    let parsedSupport: { score: { text: string; matched: boolean | null }; parsed: ParsedDocument } | null = null;
+    let firstSupported: ParsedDocument | null = null;
+    const unsupportedNames: string[] = [];
+    for (const ref of fileRefs) {
+      let doc: ParsedDocument;
+      try {
+        doc = ref.assetId
+          ? await parseAssetDocument(ref.assetId)
+          : await parseDocumentFromUrl(ref.url as string, ref.name);
+      } catch {
+        continue;
+      }
+      if (doc.kind === "unsupported") {
+        unsupportedNames.push(doc.fileName);
+        continue;
+      }
+      if (!firstSupported) firstSupported = doc;
+      const score = extractScoringSection(doc.text);
+      const req = extractRequirementsSection(doc.text);
+      if (!score.text.trim() || score.text.trim().length < 40) continue;
+      if (req) {
+        // 理想候选：评分办法 + 采购需求都在。
+        parsed = doc;
+        chosenScore = score;
+        break;
+      }
+      // 暂存「有评分办法但缺采购需求」的候选，最后兜底。
+      if (!parsedSupport || score.text.length > parsedSupport.score.text.length) {
+        parsedSupport = { score, parsed: doc };
+      }
     }
-    const section = extractScoringSection(parsed.text);
+
+    if (!parsed && parsedSupport) {
+      parsed = parsedSupport.parsed;
+      chosenScore = parsedSupport.score;
+    } else if (!parsed && firstSupported) {
+      parsed = firstSupported;
+      chosenScore = extractScoringSection(parsed.text);
+    }
+
+    if (!parsed) {
+      if (unsupportedNames.length && unsupportedNames.length === fileRefs.length) {
+        throw new Error(`暂不支持解析该文件类型（${unsupportedNames.join("、")}），请上传 PDF 或 Word（.docx）。`);
+      }
+      throw new Error("未能从招标文件中识别到「评分办法」章节");
+    }
+    const section = chosenScore as { text: string; matched: boolean | null };
     if (!section.text.trim() || section.text.trim().length < 40) {
       throw new Error("未能从招标文件中识别到「评分办法」章节");
     }
