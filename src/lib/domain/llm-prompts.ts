@@ -281,3 +281,48 @@ ${requirementsText.slice(0, 45000)}
 
 只输出 JSON 数组。`;
 }
+
+/**
+ * 截图项清单复用校验：销售可能单独推送一份"已拆分好的截图要求参数"清单，
+ * 需要判断这份清单与完整招标文件的采购需求是否一致、可直接复用。
+ * 让 LLM 逐条核对清单标题是否都能在采购需求原文中找到对应要求，并给出覆盖率与结论。
+ */
+export function buildScreenshotListVerifyPrompt(
+  checklistTitles: string[],
+  requirementsText: string,
+): string {
+  return `你是招投标技术响应审核助手。销售提供了一份已经拆分好的"截图要求参数清单"，请你逐条核对清单中的每一条，是否都能在招标文件"采购需求/技术要求"原文中找到对应的要求（语义相同即可，允许措辞差异）。
+
+**核对原则：**
+1. 清单条目若在原文中有语义对应的技术要求（功能点一致），视为覆盖（covered=true）。
+2. 清单条目若在原文中完全找不到对应要求（销售自行添加、与本项目无关），视为未覆盖（covered=false）。
+3. 另外统计原文中"带 ▲/★ 标记的重点参数"是否都已出现在清单里；遗漏的重点参数请在 missingKeyParams 中列出标题。
+4. 不要因为措辞不同就判未覆盖，以功能点语义为准。
+
+输出严格 JSON（不要 Markdown 代码块、不要解释），形如：
+{
+  "coveredCount": 0,
+  "totalCount": 0,
+  "coverageRatio": 0,
+  "allCovered": true,
+  "missingKeyParams": ["遗漏的重点参数标题"],
+  "verdict": "reuse"
+}
+
+verdict 取值：
+- "reuse"   清单条目基本都能在原文对应（覆盖率≥0.85），且无明显遗漏重点参数，可直接复用
+- "reject"  清单存在较多无法对应条目，或遗漏较多重点参数，不可复用
+
+截图要求清单（共 ${checklistTitles.length} 条）：
+""""""
+${checklistTitles.map((t, i) => `${i + 1}. ${t}`).join("\n")}
+""""""
+
+招标文件采购需求原文：
+""""""
+${requirementsText.slice(0, 45000)}
+""""""
+
+只输出 JSON。`;
+}
+

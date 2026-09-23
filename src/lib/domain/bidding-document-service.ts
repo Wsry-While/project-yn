@@ -24,6 +24,7 @@ import {
   getModelForScenario,
   buildBiddingScoreRulesPrompt,
   buildBiddingRequirementsPrompt,
+  buildScreenshotListVerifyPrompt,
 } from "./llm-prompts";
 import { BiddingScreenshotService } from "./bidding-screenshot-service";
 
@@ -179,6 +180,156 @@ function parseBiddingFiles(file: unknown): Array<{ assetId?: string; url?: strin
   return out;
 }
 
+/**
+ * 从一份"截图项清单"文本中逐条提取已拆分好的截图要求参数。
+ * 清单典型形态（如「截图项、云艺.docx」）：以 ▲ 开头、以换行分隔的多条要求，
+ * 每条尾部通常带"（提供系统功能截图）/（提供压力测试报告）"等交付物说明，
+ * 且不含"评分办法/分值"章节。
+ */
+interface ChecklistItem {
+  title: string;
+  requirement: string;
+  itemType: RawScoreItem["itemType"];
+  deliveryMethod: RawScoreItem["deliveryMethod"];
+}
+
+/** 把单条清单文本归一出标题：去掉行首 ▲/序号、尾部交付物说明，截取功能点短句。 */
+function deriveChecklistTitle(line: string): string {
+  let s = line.trim();
+  // 去行首标记与编号：▲2. / ▲ 6、 / ★1 等
+  s = s.replace(/^[▲★●*＊\s]*\d+\s*[.、．)）]?\s*/, "").replace(/^[▲★●*＊\s]+/, "");
+  // 去尾部交付物括号：（提供系统功能截图）/（提供压力测试报告）
+  s = s.replace(/[（(][^（）()]*?(?:截图|报告|演示|录屏|证明|说明)[^（）()]*?[)）]\s*$/, "").trim();
+  // 取第一个标点（句号/分号/逗号）之前作为标题，避免标题过长
+  const head = s.split(/[。；;，,]/)[0]?.trim() ?? s;
+  const title = head.length > 30 ? `${head.slice(0, 30)}…` : head;
+  return title || s.slice(0, 30);
+}
+
+/** 根据交付物后缀判断交付方式：压力测试报告/演示 归为对应类型，其余按截图。 */
+function deriveDeliveryMethod(line: string): ChecklistItem["deliveryMethod"] {
+  if (/压力测试|并发.*报告|测试报告/.test(line)) return "document";
+  if (/现场演示|系统演示|视频录屏|操作演示|演示视频/.test(line)) return "demo";
+  return "screenshot";
+}
+
+function parseScreenshotChecklist(text: string): ChecklistItem[] {
+  const items: ChecklistItem[] = [];
+  // 以 ▲/★ 为条目锚点切分；清单基本都靠这些标记分行
+  const blocks = text
+    .split(/(?=[▲★])/)
+    .map((b) => b.trim())
+    .filter((b) => /^[▲★]/.test(b));
+  const seen = new Set<string>();
+  for (const block of blocks) {
+    const requirement = block.replace(/\s+/g, " ").trim();
+    if (requirement.length < 6) continue;
+    const title = deriveChecklistTitle(block);
+    const norm = title.replace(/[\s▲★●、，,。.（）()【】\[\]]/g, "").toLowerCase();
+    if (norm.length < 2 || seen.has(norm)) continue;
+    seen.add(norm);
+    items.push({
+      title,
+      requirement,
+      itemType: /^[▲★]/.test(block) ? "key" : "general",
+      deliveryMethod: deriveDeliveryMethod(block),
+    });
+  }
+  return items;
+}
+
+/**
+ * 判断一份已解析文档是否为"截图项清单"（而非完整招标文件）：
+ * 多条 ▲ 截图要求、基本没有评分办法/分值章节、整体较短。
+ */
+function isScreenshotChecklistDoc(doc: ParsedDocument): boolean {
+  const t = doc.text;
+  const markerCount = (t.match(/[▲★]/g) ?? []).length;
+  const screenshotCount = (t.match(/截图|测试报告/g) ?? []).length;
+  const hasScoring = /评分办法|评分标准|评分细则|满分\s*\d|分值[:：]/.test(t);
+  return markerCount >= 5 && screenshotCount >= 3 && !hasScoring && t.length < 6000;
+}
+
+interface ChecklistVerifyResult {
+  coveredCount: number;
+  totalCount: number;
+  coverageRatio: number;
+  missingKeyParams: string[];
+  verdict: "reuse" | "reject";
+}
+
+/**
+ * 启发式覆盖率预检：清单条目标题中的关键名词，是否能在采购需求原文中命中。
+ * 仅用于快速判定，命中极高/极低时直接下结论；中间区间再交 LLM 复核。
+ */
+function heuristicCoverage(items: ChecklistItem[], requirementsText: string): {
+  ratio: number;
+  keyParamCoverage: number;
+} {
+  const haystack = requirementsText.replace(/\s+/g, "");
+  let hit = 0;
+  for (const it of items) {
+    // 取标题中 ≥2 字的中文/英文片段做命中
+    const compact = it.title.replace(/[\s▲★●、，,。.（）()【】\[\]…]/g, "");
+    const grams = compact.match(/[\u4e00-\u9fa5a-zA-Z0-9]{2,}/g) ?? [];
+    const matched = grams.some((g) => g.length >= 2 && haystack.includes(g));
+    if (matched) hit += 1;
+  }
+  // 原文中 ▲ 重点参数被清单覆盖的比例（粗估：以"▲后短句"匹配）
+  const keyLines = requirementsText
+    .split(/(?=[▲★])/)
+    .map((b) => b.trim())
+    .filter((b) => /^[▲★]/.test(b));
+  let keyHit = 0;
+  const joined = items.map((i) => i.requirement).join("");
+  for (const k of keyLines) {
+    const compact = deriveChecklistTitle(k).replace(/[\s▲★●、，,。.（）()【】\[\]…]/g, "");
+    const grams = compact.match(/[\u4e00-\u9fa5a-zA-Z0-9]{2,}/g) ?? [];
+    if (grams.some((g) => g.length >= 2 && joined.replace(/\s+/g, "").includes(g))) keyHit += 1;
+  }
+  return {
+    ratio: items.length ? hit / items.length : 0,
+    keyParamCoverage: keyLines.length ? keyHit / keyLines.length : 1,
+  };
+}
+
+async function verifyChecklistWithLlm(
+  items: ChecklistItem[],
+  requirementsText: string,
+  requestHeaders?: Headers,
+): Promise<ChecklistVerifyResult> {
+  const prompt = buildScreenshotListVerifyPrompt(
+    items.map((i) => i.title),
+    requirementsText,
+  );
+  const customHeaders = requestHeaders
+    ? HeaderUtils.extractForwardHeaders(requestHeaders)
+    : undefined;
+  const client = new LLMClient(new Config({ timeout: 180_000 }), customHeaders);
+  let buffer = "";
+  for await (const part of client.stream(
+    buildMessages({ scenario: "bidding-score", prompt }),
+    { model: getModelForScenario("bidding-score"), temperature: 0.05 },
+  )) {
+    const text = part?.content?.toString?.() ?? "";
+    if (text) buffer += text;
+  }
+  const cleaned = buffer.replace(/```(?:json)?/gi, "").trim();
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  const parsed: Partial<ChecklistVerifyResult> =
+    start >= 0 && end > start ? (JSON.parse(cleaned.slice(start, end + 1)) as Partial<ChecklistVerifyResult>) : {};
+  const totalCount = items.length;
+  const coveredCount = typeof parsed.coveredCount === "number" ? parsed.coveredCount : 0;
+  return {
+    coveredCount,
+    totalCount,
+    coverageRatio: typeof parsed.coverageRatio === "number" ? parsed.coverageRatio : coveredCount / totalCount,
+    missingKeyParams: Array.isArray(parsed.missingKeyParams) ? parsed.missingKeyParams : [],
+    verdict: parsed.verdict === "reject" ? "reject" : "reuse",
+  };
+}
+
 export const BiddingDocumentService = {
   async getLatestDocument(recordId: string) {
     const supabase = getAdminSupabase();
@@ -247,12 +398,13 @@ export const BiddingDocumentService = {
     }
 
     emit("step", { phase: "parse", message: "解析招标文件…" });
-    // 同一字段可能有多份文件：逐份解析，优先选同时含「评分办法」与「采购需求」章节的那份；
-    // 都不全时退化到评分办法最完整的一份，并在末尾给出更友好的提示。
-    let parsed: ParsedDocument | null = null;
-    let chosenScore: { text: string; matched: boolean | null } | null = null;
-    let parsedSupport: { score: { text: string; matched: boolean | null }; parsed: ParsedDocument } | null = null;
-    let firstSupported: ParsedDocument | null = null;
+    // 同一字段可能有多份文件：逐份解析并缓存。完整招标文件用于定位「评分办法」，
+    // 若还单独附了一份"已拆分好的截图要求参数"清单，则优先尝试复用清单。
+    interface ParsedRef {
+      ref: { assetId?: string; url?: string; name?: string };
+      doc: ParsedDocument;
+    }
+    const parsedRefs: ParsedRef[] = [];
     const unsupportedNames: string[] = [];
     for (const ref of fileRefs) {
       let doc: ParsedDocument;
@@ -267,37 +419,52 @@ export const BiddingDocumentService = {
         unsupportedNames.push(doc.fileName);
         continue;
       }
+      parsedRefs.push({ ref, doc });
+    }
+
+    if (!parsedRefs.length) {
+      if (unsupportedNames.length && unsupportedNames.length === fileRefs.length) {
+        throw new Error(`暂不支持解析该文件类型（${unsupportedNames.join("、")}），请上传 PDF 或 Word（.docx）。`);
+      }
+      throw new Error("招标文件解析失败（可能附件尚未转存完成，请稍后重试）");
+    }
+
+    // 选出"完整招标文件"：优先取同时含评分办法+采购需求的，其次评分办法最完整的。
+    let parsed: ParsedDocument | null = null;
+    let chosenScore: { text: string; matched: boolean } | null = null;
+    let parsedSupport: { score: { text: string; matched: boolean }; doc: ParsedDocument } | null = null;
+    let firstSupported: ParsedDocument | null = null;
+    for (const { doc } of parsedRefs) {
       if (!firstSupported) firstSupported = doc;
       const score = extractScoringSection(doc.text);
       const req = extractRequirementsSection(doc.text);
       if (!score.text.trim() || score.text.trim().length < 40) continue;
       if (req) {
-        // 理想候选：评分办法 + 采购需求都在。
         parsed = doc;
         chosenScore = score;
         break;
       }
-      // 暂存「有评分办法但缺采购需求」的候选，最后兜底。
       if (!parsedSupport || score.text.length > parsedSupport.score.text.length) {
-        parsedSupport = { score, parsed: doc };
+        parsedSupport = { score, doc };
       }
     }
-
     if (!parsed && parsedSupport) {
-      parsed = parsedSupport.parsed;
+      parsed = parsedSupport.doc;
       chosenScore = parsedSupport.score;
     } else if (!parsed && firstSupported) {
       parsed = firstSupported;
       chosenScore = extractScoringSection(parsed.text);
     }
 
+    // 在其余文件里找"截图项清单"（不能把主招标文件误判成清单）。
+    const checklistRef = parsedRefs.find(
+      ({ doc }) => doc !== parsed && isScreenshotChecklistDoc(doc),
+    );
+
     if (!parsed) {
-      if (unsupportedNames.length && unsupportedNames.length === fileRefs.length) {
-        throw new Error(`暂不支持解析该文件类型（${unsupportedNames.join("、")}），请上传 PDF 或 Word（.docx）。`);
-      }
       throw new Error("未能从招标文件中识别到「评分办法」章节");
     }
-    const section = chosenScore as { text: string; matched: boolean | null };
+    const section = chosenScore as { text: string; matched: boolean };
     if (!section.text.trim() || section.text.trim().length < 40) {
       throw new Error("未能从招标文件中识别到「评分办法」章节");
     }
@@ -314,29 +481,94 @@ export const BiddingDocumentService = {
     emit("step", { phase: "llm", message: "阶段 1/3：解析评分规则…" });
     const rules = await extractScoreRulesWithLlm(section.text, requestHeaders);
     emit("delta", {
-      content: `评分规则解析完成：技术部分总分 **${rules.totalTechScore ?? "?"}**，重点参数扣分 **${rules.parameterRules?.keyParamDeduction ?? "?"}**/条，一般参数扣分 **${rules.parameterRules?.generalParamDeduction ?? "?"}**/条，演示要求：**${rules.demoRequired ? "有" : "无"}**，文档类评分项 **${rules.documentItems?.length ?? 0}** 项。\n\n【阶段 2/3】定位采购需求章节并归纳交付项…\n\n`,
+      content: `评分规则解析完成：技术部分总分 **${rules.totalTechScore ?? "?"}**，重点参数扣分 **${rules.parameterRules?.keyParamDeduction ?? "?"}**/条，一般参数扣分 **${rules.parameterRules?.generalParamDeduction ?? "?"}**/条，演示要求：**${rules.demoRequired ? "有" : "无"}**，文档类评分项 **${rules.documentItems?.length ?? 0}** 项。\n`,
     });
 
+    // 采购需求原文（用于与清单比对，也作为原归纳逻辑的输入）
     const reqSection = extractRequirementsSection(parsed.text);
-    if (!reqSection) {
-      throw new Error("未能从招标文件中定位到采购需求/技术要求章节");
-    }
-    emit("delta", {
-      content: `已截取采购需求章节（${reqSection.length} 字），正在归纳截图/演示/文档类交付项…\n\n`,
-    });
 
-    emit("step", { phase: "llm", message: "阶段 2/3：归纳交付项…" });
-    const items = await extractRequirementsWithLlm(
-      reqSection,
-      rules,
-      { screenshotRequirement: record.screenshotRequirement },
-      requestHeaders,
-      (msg) => emit("delta", { content: msg }),
-    );
-    if (!items.length) {
-      throw new Error(
-        "未能从招标文件中抽取到评分项（采购需求可能过长或输出被截断，请检查招标文件或联系管理员）",
+    // ===== 捷径：存在已拆分好的截图要求清单时，先与原文采购需求比对 =====
+    let items: RawScoreItem[] = [];
+    let reusedChecklist = false;
+    if (checklistRef && reqSection) {
+      const checklistItems = parseScreenshotChecklist(checklistRef.doc.text);
+      if (checklistItems.length) {
+        emit("step", { phase: "verify", message: "比对截图项清单与采购需求…" });
+        emit("delta", {
+          content: `\n检测到单独的截图要求清单「${checklistRef.doc.fileName}」（${checklistItems.length} 条），正在与招标文件采购需求比对…\n`,
+        });
+        const heur = heuristicCoverage(checklistItems, reqSection);
+        let verify: ChecklistVerifyResult;
+        // 启发式极高/极低直接判定；中间区间交 LLM 复核
+        if (heur.ratio >= 0.9 && heur.keyParamCoverage >= 0.85) {
+          verify = {
+            coveredCount: Math.round(heur.ratio * checklistItems.length),
+            totalCount: checklistItems.length,
+            coverageRatio: heur.ratio,
+            missingKeyParams: [],
+            verdict: "reuse",
+          };
+        } else if (heur.ratio < 0.5) {
+          verify = {
+            coveredCount: Math.round(heur.ratio * checklistItems.length),
+            totalCount: checklistItems.length,
+            coverageRatio: heur.ratio,
+            missingKeyParams: [],
+            verdict: "reject",
+          };
+        } else {
+          verify = await verifyChecklistWithLlm(checklistItems, reqSection, requestHeaders);
+        }
+
+        if (verify.verdict === "reuse") {
+          reusedChecklist = true;
+          const keyDeduction = rules.parameterRules?.keyParamDeduction ?? null;
+          const generalDeduction = rules.parameterRules?.generalParamDeduction ?? null;
+          const raw: RawScoreItem[] = checklistItems.map((c) => ({
+            title: c.title,
+            requirement: c.requirement,
+            itemType: c.itemType,
+            deliveryMethod: c.deliveryMethod,
+            category: "技术参数",
+            scoreValue: c.itemType === "key" ? keyDeduction ?? 1 : generalDeduction ?? 0.5,
+            sourceSection: "截图项清单",
+          }));
+          items = finalizeItems(raw, {
+            keepGeneralScreenshot: true,
+            screenshotRequirement: record.screenshotRequirement,
+          });
+          emit("delta", {
+            content: `清单比对通过（覆盖率 ${(verify.coverageRatio * 100).toFixed(0)}%），**直接复用已拆分好的 ${items.length} 条截图要求**，跳过归纳。\n`,
+          });
+        } else {
+          emit("delta", {
+            content: `清单比对未通过（覆盖率 ${(verify.coverageRatio * 100).toFixed(0)}%），回退为按采购需求重新归纳。\n\n`,
+          });
+        }
+      }
+    }
+
+    // ===== 未复用清单：走原逻辑（LLM 归纳采购需求）=====
+    if (!reusedChecklist) {
+      if (!reqSection) {
+        throw new Error("未能从招标文件中定位到采购需求/技术要求章节");
+      }
+      emit("delta", {
+        content: `\n【阶段 2/3】定位采购需求章节（${reqSection.length} 字）并归纳交付项…\n\n`,
+      });
+      emit("step", { phase: "llm", message: "阶段 2/3：归纳交付项…" });
+      items = await extractRequirementsWithLlm(
+        reqSection,
+        rules,
+        { screenshotRequirement: record.screenshotRequirement },
+        requestHeaders,
+        (msg) => emit("delta", { content: msg }),
       );
+      if (!items.length) {
+        throw new Error(
+          "未能从招标文件中抽取到评分项（采购需求可能过长或输出被截断，请检查招标文件或联系管理员）",
+        );
+      }
     }
     const keyCount = items.filter((i) => i.itemType === "key").length;
     const generalCount = items.filter((i) => i.itemType === "general").length;
@@ -344,7 +576,7 @@ export const BiddingDocumentService = {
     const screenshotTotal = items.filter((i) => i.deliveryMethod === "screenshot").length;
     const demoTotal = items.filter((i) => i.deliveryMethod === "demo").length;
     emit("delta", {
-      content: `\n\n抽取完成：共 **${items.length}** 项交付点（重点参数 ${keyCount}、一般参数 ${generalCount}、演示 ${demoCount}）。其中 **需截图 ${screenshotTotal} 项**、需演示 ${demoTotal} 项。\n\n【阶段 3/3】匹配截图知识库（仅截图类评分项）…\n\n`,
+      content: `\n\n交付点共 **${items.length}** 项（重点参数 ${keyCount}、一般参数 ${generalCount}、演示 ${demoCount}）。其中 **需截图 ${screenshotTotal} 项**、需演示 ${demoTotal} 项。\n\n【阶段 3/3】匹配截图知识库（仅截图类评分项）…\n\n`,
     });
 
     emit("step", { phase: "match", message: "阶段 3/3：匹配截图知识库…" });
@@ -363,7 +595,7 @@ export const BiddingDocumentService = {
       recordId,
       projectName: record.projectName,
       school: record.projectSchool,
-      fileName: parsed.fileName,
+      fileName: reusedChecklist && checklistRef ? checklistRef.doc.fileName : parsed.fileName,
       truncated: parsed.truncated,
       rules: {
         totalTechScore: rules.totalTechScore ?? null,
